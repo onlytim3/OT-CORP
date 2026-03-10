@@ -152,6 +152,34 @@ def init_db():
             END;
         """)
 
+        # --- Performance Indexes ---
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+            CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy);
+            CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
+            CREATE INDEX IF NOT EXISTS idx_trades_closed ON trades(closed_at);
+
+            CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_signals_strategy ON signals(strategy);
+            CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol);
+
+            CREATE INDEX IF NOT EXISTS idx_journal_trade_id ON journal(trade_id);
+            CREATE INDEX IF NOT EXISTS idx_journal_timestamp ON journal(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_action_log_timestamp ON action_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_action_log_category ON action_log(category);
+            CREATE INDEX IF NOT EXISTS idx_action_log_cat_ts ON action_log(category, timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_daily_pnl_date ON daily_pnl(date);
+
+            CREATE INDEX IF NOT EXISTS idx_param_history_strategy ON param_history(strategy);
+            CREATE INDEX IF NOT EXISTS idx_param_history_approved ON param_history(approved);
+
+            CREATE INDEX IF NOT EXISTS idx_reviews_period ON reviews(period);
+            CREATE INDEX IF NOT EXISTS idx_reviews_end_date ON reviews(end_date);
+        """)
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat()

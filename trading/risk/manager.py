@@ -1,11 +1,43 @@
-"""Risk manager — enforces position limits, stop losses, drawdown protection."""
+"""Risk manager — enforces position limits, stop losses, drawdown protection.
 
+v2: Adds correlation limits, crypto exposure cap, trading_blocked check,
+    and buying-power awareness.
+"""
+
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from trading.config import RISK
+from trading.config import RISK, CRYPTO_SYMBOLS
 from trading.db.store import get_positions, get_daily_pnl, get_trades
 from trading.strategy.base import Signal
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Crypto exposure cap — total crypto allocation as % of portfolio
+# ---------------------------------------------------------------------------
+MAX_CRYPTO_EXPOSURE_PCT: float = 0.70  # Max 70% of portfolio in crypto
+MAX_CORRELATED_EXPOSURE_PCT: float = 0.50  # Max 50% in a single correlated group
+
+# Correlation groups — assets that tend to move together
+CORRELATION_GROUPS = {
+    "btc_ecosystem": {"BTC/USD", "BCH/USD", "LTC/USD"},
+    "eth_ecosystem": {"ETH/USD", "UNI/USD", "AAVE/USD", "LINK/USD"},
+    "alt_l1": {"SOL/USD", "AVAX/USD", "DOT/USD"},
+    "precious_metals": {"UGL", "AGQ"},
+}
+
+# Reverse lookup: symbol → group name
+_SYMBOL_TO_GROUP: dict[str, str] = {}
+for group_name, symbols in CORRELATION_GROUPS.items():
+    for sym in symbols:
+        _SYMBOL_TO_GROUP[sym] = group_name
+
+
+def _is_crypto(symbol: str) -> bool:
+    """Check if a symbol is crypto (contains '/')."""
+    return "/" in symbol
 
 
 @dataclass
@@ -19,14 +51,19 @@ class RiskCheck:
 class RiskManager:
     """Enforces all risk rules before trade execution."""
 
-    def __init__(self, portfolio_value: float):
+    def __init__(self, portfolio_value: float, account: dict | None = None):
         self.portfolio_value = portfolio_value
         self.rules = RISK
+        self.account = account or {}
 
     def check_trade(self, signal: Signal, order_value: float) -> RiskCheck:
         """Run all risk checks on a proposed trade. Returns RiskCheck."""
         checks = [
+            self._check_account_status(),
+            self._check_buying_power(order_value),
             self._check_position_size(signal, order_value),
+            self._check_crypto_exposure(signal, order_value),
+            self._check_correlation_group(signal, order_value),
             self._check_daily_loss(),
             self._check_max_drawdown(),
             self._check_cash_reserve(order_value),
@@ -34,14 +71,53 @@ class RiskManager:
         ]
         for check in checks:
             if not check.allowed:
+                log.warning("Risk blocked %s %s: %s", signal.action, signal.symbol, check.reason)
                 return check
         return RiskCheck(allowed=True, reason="All risk checks passed", signal=signal)
 
+    # ------------------------------------------------------------------
+    # Account-level safety checks
+    # ------------------------------------------------------------------
+
+    def _check_account_status(self) -> RiskCheck:
+        """Block all trading if Alpaca says trading_blocked=True."""
+        if self.account.get("trading_blocked"):
+            return RiskCheck(
+                allowed=False,
+                reason="Trading blocked by broker — account may be restricted or under review",
+                signal=Signal("risk", "", "hold", 0, ""),
+            )
+        status = self.account.get("status", "ACTIVE")
+        if status not in ("ACTIVE", "active"):
+            return RiskCheck(
+                allowed=False,
+                reason=f"Account status is '{status}' — must be ACTIVE to trade",
+                signal=Signal("risk", "", "hold", 0, ""),
+            )
+        return RiskCheck(allowed=True, reason="Account status OK", signal=Signal("risk", "", "hold", 0, ""))
+
+    def _check_buying_power(self, order_value: float) -> RiskCheck:
+        """Use broker's actual buying power, not estimated cash."""
+        buying_power = self.account.get("buying_power")
+        if buying_power is not None and order_value > buying_power:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Order ${order_value:.2f} exceeds buying power ${buying_power:.2f}",
+                signal=Signal("risk", "", "hold", 0, ""),
+            )
+        return RiskCheck(allowed=True, reason="Buying power OK", signal=Signal("risk", "", "hold", 0, ""))
+
+    # ------------------------------------------------------------------
+    # Position-level checks
+    # ------------------------------------------------------------------
+
     def _check_position_size(self, signal: Signal, order_value: float) -> RiskCheck:
         max_value = self.portfolio_value * self.rules["max_position_pct"]
-        # Check existing position + new order
         positions = get_positions()
-        existing = sum(p["qty"] * (p["current_price"] or p["avg_cost"]) for p in positions if p["symbol"] == signal.symbol)
+        existing = sum(
+            p["qty"] * (p["current_price"] or p["avg_cost"])
+            for p in positions if p["symbol"] == signal.symbol
+        )
         total = existing + order_value if signal.action == "buy" else existing
 
         if total > max_value:
@@ -51,6 +127,57 @@ class RiskManager:
                 signal=signal,
             )
         return RiskCheck(allowed=True, reason="Position size OK", signal=signal)
+
+    def _check_crypto_exposure(self, signal: Signal, order_value: float) -> RiskCheck:
+        """Cap total crypto exposure at MAX_CRYPTO_EXPOSURE_PCT."""
+        if signal.action != "buy" or not _is_crypto(signal.symbol):
+            return RiskCheck(allowed=True, reason="Not a crypto buy", signal=signal)
+
+        positions = get_positions()
+        crypto_value = sum(
+            p["qty"] * (p["current_price"] or p["avg_cost"])
+            for p in positions if _is_crypto(p["symbol"])
+        )
+        new_total = crypto_value + order_value
+        max_crypto = self.portfolio_value * MAX_CRYPTO_EXPOSURE_PCT
+
+        if new_total > max_crypto:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Crypto exposure ${new_total:.2f} would exceed cap ${max_crypto:.2f} ({MAX_CRYPTO_EXPOSURE_PCT*100:.0f}%)",
+                signal=signal,
+            )
+        return RiskCheck(allowed=True, reason="Crypto exposure OK", signal=signal)
+
+    def _check_correlation_group(self, signal: Signal, order_value: float) -> RiskCheck:
+        """Limit exposure within correlated asset groups."""
+        if signal.action != "buy":
+            return RiskCheck(allowed=True, reason="Not a buy", signal=signal)
+
+        group = _SYMBOL_TO_GROUP.get(signal.symbol)
+        if not group:
+            return RiskCheck(allowed=True, reason="No correlation group", signal=signal)
+
+        group_symbols = CORRELATION_GROUPS[group]
+        positions = get_positions()
+        group_value = sum(
+            p["qty"] * (p["current_price"] or p["avg_cost"])
+            for p in positions if p["symbol"] in group_symbols
+        )
+        new_total = group_value + order_value
+        max_group = self.portfolio_value * MAX_CORRELATED_EXPOSURE_PCT
+
+        if new_total > max_group:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Correlated group '{group}' exposure ${new_total:.2f} exceeds cap ${max_group:.2f} ({MAX_CORRELATED_EXPOSURE_PCT*100:.0f}%)",
+                signal=signal,
+            )
+        return RiskCheck(allowed=True, reason=f"Group '{group}' exposure OK", signal=signal)
+
+    # ------------------------------------------------------------------
+    # Portfolio-level checks
+    # ------------------------------------------------------------------
 
     def _check_daily_loss(self) -> RiskCheck:
         pnl_records = get_daily_pnl(limit=1)
@@ -83,9 +210,12 @@ class RiskManager:
 
     def _check_cash_reserve(self, order_value: float) -> RiskCheck:
         min_cash = self.portfolio_value * self.rules["min_cash_reserve_pct"]
-        positions = get_positions()
-        positions_value = sum(p["qty"] * (p["current_price"] or p["avg_cost"]) for p in positions)
-        cash = self.portfolio_value - positions_value
+        # Use broker's actual cash if available
+        cash = self.account.get("cash", None)
+        if cash is None:
+            positions = get_positions()
+            positions_value = sum(p["qty"] * (p["current_price"] or p["avg_cost"]) for p in positions)
+            cash = self.portfolio_value - positions_value
         remaining = cash - order_value
         if remaining < min_cash:
             return RiskCheck(
@@ -107,6 +237,10 @@ class RiskManager:
             )
         return RiskCheck(allowed=True, reason="Trade count OK", signal=Signal("risk", "", "hold", 0, ""))
 
+    # ------------------------------------------------------------------
+    # Stop-loss check (unchanged API, uses RISK config)
+    # ------------------------------------------------------------------
+
     def check_stop_loss(self, symbol: str, current_price: float) -> RiskCheck | None:
         """Check if a position should be stopped out."""
         positions = get_positions()
@@ -121,14 +255,29 @@ class RiskManager:
                     )
         return None
 
+    # ------------------------------------------------------------------
+    # Portfolio summary
+    # ------------------------------------------------------------------
+
     def get_portfolio_summary(self) -> dict:
         positions = get_positions()
         positions_value = sum(p["qty"] * (p["current_price"] or p["avg_cost"]) for p in positions)
-        cash = self.portfolio_value - positions_value
+        cash = self.account.get("cash", self.portfolio_value - positions_value)
+
+        # Break down by asset class
+        crypto_value = sum(
+            p["qty"] * (p["current_price"] or p["avg_cost"])
+            for p in positions if _is_crypto(p["symbol"])
+        )
+        etf_value = positions_value - crypto_value
+
         return {
             "portfolio_value": self.portfolio_value,
             "cash": cash,
             "positions_value": positions_value,
+            "crypto_value": crypto_value,
+            "etf_value": etf_value,
+            "crypto_pct": crypto_value / self.portfolio_value * 100 if self.portfolio_value > 0 else 0,
             "cash_pct": cash / self.portfolio_value * 100 if self.portfolio_value > 0 else 0,
             "num_positions": len(positions),
             "positions": positions,

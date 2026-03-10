@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Agency — Trading Dashboard</title>
-    <meta http-equiv="refresh" content="60">
+    <!-- Auto-refresh via AJAX below, meta refresh as fallback -->
+    <meta http-equiv="refresh" content="120">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -411,7 +412,77 @@
     </div>
 
     <div style="text-align:center; padding:20px; color:#333; font-size:11px;">
-        THE AGENCY HEDGE FUND &bull; Autonomous Trading System &bull; $300 AUM
+        THE AGENCY HEDGE FUND &bull; Autonomous Trading System &bull;
+        <span id="refresh-status" style="color:#555;">Auto-refresh: 30s</span>
     </div>
+
+    <script>
+    // AJAX auto-refresh — updates stats + positions + actions without full reload
+    (function() {
+        const REFRESH_INTERVAL = 30000; // 30 seconds
+        let countdown = 30;
+
+        function updateStatus() {
+            const el = document.getElementById('refresh-status');
+            if (el) el.textContent = 'Refreshing in ' + countdown + 's';
+            countdown--;
+            if (countdown < 0) {
+                countdown = 30;
+                fetchUpdate();
+            }
+        }
+
+        function fetchUpdate() {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    // Update portfolio stats
+                    const cards = document.querySelectorAll('.stat-card');
+                    if (cards.length >= 8 && data.account) {
+                        cards[0].querySelector('.value').textContent = '$' + (data.account.portfolio_value || 0).toFixed(2);
+                        cards[1].querySelector('.value').textContent = '$' + (data.account.cash || 0).toFixed(2);
+
+                        // Positions value
+                        let posVal = 0;
+                        let totalPnl = 0;
+                        if (data.positions) {
+                            data.positions.forEach(p => {
+                                posVal += p.market_value || (p.qty * p.current_price) || 0;
+                                totalPnl += p.unrealized_pnl || 0;
+                            });
+                        }
+                        cards[2].querySelector('.value').textContent = '$' + posVal.toFixed(2);
+
+                        const pnlEl = cards[3].querySelector('.value');
+                        pnlEl.textContent = '$' + (totalPnl >= 0 ? '+' : '') + totalPnl.toFixed(2);
+                        pnlEl.className = 'value ' + (totalPnl >= 0 ? 'green' : 'red');
+
+                        if (data.summary) {
+                            cards[4].querySelector('.value').textContent = data.summary.trades_today || 0;
+                            cards[5].querySelector('.value').textContent = data.summary.signals_today || 0;
+                            cards[6].querySelector('.value').textContent = data.summary.risk_blocks_today || 0;
+                            const lastRun = data.summary.last_run;
+                            cards[7].querySelector('.value').textContent = lastRun ? lastRun.substring(0, 16) : 'Never';
+                        }
+                    }
+
+                    // Update timestamp
+                    const timeEl = document.querySelector('.header .time');
+                    if (timeEl && data.timestamp) {
+                        timeEl.textContent = data.timestamp.replace('T', ' ').substring(0, 19) + ' UTC \u2022 Auto-refresh: 30s';
+                    }
+
+                    const statusEl = document.getElementById('refresh-status');
+                    if (statusEl) statusEl.textContent = 'Updated just now';
+                })
+                .catch(err => {
+                    const statusEl = document.getElementById('refresh-status');
+                    if (statusEl) statusEl.textContent = 'Refresh failed - retrying...';
+                });
+        }
+
+        setInterval(updateStatus, 1000);
+    })();
+    </script>
 </body>
 </html>

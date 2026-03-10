@@ -1,10 +1,16 @@
-"""Commodity data from yfinance and FRED (both free)."""
+"""Commodity data from yfinance and FRED (both free).
 
+v2: Adds data validation on API responses.
+"""
+
+import logging
 import requests
 import pandas as pd
 import yfinance as yf
 from trading.config import COMMODITY_ETFS, FRED_BASE, FRED_API_KEY
 from trading.data.cache import cached
+
+log = logging.getLogger(__name__)
 
 
 def get_etf_prices() -> dict:
@@ -14,20 +20,34 @@ def get_etf_prices() -> dict:
     """
     result = {}
     symbols = list(COMMODITY_ETFS.values())
-    tickers = yf.Tickers(" ".join(symbols))
+    try:
+        tickers = yf.Tickers(" ".join(symbols))
+    except Exception as e:
+        log.error("Failed to create yfinance tickers: %s", e)
+        return {name: {"symbol": sym, "price": None, "previous_close": None, "change_pct": None}
+                for name, sym in COMMODITY_ETFS.items()}
+
     for name, symbol in COMMODITY_ETFS.items():
         try:
             ticker = tickers.tickers[symbol]
             info = ticker.fast_info
+            price = info.last_price
+            prev = info.previous_close
+
+            # Validate price
+            if price is None or not isinstance(price, (int, float)) or price <= 0:
+                log.warning("Invalid price for ETF %s (%s): %s", name, symbol, price)
+                result[name] = {"symbol": symbol, "price": None, "previous_close": None, "change_pct": None}
+                continue
+
             result[name] = {
                 "symbol": symbol,
-                "price": info.last_price,
-                "previous_close": info.previous_close,
-                "change_pct": ((info.last_price - info.previous_close) / info.previous_close * 100)
-                if info.previous_close
-                else 0,
+                "price": price,
+                "previous_close": prev,
+                "change_pct": ((price - prev) / prev * 100) if prev and prev > 0 else 0,
             }
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to get ETF price for %s (%s): %s", name, symbol, e)
             result[name] = {"symbol": symbol, "price": None, "previous_close": None, "change_pct": None}
     return result
 
@@ -37,13 +57,30 @@ def get_etf_history(symbol: str, period: str = "3mo") -> pd.DataFrame:
     """Get historical data for a commodity ETF.
 
     Args:
-        symbol: ETF ticker (e.g., 'GLD', 'USO')
+        symbol: ETF ticker (e.g., 'UGL', 'USO')
         period: '1mo', '3mo', '6mo', '1y', '2y', '5y', 'max'
 
     Returns DataFrame with OHLCV data.
     """
-    ticker = yf.Ticker(symbol)
-    return ticker.history(period=period)
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period)
+    except Exception as e:
+        log.error("Failed to get ETF history for %s: %s", symbol, e)
+        return pd.DataFrame()
+
+    if df.empty:
+        log.warning("Empty history for ETF %s (period=%s)", symbol, period)
+        return df
+
+    # Validate Close column
+    if "Close" in df.columns:
+        invalid = df["Close"].isna() | (df["Close"] <= 0)
+        if invalid.any():
+            log.warning("Dropping %d invalid rows from %s history", invalid.sum(), symbol)
+            df = df[~invalid]
+
+    return df
 
 
 @cached(ttl=300)
@@ -51,29 +88,46 @@ def get_fred_series(series_id: str, limit: int = 90) -> pd.DataFrame:
     """Get economic data from FRED.
 
     Popular series:
-      GOLDAMGBD228NLBM — Gold price (London fix)
-      DCOILWTICO — WTI crude oil
-      DCOILBRENTEU — Brent crude oil
-      DHHNGSP — Henry Hub natural gas
-      DEXUSEU — EUR/USD exchange rate
-      CPIAUCSL — CPI (inflation)
-      DGS10 — 10-year Treasury yield
+      GOLDAMGBD228NLBM -- Gold price (London fix)
+      DCOILWTICO       -- WTI crude oil
+      DFII10           -- 10-Year TIPS real yield
+      DGS10            -- 10-year Treasury yield
     """
     if not FRED_API_KEY:
         raise ValueError("FRED_API_KEY not set in .env")
-    resp = requests.get(
-        f"{FRED_BASE}/series/observations",
-        params={
-            "series_id": series_id,
-            "api_key": FRED_API_KEY,
-            "file_type": "json",
-            "sort_order": "desc",
-            "limit": limit,
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
-    data = resp.json()["observations"]
+
+    try:
+        resp = requests.get(
+            f"{FRED_BASE}/series/observations",
+            params={
+                "series_id": series_id,
+                "api_key": FRED_API_KEY,
+                "file_type": "json",
+                "sort_order": "desc",
+                "limit": limit,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        log.error("FRED API request failed for %s: %s", series_id, e)
+        raise
+
+    try:
+        json_data = resp.json()
+    except ValueError as e:
+        log.error("FRED returned invalid JSON for %s: %s", series_id, e)
+        raise
+
+    if "observations" not in json_data:
+        log.error("FRED response missing 'observations' key for %s", series_id)
+        raise ValueError(f"FRED response missing 'observations' for {series_id}")
+
+    data = json_data["observations"]
+    if not data:
+        log.warning("FRED returned empty data for %s", series_id)
+        return pd.DataFrame(columns=["value"])
+
     df = pd.DataFrame(data)
     df["date"] = pd.to_datetime(df["date"])
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
@@ -84,7 +138,7 @@ def get_fred_series(series_id: str, limit: int = 90) -> pd.DataFrame:
 
 
 def get_commodity_prices_from_fred() -> dict:
-    """Get latest commodity prices from FRED (free, no yfinance dependency).
+    """Get latest commodity prices from FRED.
 
     Returns dict of {commodity: {value, date, series_id}}
     """
@@ -104,6 +158,9 @@ def get_commodity_prices_from_fred() -> dict:
                     "date": str(df.index[-1].date()),
                     "series_id": series_id,
                 }
-        except Exception:
+            else:
+                result[name] = {"value": None, "date": None, "series_id": series_id}
+        except Exception as e:
+            log.warning("Failed to get FRED data for %s: %s", name, e)
             result[name] = {"value": None, "date": None, "series_id": series_id}
     return result

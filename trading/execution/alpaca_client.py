@@ -1,14 +1,61 @@
-"""Alpaca API client for crypto and ETF execution."""
+"""Alpaca API client for crypto and ETF execution.
+
+v2: Adds exponential-backoff retry on order submission and order status checks.
+"""
+
+import logging
+import time
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, GetAssetsRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass
-from alpaca.data.live import CryptoDataStream
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import CryptoHistoricalDataClient
-from alpaca.data.requests import CryptoBarsRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.requests import CryptoLatestQuoteRequest
 
 from trading.config import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, TRADING_MODE
+
+log = logging.getLogger(__name__)
+
+# Retry parameters
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0  # seconds
+RETRY_BACKOFF_FACTOR = 2.0  # exponential: 2s, 4s, 8s
+
+# Errors that should NOT be retried (business logic errors)
+_NON_RETRYABLE = frozenset({
+    "insufficient",  # insufficient balance/buying power
+    "account_blocked",
+    "forbidden",
+})
+
+
+def _is_retryable(error: Exception) -> bool:
+    """Check if an error is worth retrying (transient network/server issues)."""
+    err_str = str(error).lower()
+    for keyword in _NON_RETRYABLE:
+        if keyword in err_str:
+            return False
+    # Retry on 5xx, timeouts, connection errors
+    return True
+
+
+def _retry(func, *args, **kwargs):
+    """Execute func with exponential backoff retry."""
+    last_err = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            if not _is_retryable(e) or attempt == MAX_RETRIES - 1:
+                raise
+            delay = RETRY_BASE_DELAY * (RETRY_BACKOFF_FACTOR ** attempt)
+            log.warning(
+                "Alpaca API error (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1, MAX_RETRIES, delay, e,
+            )
+            time.sleep(delay)
+    raise last_err  # Should never reach here
 
 
 def _is_paper():
@@ -26,9 +73,9 @@ def get_client() -> TradingClient:
 
 
 def get_account() -> dict:
-    """Get account info — cash, portfolio value, buying power."""
+    """Get account info — cash, portfolio value, buying power, status."""
     client = get_client()
-    account = client.get_account()
+    account = _retry(client.get_account)
     return {
         "cash": float(account.cash),
         "portfolio_value": float(account.portfolio_value),
@@ -43,7 +90,7 @@ def get_account() -> dict:
 def get_positions_from_alpaca() -> list[dict]:
     """Get all open positions from Alpaca."""
     client = get_client()
-    positions = client.get_all_positions()
+    positions = _retry(client.get_all_positions)
     return [
         {
             "symbol": p.symbol,
@@ -60,10 +107,10 @@ def get_positions_from_alpaca() -> list[dict]:
 
 
 def submit_order(symbol: str, side: str, notional: float = None, qty: float = None) -> dict:
-    """Submit a market order.
+    """Submit a market order with exponential-backoff retry.
 
     Args:
-        symbol: Trading symbol (e.g., 'BTC/USD' for crypto, 'GLD' for ETF)
+        symbol: Trading symbol (e.g., 'BTC/USD' for crypto, 'UGL' for ETF)
         side: 'buy' or 'sell'
         notional: Dollar amount to trade (for fractional)
         qty: Number of shares/coins (alternative to notional)
@@ -74,7 +121,6 @@ def submit_order(symbol: str, side: str, notional: float = None, qty: float = No
 
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
-    # Build order request
     kwargs = {
         "symbol": symbol,
         "side": order_side,
@@ -88,9 +134,13 @@ def submit_order(symbol: str, side: str, notional: float = None, qty: float = No
         raise ValueError("Either notional or qty must be provided")
 
     order_request = MarketOrderRequest(**kwargs)
-    order = client.submit_order(order_request)
 
-    return {
+    log.info("Submitting %s order: %s %s (notional=%s, qty=%s)",
+             side, symbol, order_side, notional, qty)
+
+    order = _retry(client.submit_order, order_request)
+
+    result = {
         "id": str(order.id),
         "symbol": order.symbol,
         "side": order.side.value,
@@ -101,12 +151,14 @@ def submit_order(symbol: str, side: str, notional: float = None, qty: float = No
         "filled_avg_price": str(order.filled_avg_price) if order.filled_avg_price else None,
         "filled_qty": str(order.filled_qty) if order.filled_qty else None,
     }
+    log.info("Order result: %s %s -> %s", symbol, side, result["status"])
+    return result
 
 
 def get_order_status(order_id: str) -> dict:
-    """Check the status of an order."""
+    """Check the status of an order with retry."""
     client = get_client()
-    order = client.get_order_by_id(order_id)
+    order = _retry(client.get_order_by_id, order_id)
     return {
         "id": str(order.id),
         "symbol": order.symbol,
@@ -118,9 +170,10 @@ def get_order_status(order_id: str) -> dict:
 
 
 def close_position(symbol: str) -> dict:
-    """Close an entire position."""
+    """Close an entire position with retry."""
     client = get_client()
-    order = client.close_position(symbol)
+    log.info("Closing position: %s", symbol)
+    order = _retry(client.close_position, symbol)
     return {
         "id": str(order.id),
         "symbol": order.symbol,
@@ -132,9 +185,8 @@ def close_position(symbol: str) -> dict:
 def get_crypto_quote(symbol: str) -> dict:
     """Get latest crypto quote."""
     client = CryptoHistoricalDataClient()
-    from alpaca.data.requests import CryptoLatestQuoteRequest
     req = CryptoLatestQuoteRequest(symbol_or_symbols=symbol)
-    quotes = client.get_crypto_latest_quote(req)
+    quotes = _retry(client.get_crypto_latest_quote, req)
     quote = quotes.get(symbol)
     if quote:
         return {

@@ -1,6 +1,11 @@
-"""Post-trade analysis — win/loss patterns, strategy grading, performance reviews."""
+"""Post-trade analysis — win/loss patterns, strategy grading, performance reviews.
+
+v2: Fixed Sharpe ratio to use daily portfolio returns (not trade P&Ls),
+    annualized with sqrt(365) for 24/7 crypto markets.
+"""
 
 import json
+import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -8,6 +13,8 @@ import numpy as np
 
 from trading.config import REVIEWS_DIR
 from trading.db.store import get_trades, get_daily_pnl, insert_review
+
+log = logging.getLogger(__name__)
 
 
 def calculate_metrics(trades: list[dict]) -> dict:
@@ -27,11 +34,10 @@ def calculate_metrics(trades: list[dict]) -> dict:
     avg_win = np.mean([t["pnl"] for t in wins]) if wins else 0
     avg_loss = np.mean([t["pnl"] for t in losses]) if losses else 0
 
-    # Sharpe ratio (annualized, assuming daily returns)
-    if len(pnls) > 1 and np.std(pnls) > 0:
-        sharpe = np.mean(pnls) / np.std(pnls) * np.sqrt(252)
-    else:
-        sharpe = 0
+    # Profit factor = gross wins / gross losses
+    gross_wins = sum(t["pnl"] for t in wins)
+    gross_losses = abs(sum(t["pnl"] for t in losses))
+    profit_factor = gross_wins / gross_losses if gross_losses > 0 else float("inf") if gross_wins > 0 else 0
 
     # Max drawdown from cumulative PnL
     cumulative = np.cumsum(pnls)
@@ -48,13 +54,50 @@ def calculate_metrics(trades: list[dict]) -> dict:
         "win_rate": round(win_rate, 3),
         "total_pnl": round(sum(pnls), 2),
         "avg_pnl": round(np.mean(pnls), 2),
-        "avg_win": round(avg_win, 2),
-        "avg_loss": round(avg_loss, 2),
-        "sharpe_ratio": round(sharpe, 2),
-        "max_drawdown": round(max_drawdown, 2),
+        "avg_win": round(float(avg_win), 2),
+        "avg_loss": round(float(avg_loss), 2),
+        "profit_factor": round(profit_factor, 2),
+        "max_drawdown": round(float(max_drawdown), 2),
         "best_trade": round(max(pnls), 2) if pnls else 0,
         "worst_trade": round(min(pnls), 2) if pnls else 0,
     }
+
+
+def calculate_sharpe_from_daily_pnl(days: int = 30) -> float:
+    """Calculate Sharpe ratio from daily portfolio returns.
+
+    Uses daily_pnl table (portfolio snapshots), NOT individual trade P&Ls.
+    Annualized with sqrt(365) since the fund trades crypto 24/7.
+    """
+    records = get_daily_pnl(limit=days + 1)
+    if len(records) < 3:
+        return 0.0
+
+    # Records come newest-first; reverse to chronological
+    records = list(reversed(records))
+
+    # Compute daily returns from portfolio values
+    values = [r["portfolio_value"] for r in records if r["portfolio_value"] and r["portfolio_value"] > 0]
+    if len(values) < 3:
+        return 0.0
+
+    daily_returns = []
+    for i in range(1, len(values)):
+        ret = (values[i] - values[i - 1]) / values[i - 1]
+        daily_returns.append(ret)
+
+    if not daily_returns:
+        return 0.0
+
+    mean_ret = np.mean(daily_returns)
+    std_ret = np.std(daily_returns, ddof=1)  # Use sample std
+
+    if std_ret == 0:
+        return 0.0
+
+    # Annualize: crypto trades 365 days/year
+    sharpe = (mean_ret / std_ret) * np.sqrt(365)
+    return round(float(sharpe), 2)
 
 
 def metrics_by_strategy(trades: list[dict]) -> dict[str, dict]:
@@ -86,6 +129,9 @@ def generate_review(period: str = "weekly") -> str:
     overall = calculate_metrics(period_trades)
     by_strat = metrics_by_strategy(period_trades)
 
+    # Proper Sharpe from daily portfolio returns
+    sharpe = calculate_sharpe_from_daily_pnl(days=days)
+
     # Find best/worst strategy
     best_strategy = max(by_strat.items(), key=lambda x: x[1].get("total_pnl", 0), default=("none", {}))[0] if by_strat else "none"
     worst_strategy = min(by_strat.items(), key=lambda x: x[1].get("total_pnl", 0), default=("none", {}))[0] if by_strat else "none"
@@ -102,7 +148,8 @@ def generate_review(period: str = "weekly") -> str:
         f"- **Total Trades**: {overall['total_trades']}",
         f"- **Win Rate**: {overall['win_rate']*100:.1f}%",
         f"- **Total P&L**: ${overall['total_pnl']:+.2f}",
-        f"- **Sharpe Ratio**: {overall.get('sharpe_ratio', 0):.2f}",
+        f"- **Sharpe Ratio**: {sharpe:.2f} (annualized, sqrt365)",
+        f"- **Profit Factor**: {overall.get('profit_factor', 0):.2f}",
         f"- **Max Drawdown**: ${overall.get('max_drawdown', 0):.2f}",
         f"- **Best Trade**: ${overall.get('best_trade', 0):+.2f}",
         f"- **Worst Trade**: ${overall.get('worst_trade', 0):+.2f}",
@@ -115,6 +162,7 @@ def generate_review(period: str = "weekly") -> str:
         lines.append(f"- Trades: {metrics['total_trades']} | Win rate: {metrics['win_rate']*100:.1f}%")
         lines.append(f"- P&L: ${metrics['total_pnl']:+.2f} | Avg: ${metrics.get('avg_pnl', 0):+.2f}")
         lines.append(f"- Avg win: ${metrics.get('avg_win', 0):+.2f} | Avg loss: ${metrics.get('avg_loss', 0):+.2f}")
+        lines.append(f"- Profit factor: {metrics.get('profit_factor', 0):.2f}")
 
     lines.append(f"\n## Summary")
     lines.append(f"- **Best strategy**: {best_strategy}")
@@ -142,12 +190,15 @@ def generate_review(period: str = "weekly") -> str:
         total_trades=overall["total_trades"],
         win_rate=overall["win_rate"],
         total_pnl=overall["total_pnl"],
-        sharpe_ratio=overall.get("sharpe_ratio", 0),
+        sharpe_ratio=sharpe,
         max_drawdown=overall.get("max_drawdown", 0),
         best_strategy=best_strategy,
         worst_strategy=worst_strategy,
         summary=content,
         file_path=str(filepath),
     )
+
+    log.info("Generated %s review: %d trades, $%+.2f P&L, Sharpe %.2f",
+             period, overall["total_trades"], overall["total_pnl"], sharpe)
 
     return content

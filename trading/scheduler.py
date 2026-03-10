@@ -1,15 +1,24 @@
-"""Autonomous trading scheduler — runs strategies on autopilot.
+"""Autonomous trading scheduler v3.0 — runs strategies on autopilot.
 
 Integrates:
+  - Structured logging (Python logging module)
   - Signal aggregation (deduplicate, resolve conflicts)
   - Market hours gating (ETFs only during NYSE hours)
-  - Position sync (Alpaca → local DB)
+  - Position sync (Alpaca -> local DB)
   - Fill verification (poll pending orders)
   - Trade pairing (FIFO buy-sell matching for P&L)
   - Take-profit + trailing stop
   - Notifications (Discord / Telegram)
+  - Correlation limits + crypto exposure cap
+  - Volatility-adjusted position sizing (ATR)
+  - Per-strategy risk budgets
+  - Order retry with exponential backoff
+  - Approved adaptation application
+  - Account safety checks (trading_blocked, buying_power)
+  - Proper daily P&L calculation (prev-day comparison)
 """
 
+import logging
 import os
 import time
 import traceback
@@ -21,13 +30,14 @@ from rich.console import Console
 from trading.config import TRADING_MODE, RISK
 from trading.db.store import (
     init_db, insert_trade, insert_signal, log_action,
-    record_daily_pnl, get_action_log,
+    record_daily_pnl, get_action_log, get_daily_pnl,
 )
 
+log = logging.getLogger(__name__)
 console = Console()
 
 # ---------------------------------------------------------------------------
-# Persistent tracker — created once, lives for the daemon's lifetime
+# Persistent tracker -- created once, lives for the daemon's lifetime
 # ---------------------------------------------------------------------------
 _profit_tracker = None  # Lazy init in start_daemon
 
@@ -81,11 +91,11 @@ def _notify_safe(func, *args, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Core trading cycle — with aggregation + market hours gating
+# Core trading cycle -- with aggregation + market hours gating
 # ---------------------------------------------------------------------------
 
 def run_trading_cycle():
-    """One complete cycle: data → signals → aggregate → risk → execute → sync."""
+    """One complete cycle: data -> signals -> aggregate -> risk -> execute -> sync."""
     from trading.strategy.registry import get_enabled_strategies
     from trading.strategy.aggregator import aggregate_signals
     from trading.risk.manager import RiskManager
@@ -98,8 +108,9 @@ def run_trading_cycle():
 
     clear_cache()  # Fresh data each cycle
     log_action("strategy_run", "cycle_start", details=f"Mode: {TRADING_MODE}")
+    log.info("Trading cycle started")
     console.print(f"\n[bold cyan]{'='*60}[/]")
-    console.print(f"[bold]Trading cycle started — {_now_str()}[/bold]")
+    console.print(f"[bold]Trading cycle started -- {_now_str()}[/bold]")
     console.print(f"[bold cyan]{'='*60}[/]")
 
     try:
@@ -109,12 +120,37 @@ def run_trading_cycle():
         console.print(f"[dim]Portfolio: ${portfolio_value:.2f} ({mode})[/dim]")
 
         # ---------------------------------------------------------------
-        # Phase 1: Sync positions from broker → local DB (fixes risk checks)
+        # Phase 0: Account safety checks
+        # ---------------------------------------------------------------
+        if account.get("trading_blocked"):
+            msg = "Trading blocked by broker -- aborting cycle"
+            log.error(msg)
+            console.print(f"[bold red]{msg}[/bold red]")
+            log_action("error", "trading_blocked", details=msg)
+            _notify_safe(notify_error, msg, "account_check")
+            return
+
+        # ---------------------------------------------------------------
+        # Phase 0.5: Apply approved parameter adaptations
+        # ---------------------------------------------------------------
+        try:
+            from trading.learning.adaptor import apply_approved
+            applied = apply_approved()
+            if applied:
+                for a in applied:
+                    console.print(f"  [magenta]ADAPTED {a['strategy']}.{a['param']}: {a['old']} -> {a['new']}[/]")
+                log_action("system", "adaptations_applied", details=f"{len(applied)} params updated")
+        except Exception as e:
+            log.warning("Adaptation application failed: %s", e)
+
+        # ---------------------------------------------------------------
+        # Phase 1: Sync positions from broker -> local DB (fixes risk checks)
         # ---------------------------------------------------------------
         try:
             sync_result = run_sync()
             console.print(f"[dim]Sync: {sync_result}[/dim]")
         except Exception as e:
+            log.warning("Sync warning: %s", e)
             console.print(f"[yellow]Sync warning: {e}[/yellow]")
 
         # ---------------------------------------------------------------
@@ -125,7 +161,7 @@ def run_trading_cycle():
         contexts = {}
 
         for strategy in strategies:
-            console.print(f"\n[cyan]→ {strategy.name}[/cyan]")
+            console.print(f"\n[cyan]-> {strategy.name}[/cyan]")
             try:
                 signals = strategy.generate_signals()
                 context = strategy.get_market_context()
@@ -146,6 +182,7 @@ def run_trading_cycle():
 
             except Exception as e:
                 log_action("error", "strategy_error", details=f"{strategy.name}: {e}")
+                log.error("Strategy %s failed: %s", strategy.name, e)
                 console.print(f"  [red]Error: {e}[/red]")
                 _notify_safe(notify_error, f"{strategy.name}: {e}", "strategy_generation")
 
@@ -155,15 +192,16 @@ def run_trading_cycle():
         # Phase 3: Aggregate signals (deduplicate + conflict resolution)
         # ---------------------------------------------------------------
         consolidated = aggregate_signals(raw_signals)
+        log.info("Aggregation: %d raw -> %d consolidated", signal_count, len(consolidated))
         console.print(
-            f"\n[bold]Aggregation: {signal_count} raw → "
+            f"\n[bold]Aggregation: {signal_count} raw -> "
             f"{len(consolidated)} consolidated[/bold]"
         )
 
         # ---------------------------------------------------------------
         # Phase 4: Risk check + market hours gate + execute
         # ---------------------------------------------------------------
-        risk_mgr = RiskManager(portfolio_value)
+        risk_mgr = RiskManager(portfolio_value, account=account)
         executed_count = 0
         blocked_count = 0
 
@@ -174,7 +212,7 @@ def run_trading_cycle():
             if not signal.is_actionable:
                 continue
 
-            # Market hours gate — block ETF orders outside NYSE hours
+            # Market hours gate -- block ETF orders outside NYSE hours
             can_trade, reason = can_trade_now(signal.symbol)
             if not can_trade:
                 blocked_count += 1
@@ -186,15 +224,23 @@ def run_trading_cycle():
                 console.print(f"  [yellow]DEFERRED {signal.symbol}: {reason}[/yellow]")
                 continue
 
-            # Size the order
+            # Size the order (volatility-adjusted + strategy budgets)
             order_value = calculate_order_size(
                 signal, portfolio_value, buy_count
             )
             if order_value <= 0:
-                console.print(f"  [dim]Skip {signal.symbol} — too small[/dim]")
+                console.print(f"  [dim]Skip {signal.symbol} -- too small or budget exhausted[/dim]")
                 continue
 
-            # Risk check
+            # Extra safety: don't exceed actual buying power
+            buying_power = account.get("buying_power", float("inf"))
+            if order_value > buying_power:
+                order_value = max(buying_power - 10, 0)  # Leave $10 buffer
+                if order_value <= 5:
+                    console.print(f"  [yellow]Skip {signal.symbol} -- insufficient buying power[/yellow]")
+                    continue
+
+            # Risk check (correlation limits, crypto cap, etc.)
             risk_check = risk_mgr.check_trade(signal, order_value)
             if not risk_check.allowed:
                 blocked_count += 1
@@ -217,6 +263,7 @@ def run_trading_cycle():
                     details=f"Order execution failed: {exec_err}",
                     data={"order_value": order_value, "action": signal.action},
                 )
+                log.error("Order failed for %s: %s", signal.symbol, exec_err)
                 console.print(f"  [red]ORDER FAILED {signal.symbol}: {exec_err}[/red]")
                 continue
 
@@ -251,8 +298,10 @@ def run_trading_cycle():
                 side_style = "green" if signal.action == "buy" else "red"
                 console.print(
                     f"  [{side_style}]{signal.action.upper()} "
-                    f"${order_value:.2f} {signal.symbol} — {order['status']}[/]"
+                    f"${order_value:.2f} {signal.symbol} -- {order['status']}[/]"
                 )
+                log.info("Executed %s $%.2f %s -> %s",
+                         signal.action, order_value, signal.symbol, order["status"])
                 # Notify
                 _notify_safe(
                     notify_trade,
@@ -273,10 +322,11 @@ def run_trading_cycle():
         try:
             run_sync()
         except Exception as e:
+            log.warning("Post-trade sync warning: %s", e)
             console.print(f"[yellow]Post-trade sync warning: {e}[/yellow]")
 
         # ---------------------------------------------------------------
-        # Phase 6: Record daily P&L snapshot
+        # Phase 6: Record daily P&L snapshot (proper daily return calc)
         # ---------------------------------------------------------------
         try:
             positions = _get_positions()
@@ -287,13 +337,24 @@ def run_trading_cycle():
             cash = account["cash"]
             pv = cash + pos_value
 
-            # Proper daily return calculation
-            prev_pnl = get_action_log(limit=1, category="strategy_run")
+            # Proper daily return: compare to yesterday's portfolio value
+            prev_records = get_daily_pnl(limit=2)
+            if prev_records:
+                prev_pv = prev_records[0]["portfolio_value"]
+                # Check if prev record is from today (already written) or yesterday
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if prev_records[0]["date"] == today_str and len(prev_records) > 1:
+                    prev_pv = prev_records[1]["portfolio_value"]
+                daily_ret = (pv - prev_pv) / prev_pv if prev_pv > 0 else 0
+            else:
+                daily_ret = 0
+
+            # Cumulative return from initial capital
             initial = float(os.environ.get("INITIAL_CAPITAL", 100_000))
-            daily_ret = (pv - initial) / initial if initial > 0 else 0
             cum_ret = (pv - initial) / initial if initial > 0 else 0
             record_daily_pnl(pv, cash, pos_value, daily_ret, cum_ret)
         except Exception as e:
+            log.warning("P&L snapshot warning: %s", e)
             console.print(f"[yellow]P&L snapshot warning: {e}[/yellow]")
 
         # ---------------------------------------------------------------
@@ -306,8 +367,12 @@ def run_trading_cycle():
                 f"Executed: {executed_count} | Blocked: {blocked_count}"
             ),
         )
+        log.info(
+            "Cycle complete: %d raw -> %d consolidated, %d executed, %d blocked",
+            signal_count, len(consolidated), executed_count, blocked_count,
+        )
         console.print(
-            f"\n[bold]Cycle complete — {signal_count} raw signals → "
+            f"\n[bold]Cycle complete -- {signal_count} raw signals -> "
             f"{len(consolidated)} consolidated, "
             f"{executed_count} trades, {blocked_count} blocked[/bold]"
         )
@@ -317,6 +382,7 @@ def run_trading_cycle():
 
     except Exception as e:
         log_action("error", "cycle_crash", details=str(e))
+        log.exception("Cycle crashed: %s", e)
         console.print(f"[bold red]Cycle crashed: {e}[/bold red]")
         traceback.print_exc()
         try:
@@ -327,7 +393,7 @@ def run_trading_cycle():
 
 
 # ---------------------------------------------------------------------------
-# Stop-loss + take-profit checker (runs every 30 minutes)
+# Stop-loss + take-profit checker (runs every 15 minutes)
 # ---------------------------------------------------------------------------
 
 def check_stop_losses():
@@ -348,14 +414,19 @@ def check_stop_losses():
         for action in profit_actions:
             symbol = action["symbol"]
             reason = action["reason"]
-            console.print(f"[bold yellow]{action['action'].upper()}: {symbol} — {reason}[/]")
+            console.print(f"[bold yellow]{action['action'].upper()}: {symbol} -- {reason}[/]")
             log_action(
                 "profit_mgmt", action["action"],
                 symbol=symbol,
                 details=reason,
                 data={"pnl_pct": action["pnl_pct"], "qty": action["qty"]},
             )
-            order = _execute_order(symbol, "sell", qty=action["qty"])
+            try:
+                order = _execute_order(symbol, "sell", qty=action["qty"])
+            except Exception as e:
+                log.error("Profit management sell failed for %s: %s", symbol, e)
+                continue
+
             if order.get("status") in ("filled", "accepted", "new", "pending_new"):
                 insert_trade(
                     symbol=symbol,
@@ -368,8 +439,7 @@ def check_stop_losses():
                     alpaca_order_id=order.get("id"),
                 )
                 log_action("trade", f"{action['action']}_sell", symbol=symbol, result=order["status"])
-                tracker.remove(symbol)  # Clean up watermark
-                # Notify
+                tracker.remove(symbol)
                 try:
                     from trading.monitor.notifications import notify_stop_loss
                     _notify_safe(notify_stop_loss, symbol, action["pnl_pct"] * 100, action["qty"])
@@ -392,7 +462,12 @@ def check_stop_losses():
                     details=f"P&L: {pnl_pct*100:.1f}%",
                     data={"pnl_pct": pnl_pct, "qty": pos["qty"]},
                 )
-                order = _execute_order(symbol, "sell", qty=pos["qty"])
+                try:
+                    order = _execute_order(symbol, "sell", qty=pos["qty"])
+                except Exception as e:
+                    log.error("Stop-loss sell failed for %s: %s", symbol, e)
+                    continue
+
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
                     insert_trade(
                         symbol=symbol,
@@ -406,7 +481,6 @@ def check_stop_losses():
                     )
                     log_action("trade", "stop_loss_sell", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
-                    # Notify
                     try:
                         from trading.monitor.notifications import notify_stop_loss
                         _notify_safe(notify_stop_loss, symbol, pnl_pct * 100, pos["qty"])
@@ -422,22 +496,37 @@ def check_stop_losses():
 
     except Exception as e:
         log_action("error", "stop_loss_check_error", details=str(e))
+        log.error("Stop-loss check error: %s", e)
         console.print(f"[red]Stop-loss check error: {e}[/red]")
 
 
 # ---------------------------------------------------------------------------
-# Weekly review
+# Weekly review + adaptation analysis
 # ---------------------------------------------------------------------------
 
 def run_weekly_review():
-    """Generate a weekly performance review."""
+    """Generate a weekly performance review and suggest adaptations."""
     try:
         from trading.learning.reviewer import generate_review
         generate_review("weekly")
         log_action("review", "weekly_review_generated")
+        log.info("Weekly review generated")
         console.print("[green]Weekly review generated.[/green]")
     except Exception as e:
         log_action("error", "review_error", details=str(e))
+        log.error("Review error: %s", e)
+
+    # Also run adaptation analysis
+    try:
+        from trading.learning.adaptor import analyze_and_suggest
+        suggestions = analyze_and_suggest()
+        if suggestions:
+            log_action("system", "adaptations_suggested",
+                       details=f"{len(suggestions)} parameter changes suggested")
+            log.info("Suggested %d parameter adaptations", len(suggestions))
+            console.print(f"[magenta]{len(suggestions)} adaptation suggestions generated[/]")
+    except Exception as e:
+        log.warning("Adaptation analysis failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +539,10 @@ def start_daemon(interval_hours=4, paper=False):
         import trading.config as cfg
         cfg.TRADING_MODE = "paper"
 
+    # Initialize structured logging
+    from trading.logging_config import setup_logging
+    setup_logging(level="INFO")
+
     init_db()
 
     # Initialize persistent profit tracker
@@ -457,34 +550,40 @@ def start_daemon(interval_hours=4, paper=False):
 
     mode = "PAPER" if TRADING_MODE == "paper" or paper else "LIVE"
     console.print(f"\n[bold green]{'='*60}[/]")
-    console.print(f"[bold green]  AUTONOMOUS TRADER v2.0 — {mode} MODE[/bold green]")
+    console.print(f"[bold green]  AUTONOMOUS TRADER v3.0 -- {mode} MODE[/bold green]")
     console.print(f"[bold green]{'='*60}[/]")
     console.print(f"  Trading cycle:       every {interval_hours} hours")
-    console.print(f"  Stop-loss check:     every 15 minutes")
-    console.print(f"  Profit check:        every 15 minutes")
+    console.print(f"  Stop/profit check:   every 15 minutes")
     console.print(f"  Position sync:       every cycle + post-trade")
     console.print(f"  Signal aggregation:  enabled (dedup + conflict resolution)")
-    console.print(f"  Market hours gate:   enabled (ETFs → NYSE only)")
+    console.print(f"  Market hours gate:   enabled (ETFs -> NYSE only)")
+    console.print(f"  Correlation limits:  enabled (70% crypto cap, 50% group cap)")
+    console.print(f"  Vol-adjusted sizing: enabled (ATR-based)")
+    console.print(f"  Strategy budgets:    enabled (per-strategy allocation)")
+    console.print(f"  Order retry:         enabled (3x exponential backoff)")
     console.print(f"  Take-profit:         15% target")
     console.print(f"  Trailing stop:       4% trail after 8% gain")
     console.print(f"  Notifications:       Discord/Telegram if configured")
+    console.print(f"  Structured logging:  enabled (logs/trading.log)")
+    console.print(f"  Adaptation:          auto-apply approved changes")
     console.print(f"  Weekly review:       every Sunday at 00:00")
-    console.print(f"  Dashboard:           http://localhost:5000")
+    console.print(f"  Dashboard:           http://localhost:5050")
     console.print(f"[bold green]{'='*60}[/]\n")
 
-    log_action("scheduler", "daemon_started", details=f"Mode: {mode}, Interval: {interval_hours}h, Version: v2.0")
+    log.info("Daemon v3.0 started in %s mode, interval=%dh", mode, interval_hours)
+    log_action("scheduler", "daemon_started", details=f"Mode: {mode}, Interval: {interval_hours}h, Version: v3.0")
 
     # Notify on start
     try:
         from trading.monitor.notifications import notify
-        _notify_safe(notify, "Daemon Started", f"Trading daemon v2.0 started in {mode} mode", "info")
+        _notify_safe(notify, "Daemon Started", f"Trading daemon v3.0 started in {mode} mode", "info")
     except Exception:
         pass
 
     # Run immediately on start
     run_trading_cycle()
 
-    # Schedule recurring tasks — tightened stop/profit check to 15 min
+    # Schedule recurring tasks
     schedule.every(interval_hours).hours.do(run_trading_cycle)
     schedule.every(15).minutes.do(check_stop_losses)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
@@ -495,6 +594,7 @@ def start_daemon(interval_hours=4, paper=False):
             time.sleep(30)
     except KeyboardInterrupt:
         log_action("scheduler", "daemon_stopped", details="Keyboard interrupt")
+        log.info("Daemon stopped by user")
         console.print("\n[yellow]Daemon stopped.[/yellow]")
         try:
             from trading.monitor.notifications import notify
