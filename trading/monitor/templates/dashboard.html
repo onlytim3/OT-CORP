@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Agency — Trading Dashboard</title>
+    <meta http-equiv="refresh" content="60">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-bottom: 1px solid #2a2a4a;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 18px;
+            color: #00ff88;
+            letter-spacing: 2px;
+        }
+        .header .mode {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+        .mode-paper { background: #ff990020; color: #ffaa00; border: 1px solid #ffaa0050; }
+        .mode-live { background: #00ff8820; color: #00ff88; border: 1px solid #00ff8850; }
+        .header .time { color: #888; font-size: 12px; }
+
+        /* Stats bar */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 12px;
+            padding: 16px 24px;
+            background: #0d0d15;
+        }
+        .stat-card {
+            background: #12121e;
+            border: 1px solid #1e1e3a;
+            border-radius: 8px;
+            padding: 14px 16px;
+            text-align: center;
+        }
+        .stat-card .label { color: #888; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-card .value { font-size: 22px; font-weight: bold; margin-top: 4px; }
+        .green { color: #00ff88; }
+        .red { color: #ff4444; }
+        .yellow { color: #ffaa00; }
+        .blue { color: #44aaff; }
+        .dim { color: #666; }
+
+        /* Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            padding: 16px 24px;
+        }
+        .grid-full { grid-column: 1 / -1; }
+
+        /* Cards */
+        .card {
+            background: #12121e;
+            border: 1px solid #1e1e3a;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .card-header {
+            background: #1a1a2e;
+            padding: 10px 16px;
+            font-size: 13px;
+            font-weight: bold;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid #1e1e3a;
+        }
+        .card-body { padding: 0; }
+        .card-empty {
+            padding: 30px;
+            text-align: center;
+            color: #444;
+            font-style: italic;
+        }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th {
+            text-align: left;
+            padding: 8px 12px;
+            color: #666;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid #1e1e3a;
+        }
+        td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #1a1a2a;
+        }
+        tr:hover { background: #1a1a2e; }
+        .text-right { text-align: right; }
+
+        /* Action log */
+        .action-item {
+            padding: 8px 16px;
+            border-bottom: 1px solid #1a1a2a;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            font-size: 13px;
+        }
+        .action-item:hover { background: #1a1a2e; }
+        .action-time { color: #555; font-size: 11px; min-width: 75px; }
+        .action-badge {
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 70px;
+            text-align: center;
+        }
+        .badge-trade { background: #00ff8820; color: #00ff88; }
+        .badge-signal { background: #44aaff20; color: #44aaff; }
+        .badge-risk_block { background: #ff444420; color: #ff4444; }
+        .badge-error { background: #ff444420; color: #ff4444; }
+        .badge-strategy_run { background: #aa44ff20; color: #aa44ff; }
+        .badge-stop_loss { background: #ff880020; color: #ff8800; }
+        .badge-scheduler { background: #ffaa0020; color: #ffaa00; }
+        .badge-review { background: #44ffaa20; color: #44ffaa; }
+        .badge-system { background: #88888820; color: #888; }
+        .action-details { color: #ccc; flex: 1; }
+        .action-symbol { color: #44aaff; font-weight: bold; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .grid { grid-template-columns: 1fr; }
+            .stats-bar { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>THE AGENCY — HEDGE FUND</h1>
+        <div>
+            <span class="mode {{ 'mode-paper' if mode == 'PAPER' else 'mode-live' }}">{{ mode }}</span>
+        </div>
+        <div class="time">{{ now }} &bull; Auto-refresh: 60s</div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div class="stats-bar">
+        <div class="stat-card">
+            <div class="label">Portfolio Value</div>
+            <div class="value green">${{ "%.2f"|format(account.portfolio_value) }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Cash</div>
+            <div class="value blue">${{ "%.2f"|format(account.cash) }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Positions Value</div>
+            <div class="value">${{ "%.2f"|format(positions_value) }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Unrealized P&L</div>
+            <div class="value {{ 'green' if total_pnl >= 0 else 'red' }}">
+                ${{ "%+.2f"|format(total_pnl) }}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Trades Today</div>
+            <div class="value yellow">{{ summary.trades_today }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Signals Today</div>
+            <div class="value blue">{{ summary.signals_today }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Risk Blocks</div>
+            <div class="value {{ 'red' if summary.risk_blocks_today > 0 else 'dim' }}">
+                {{ summary.risk_blocks_today }}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Last Run</div>
+            <div class="value dim" style="font-size:12px;">
+                {{ summary.last_run[:16] if summary.last_run else 'Never' }}
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="grid">
+
+        <!-- Action Log -->
+        <div class="card grid-full">
+            <div class="card-header">Action Log</div>
+            <div class="card-body">
+                {% if actions %}
+                    {% for a in actions[:20] %}
+                    <div class="action-item">
+                        <span class="action-time">{{ a.timestamp[11:19] }}</span>
+                        <span class="action-badge badge-{{ a.category }}">{{ a.category }}</span>
+                        {% if a.symbol %}
+                            <span class="action-symbol">{{ a.symbol }}</span>
+                        {% endif %}
+                        <span class="action-details">
+                            {{ a.action }}
+                            {% if a.details %} — {{ a.details }}{% endif %}
+                            {% if a.result %} <span class="green">[{{ a.result }}]</span>{% endif %}
+                        </span>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="card-empty">No actions recorded yet. Start the daemon to begin trading.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Positions -->
+        <div class="card">
+            <div class="card-header">Open Positions</div>
+            <div class="card-body">
+                {% if positions %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th class="text-right">Qty</th>
+                            <th class="text-right">Avg Cost</th>
+                            <th class="text-right">Current</th>
+                            <th class="text-right">P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in positions %}
+                        <tr>
+                            <td class="action-symbol">{{ p.symbol }}</td>
+                            <td class="text-right">{{ "%.4f"|format(p.qty) }}</td>
+                            <td class="text-right">${{ "%.2f"|format(p.avg_cost) }}</td>
+                            <td class="text-right">${{ "%.2f"|format(p.current_price) }}</td>
+                            {% set pnl = p.get('unrealized_pnl', 0) or 0 %}
+                            <td class="text-right {{ 'green' if pnl >= 0 else 'red' }}">
+                                ${{ "%+.2f"|format(pnl) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                    <div class="card-empty">No open positions.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="card">
+            <div class="card-header">Recent Trades</div>
+            <div class="card-body">
+                {% if trades %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th class="text-right">Amount</th>
+                            <th>Strategy</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for t in trades %}
+                        <tr>
+                            <td class="dim">{{ t.timestamp[5:16] }}</td>
+                            <td class="action-symbol">{{ t.symbol }}</td>
+                            <td class="{{ 'green' if t.side == 'buy' else 'red' }}">
+                                {{ t.side|upper }}
+                            </td>
+                            <td class="text-right">${{ "%.2f"|format(t.total or 0) }}</td>
+                            <td class="dim">{{ t.strategy or '' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                    <div class="card-empty">No trades yet.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Signals -->
+        <div class="card">
+            <div class="card-header">Recent Signals</div>
+            <div class="card-body">
+                {% if signals %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Strategy</th>
+                            <th>Symbol</th>
+                            <th>Signal</th>
+                            <th class="text-right">Strength</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for s in signals %}
+                        <tr>
+                            <td class="dim">{{ s.strategy }}</td>
+                            <td class="action-symbol">{{ s.symbol }}</td>
+                            <td class="{{ 'green' if s.signal == 'buy' else 'red' if s.signal == 'sell' else 'dim' }}">
+                                {{ s.signal|upper }}
+                            </td>
+                            <td class="text-right">{{ "%.2f"|format(s.strength or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                    <div class="card-empty">No signals yet.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Risk Config -->
+        <div class="card">
+            <div class="card-header">Risk Parameters</div>
+            <div class="card-body">
+                <table>
+                    <tbody>
+                        <tr>
+                            <td>Max Position Size</td>
+                            <td class="text-right yellow">{{ "%.0f"|format(risk.max_position_pct * 100) }}%</td>
+                        </tr>
+                        <tr>
+                            <td>Stop Loss</td>
+                            <td class="text-right red">{{ "%.0f"|format(risk.stop_loss_pct * 100) }}%</td>
+                        </tr>
+                        <tr>
+                            <td>Max Daily Loss</td>
+                            <td class="text-right red">{{ "%.0f"|format(risk.max_daily_loss_pct * 100) }}%</td>
+                        </tr>
+                        <tr>
+                            <td>Max Drawdown (halt)</td>
+                            <td class="text-right red">{{ "%.0f"|format(risk.max_drawdown_pct * 100) }}%</td>
+                        </tr>
+                        <tr>
+                            <td>Cash Reserve</td>
+                            <td class="text-right blue">{{ "%.0f"|format(risk.min_cash_reserve_pct * 100) }}%</td>
+                        </tr>
+                        <tr>
+                            <td>Max Trades/Day</td>
+                            <td class="text-right yellow">{{ risk.max_trades_per_day }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Daily P&L -->
+        <div class="card grid-full">
+            <div class="card-header">Daily P&L History</div>
+            <div class="card-body">
+                {% if pnl_history %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th class="text-right">Portfolio</th>
+                            <th class="text-right">Cash</th>
+                            <th class="text-right">Positions</th>
+                            <th class="text-right">Return</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in pnl_history %}
+                        <tr>
+                            <td>{{ p.date }}</td>
+                            <td class="text-right">${{ "%.2f"|format(p.portfolio_value) }}</td>
+                            <td class="text-right">${{ "%.2f"|format(p.cash) }}</td>
+                            <td class="text-right">${{ "%.2f"|format(p.positions_value) }}</td>
+                            {% set ret = (p.cumulative_return or 0) * 100 %}
+                            <td class="text-right {{ 'green' if ret >= 0 else 'red' }}">
+                                {{ "%+.2f"|format(ret) }}%
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                    <div class="card-empty">No P&L data yet. Will populate after first trading cycle.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div style="text-align:center; padding:20px; color:#333; font-size:11px;">
+        THE AGENCY HEDGE FUND &bull; Autonomous Trading System &bull; $300 AUM
+    </div>
+</body>
+</html>
