@@ -162,6 +162,11 @@ COMMODITY_ETFS = {
     "agriculture": "DBA",
 }
 
+# --- Notifications ---
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
 # --- Learning ---
 LEARNING = {
     "min_trades_for_adaptation": 20,    # Need 20+ trades before suggesting changes

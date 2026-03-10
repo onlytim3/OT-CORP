@@ -1,0 +1,417 @@
+"""Position synchronization and fill verification.
+
+Bridges the gap between Alpaca broker state and local DB state:
+  - sync_positions(): pulls Alpaca positions into the positions table
+  - verify_fills(): checks pending orders for fill confirmations
+  - pair_trades(): matches buy/sell trades to calculate realised P&L
+  - run_sync(): convenience runner for all three in order
+"""
+
+from __future__ import annotations
+
+import traceback
+
+from rich.console import Console
+
+from trading.config import TRADING_MODE
+from trading.db.store import (
+    close_trade,
+    get_db,
+    get_open_trades,
+    get_positions,
+    log_action,
+    remove_position,
+    update_trade_status,
+    upsert_position,
+)
+from trading.execution.alpaca_client import get_order_status, get_positions_from_alpaca
+from trading.execution.paper import get_paper_positions
+from trading.learning.journal import record_outcome
+
+console = Console()
+
+
+# ---------------------------------------------------------------------------
+# 1. sync_positions — Alpaca (or paper) positions  -->  local DB
+# ---------------------------------------------------------------------------
+
+def sync_positions() -> int:
+    """Pull positions from the broker and upsert them into the local DB.
+
+    For each position returned by the broker:
+      - Determine which strategy opened it by looking at open trades for
+        that symbol.
+      - Call upsert_position so the positions table reflects reality.
+
+    Positions that exist locally but are no longer held at the broker are
+    removed (the position was closed externally or via a stop-loss on the
+    broker side).
+
+    Returns the number of positions synced.
+    """
+    try:
+        if TRADING_MODE == "paper":
+            broker_positions = get_paper_positions()
+        else:
+            broker_positions = get_positions_from_alpaca()
+    except Exception as exc:
+        console.print(f"[red]sync_positions: failed to fetch broker positions: {exc}[/red]")
+        log_action("error", "sync_positions_fetch", details=str(exc))
+        return 0
+
+    # Build a set of symbols currently held at the broker.
+    broker_symbols: set[str] = set()
+
+    # Map symbol -> strategy from open trades so we can tag positions.
+    open_trades = get_open_trades()
+    strategy_by_symbol: dict[str, str] = {}
+    for trade in open_trades:
+        sym = trade.get("symbol")
+        strat = trade.get("strategy")
+        if sym and strat and sym not in strategy_by_symbol:
+            strategy_by_symbol[sym] = strat
+
+    synced = 0
+    for pos in broker_positions:
+        symbol = pos["symbol"]
+        broker_symbols.add(symbol)
+        strategy = strategy_by_symbol.get(symbol, "unknown")
+
+        try:
+            upsert_position(
+                symbol=symbol,
+                qty=pos["qty"],
+                avg_cost=pos["avg_cost"],
+                current_price=pos["current_price"],
+                strategy=strategy,
+            )
+            synced += 1
+        except Exception as exc:
+            console.print(f"[red]sync_positions: failed to upsert {symbol}: {exc}[/red]")
+            log_action("error", "sync_position_upsert", symbol=symbol, details=str(exc))
+
+    # Remove local positions that the broker no longer holds.
+    try:
+        local_positions = get_positions()
+        for local_pos in local_positions:
+            if local_pos["symbol"] not in broker_symbols:
+                remove_position(local_pos["symbol"])
+                console.print(
+                    f"[yellow]sync_positions: removed stale position {local_pos['symbol']}[/yellow]"
+                )
+                log_action(
+                    "system",
+                    "position_removed",
+                    symbol=local_pos["symbol"],
+                    details="Position no longer held at broker",
+                )
+    except Exception as exc:
+        console.print(f"[red]sync_positions: failed to prune stale positions: {exc}[/red]")
+        log_action("error", "sync_positions_prune", details=str(exc))
+
+    console.print(f"[green]sync_positions: synced {synced} position(s)[/green]")
+    log_action("system", "sync_positions", details=f"Synced {synced} positions")
+    return synced
+
+
+# ---------------------------------------------------------------------------
+# 2. verify_fills — check pending orders for fill status
+# ---------------------------------------------------------------------------
+
+def verify_fills() -> int:
+    """Poll the broker for order status on trades that are not yet terminal.
+
+    Terminal statuses (no polling needed): filled, closed, rejected, canceled.
+    Everything else (pending, new, accepted, partially_filled, etc.) gets
+    checked against the broker.
+
+    In paper mode orders are always instantly filled, so we simply mark any
+    lingering non-terminal trades as filled.
+
+    Returns the number of fills verified / updated.
+    """
+    terminal_statuses = {"filled", "closed", "rejected", "canceled"}
+
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM trades WHERE status NOT IN ('filled', 'closed', 'rejected', 'canceled') "
+                "AND closed_at IS NULL"
+            ).fetchall()
+            pending_trades = [dict(r) for r in rows]
+    except Exception as exc:
+        console.print(f"[red]verify_fills: failed to query pending trades: {exc}[/red]")
+        log_action("error", "verify_fills_query", details=str(exc))
+        return 0
+
+    if not pending_trades:
+        console.print("[dim]verify_fills: no pending trades to check[/dim]")
+        return 0
+
+    verified = 0
+    for trade in pending_trades:
+        trade_id = trade["id"]
+        alpaca_order_id = trade.get("alpaca_order_id")
+        symbol = trade.get("symbol", "?")
+
+        try:
+            if TRADING_MODE == "paper":
+                # Paper orders fill instantly. If we still have a non-terminal
+                # record it means the status update was missed. Mark it filled
+                # using whatever price the trade already has on record.
+                update_trade_status(trade_id, "filled")
+                console.print(
+                    f"[cyan]verify_fills: paper trade {trade_id} ({symbol}) marked filled[/cyan]"
+                )
+                log_action(
+                    "trade",
+                    "fill_verified_paper",
+                    symbol=symbol,
+                    details=f"Trade {trade_id} marked filled (paper mode)",
+                )
+                verified += 1
+                continue
+
+            # Live / Alpaca paper-api mode — need an order ID to poll.
+            if not alpaca_order_id:
+                console.print(
+                    f"[yellow]verify_fills: trade {trade_id} ({symbol}) has no alpaca_order_id, skipping[/yellow]"
+                )
+                continue
+
+            order_info = get_order_status(alpaca_order_id)
+            broker_status = order_info.get("status", "").lower()
+
+            if broker_status == "filled":
+                filled_price = order_info.get("filled_avg_price")
+                filled_qty = order_info.get("filled_qty")
+
+                # Update trade status to filled.
+                update_trade_status(trade_id, "filled")
+
+                # If the broker returned a filled price, update the trade
+                # record so that price and total reflect the actual fill.
+                if filled_price is not None:
+                    try:
+                        price_f = float(filled_price)
+                        qty_f = float(filled_qty) if filled_qty else trade.get("qty", 0)
+                        with get_db() as conn:
+                            conn.execute(
+                                "UPDATE trades SET price=?, total=? WHERE id=?",
+                                (price_f, price_f * qty_f, trade_id),
+                            )
+                    except (ValueError, TypeError):
+                        pass  # Non-numeric price string — leave trade price as-is.
+
+                console.print(
+                    f"[green]verify_fills: trade {trade_id} ({symbol}) filled @ {filled_price}[/green]"
+                )
+                log_action(
+                    "trade",
+                    "fill_verified",
+                    symbol=symbol,
+                    details=f"Trade {trade_id} filled @ {filled_price}, qty {filled_qty}",
+                )
+                verified += 1
+
+            elif broker_status in ("rejected", "canceled", "expired"):
+                update_trade_status(trade_id, broker_status)
+                console.print(
+                    f"[yellow]verify_fills: trade {trade_id} ({symbol}) status -> {broker_status}[/yellow]"
+                )
+                log_action(
+                    "trade",
+                    "order_terminal",
+                    symbol=symbol,
+                    details=f"Trade {trade_id} broker status: {broker_status}",
+                )
+                verified += 1
+
+            else:
+                # Still in-flight (e.g. partially_filled, accepted, new).
+                console.print(
+                    f"[dim]verify_fills: trade {trade_id} ({symbol}) still {broker_status}[/dim]"
+                )
+
+        except Exception as exc:
+            console.print(
+                f"[red]verify_fills: error checking trade {trade_id} ({symbol}): {exc}[/red]"
+            )
+            log_action(
+                "error",
+                "verify_fills_check",
+                symbol=symbol,
+                details=f"Trade {trade_id}: {exc}",
+            )
+
+    console.print(f"[green]verify_fills: {verified} fill(s) verified[/green]")
+    log_action("system", "verify_fills", details=f"Verified {verified} fills")
+    return verified
+
+
+# ---------------------------------------------------------------------------
+# 3. pair_trades — match buys with sells (FIFO) to realise P&L
+# ---------------------------------------------------------------------------
+
+def pair_trades() -> int:
+    """Match open buy trades with corresponding sell trades using FIFO order.
+
+    For each symbol that has both an unclosed buy AND an unclosed sell:
+      - Compute P&L = (sell_price - buy_price) * qty
+      - Close the buy trade via close_trade()
+      - Record outcome in the journal via record_outcome()
+
+    The sell trade is also marked closed so it is not matched again.
+
+    Returns the number of pairings made.
+    """
+    open_trades = get_open_trades()
+    if not open_trades:
+        console.print("[dim]pair_trades: no open trades to pair[/dim]")
+        return 0
+
+    # Bucket by symbol, separating buys and sells.
+    buys_by_symbol: dict[str, list[dict]] = {}
+    sells_by_symbol: dict[str, list[dict]] = {}
+
+    for trade in open_trades:
+        symbol = trade.get("symbol")
+        side = trade.get("side", "").lower()
+        if not symbol:
+            continue
+        if side == "buy":
+            buys_by_symbol.setdefault(symbol, []).append(trade)
+        elif side == "sell":
+            sells_by_symbol.setdefault(symbol, []).append(trade)
+
+    # Sort each bucket by timestamp ascending (oldest first = FIFO).
+    for sym in buys_by_symbol:
+        buys_by_symbol[sym].sort(key=lambda t: t.get("timestamp", ""))
+    for sym in sells_by_symbol:
+        sells_by_symbol[sym].sort(key=lambda t: t.get("timestamp", ""))
+
+    paired = 0
+
+    for symbol, sells in sells_by_symbol.items():
+        buys = buys_by_symbol.get(symbol, [])
+        if not buys:
+            continue
+
+        buy_idx = 0
+        for sell in sells:
+            if buy_idx >= len(buys):
+                break
+
+            buy = buys[buy_idx]
+            buy_trade_id = buy["id"]
+            sell_trade_id = sell["id"]
+
+            buy_price = buy.get("price") or 0
+            sell_price = sell.get("price") or 0
+            qty = min(buy.get("qty", 0), sell.get("qty", 0))
+
+            if qty <= 0 or buy_price <= 0 or sell_price <= 0:
+                buy_idx += 1
+                continue
+
+            pnl = (sell_price - buy_price) * qty
+
+            try:
+                # Close the buy trade with the sell price and computed P&L.
+                close_trade(buy_trade_id, sell_price, pnl)
+
+                # Also close the sell trade so it cannot be matched again.
+                close_trade(sell_trade_id, sell_price, pnl)
+
+                console.print(
+                    f"[green]pair_trades: {symbol} buy #{buy_trade_id} + sell #{sell_trade_id} "
+                    f"-> P&L ${pnl:+.2f}[/green]"
+                )
+                log_action(
+                    "trade",
+                    "trade_paired",
+                    symbol=symbol,
+                    details=(
+                        f"Buy #{buy_trade_id} @ ${buy_price:.2f} paired with "
+                        f"sell #{sell_trade_id} @ ${sell_price:.2f}, "
+                        f"qty {qty}, P&L ${pnl:+.2f}"
+                    ),
+                )
+
+                # Record outcome in the trade journal.
+                try:
+                    record_outcome(
+                        trade_id=buy_trade_id,
+                        pnl=pnl,
+                        exit_price=sell_price,
+                        entry_price=buy_price,
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]pair_trades: journal record_outcome failed for trade "
+                        f"{buy_trade_id}: {exc}[/yellow]"
+                    )
+
+                paired += 1
+                buy_idx += 1
+
+            except Exception as exc:
+                console.print(
+                    f"[red]pair_trades: failed to pair {symbol} buy #{buy_trade_id} "
+                    f"with sell #{sell_trade_id}: {exc}[/red]"
+                )
+                log_action(
+                    "error",
+                    "pair_trades_error",
+                    symbol=symbol,
+                    details=f"Buy #{buy_trade_id}, Sell #{sell_trade_id}: {exc}",
+                )
+                buy_idx += 1  # Skip this buy and try the next one.
+
+    console.print(f"[green]pair_trades: {paired} trade(s) paired[/green]")
+    log_action("system", "pair_trades", details=f"Paired {paired} trades")
+    return paired
+
+
+# ---------------------------------------------------------------------------
+# 4. run_sync — convenience runner
+# ---------------------------------------------------------------------------
+
+def run_sync() -> dict:
+    """Run the full sync pipeline: positions -> fills -> pairing.
+
+    Each step is wrapped independently so a failure in one does not block
+    the others.
+
+    Returns a summary dict with counts from each step.
+    """
+    console.rule("[bold]Sync Pipeline[/bold]")
+    results: dict[str, int | str] = {}
+
+    # Step 1 — sync positions
+    try:
+        results["positions_synced"] = sync_positions()
+    except Exception as exc:
+        console.print(f"[red]run_sync: sync_positions crashed: {exc}[/red]")
+        log_action("error", "run_sync_positions", details=traceback.format_exc())
+        results["positions_synced"] = f"error: {exc}"
+
+    # Step 2 — verify fills
+    try:
+        results["fills_verified"] = verify_fills()
+    except Exception as exc:
+        console.print(f"[red]run_sync: verify_fills crashed: {exc}[/red]")
+        log_action("error", "run_sync_fills", details=traceback.format_exc())
+        results["fills_verified"] = f"error: {exc}"
+
+    # Step 3 — pair trades
+    try:
+        results["trades_paired"] = pair_trades()
+    except Exception as exc:
+        console.print(f"[red]run_sync: pair_trades crashed: {exc}[/red]")
+        log_action("error", "run_sync_pairing", details=traceback.format_exc())
+        results["trades_paired"] = f"error: {exc}"
+
+    console.rule("[bold]Sync Complete[/bold]")
+    console.print(results)
+    return results
