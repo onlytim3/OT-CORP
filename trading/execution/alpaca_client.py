@@ -7,6 +7,7 @@ v3: Adds comprehensive market data methods (crypto + stock/ETF) via Alpaca Data 
 
 import logging
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -72,33 +73,52 @@ def _retry(func, *args, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Client constructors
+# Client constructors  (lazy singletons — one instance per process)
 # ---------------------------------------------------------------------------
+
+_trading_client = None
+_crypto_data_client = None
+_stock_data_client = None
+
 
 def _is_paper():
     return TRADING_MODE == "paper" or "paper" in ALPACA_BASE_URL
 
 
+def _get_trading_client() -> TradingClient:
+    """Return the singleton TradingClient, creating it on first use."""
+    global _trading_client
+    if _trading_client is None:
+        if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+            raise ValueError(
+                "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set in .env. "
+                "Sign up at https://alpaca.markets and get your keys from the dashboard."
+            )
+        _trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=_is_paper())
+    return _trading_client
+
+
 def get_client() -> TradingClient:
-    """Get an Alpaca TradingClient."""
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        raise ValueError(
-            "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set in .env. "
-            "Sign up at https://alpaca.markets and get your keys from the dashboard."
-        )
-    return TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=_is_paper())
+    """Get an Alpaca TradingClient (public convenience wrapper)."""
+    return _get_trading_client()
 
 
 def _get_crypto_data_client() -> CryptoHistoricalDataClient:
-    """Get Alpaca crypto data client (no auth needed — free tier)."""
-    return CryptoHistoricalDataClient()
+    """Return the singleton crypto data client (no auth needed — free tier)."""
+    global _crypto_data_client
+    if _crypto_data_client is None:
+        _crypto_data_client = CryptoHistoricalDataClient()
+    return _crypto_data_client
 
 
 def _get_stock_data_client() -> StockHistoricalDataClient:
-    """Get Alpaca stock data client (needs auth, uses free IEX feed)."""
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY required for stock data")
-    return StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+    """Return the singleton stock data client (needs auth, uses free IEX feed)."""
+    global _stock_data_client
+    if _stock_data_client is None:
+        if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+            raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY required for stock data")
+        _stock_data_client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+    return _stock_data_client
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +127,7 @@ def _get_stock_data_client() -> StockHistoricalDataClient:
 
 def get_account() -> dict:
     """Get account info — cash, portfolio value, buying power, status."""
-    client = get_client()
+    client = _get_trading_client()
     account = _retry(client.get_account)
     return {
         "cash": float(account.cash),
@@ -122,7 +142,7 @@ def get_account() -> dict:
 
 def get_positions_from_alpaca() -> list[dict]:
     """Get all open positions from Alpaca."""
-    client = get_client()
+    client = _get_trading_client()
     positions = _retry(client.get_all_positions)
     return [
         {
@@ -143,15 +163,29 @@ def get_positions_from_alpaca() -> list[dict]:
 # Order execution
 # ---------------------------------------------------------------------------
 
-def submit_order(symbol: str, side: str, notional: float = None, qty: float = None) -> dict:
-    """Submit a market order with exponential-backoff retry."""
-    client = get_client()
+def submit_order(symbol: str, side: str, notional: float = None, qty: float = None,
+                  client_order_id: str | None = None) -> dict:
+    """Submit a market order with exponential-backoff retry and idempotency.
+
+    Parameters
+    ----------
+    client_order_id : str, optional
+        A unique idempotency key.  If the same key is submitted twice to
+        Alpaca within 24 hours, the second call returns the original order
+        instead of placing a duplicate.  A UUID is generated automatically
+        when not provided.
+    """
+    client = _get_trading_client()
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
+
+    if client_order_id is None:
+        client_order_id = str(uuid.uuid4())
 
     kwargs = {
         "symbol": symbol,
         "side": order_side,
         "time_in_force": TimeInForce.GTC,
+        "client_order_id": client_order_id,
     }
     if notional is not None:
         kwargs["notional"] = round(notional, 2)
@@ -162,13 +196,14 @@ def submit_order(symbol: str, side: str, notional: float = None, qty: float = No
 
     order_request = MarketOrderRequest(**kwargs)
 
-    log.info("Submitting %s order: %s %s (notional=%s, qty=%s)",
-             side, symbol, order_side, notional, qty)
+    log.info("Submitting %s order: %s %s (notional=%s, qty=%s, idempotency=%s)",
+             side, symbol, order_side, notional, qty, client_order_id)
 
     order = _retry(client.submit_order, order_request)
 
     result = {
         "id": str(order.id),
+        "client_order_id": str(order.client_order_id) if order.client_order_id else client_order_id,
         "symbol": order.symbol,
         "side": order.side.value,
         "qty": str(order.qty) if order.qty else None,
@@ -184,7 +219,7 @@ def submit_order(symbol: str, side: str, notional: float = None, qty: float = No
 
 def get_order_status(order_id: str) -> dict:
     """Check the status of an order with retry."""
-    client = get_client()
+    client = _get_trading_client()
     order = _retry(client.get_order_by_id, order_id)
     return {
         "id": str(order.id),
@@ -196,9 +231,75 @@ def get_order_status(order_id: str) -> dict:
     }
 
 
+def reconcile_orders_on_startup() -> int:
+    """Reconcile Alpaca orders against local trade records on startup.
+
+    Finds orders from the last 24 hours that are 'filled' on Alpaca but
+    missing or still 'pending'/'new' locally. Returns count of fixes applied.
+    """
+    from trading.db.store import get_db
+
+    client = _get_trading_client()
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        req = GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+            limit=50,
+            after=(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),
+        )
+        recent_orders = _retry(client.get_orders, req)
+    except Exception as e:
+        log.warning("Order reconciliation failed to fetch orders: %s", e)
+        return 0
+
+    fixed = 0
+    for order in recent_orders:
+        if order.status.value != "filled":
+            continue
+        alpaca_id = str(order.id)
+        try:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT id, status, qty, price FROM trades WHERE alpaca_order_id=?",
+                    (alpaca_id,),
+                ).fetchone()
+                if row is None:
+                    # Orphaned order — filled on Alpaca but no local record.
+                    # Log it but don't auto-insert (could be manual trade).
+                    log.warning(
+                        "Orphaned filled order on Alpaca: %s %s %s (no local trade record)",
+                        order.symbol, order.side.value, alpaca_id,
+                    )
+                    continue
+
+                trade = dict(row)
+                if trade["status"] in ("filled", "closed"):
+                    continue
+
+                # Local record exists but is still pending — update it.
+                filled_price = float(order.filled_avg_price) if order.filled_avg_price else 0
+                filled_qty = float(order.filled_qty) if order.filled_qty else 0
+                conn.execute(
+                    "UPDATE trades SET status='filled', qty=?, price=?, total=? WHERE id=?",
+                    (filled_qty, filled_price, filled_qty * filled_price, trade["id"]),
+                )
+                log.info(
+                    "Reconciled trade #%d (%s): pending -> filled @ $%.2f x %.4f",
+                    trade["id"], order.symbol, filled_price, filled_qty,
+                )
+                fixed += 1
+        except Exception as e:
+            log.warning("Reconciliation error for order %s: %s", alpaca_id, e)
+
+    if fixed:
+        log.info("Order reconciliation: fixed %d stale trade records", fixed)
+    return fixed
+
+
 def close_position(symbol: str) -> dict:
     """Close an entire position with retry."""
-    client = get_client()
+    client = _get_trading_client()
     log.info("Closing position: %s", symbol)
     order = _retry(client.close_position, symbol)
     return {

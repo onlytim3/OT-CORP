@@ -28,6 +28,12 @@ CORRELATION_GROUPS = {
     "precious_metals": {"UGL", "AGQ"},
 }
 
+# Leverage factors for leveraged ETFs — used to calculate effective exposure
+LEVERAGE_FACTORS: dict[str, float] = {
+    "UGL": 2.0,   # 2x Gold
+    "AGQ": 2.0,   # 2x Silver
+}
+
 # Reverse lookup: symbol → group name
 _SYMBOL_TO_GROUP: dict[str, str] = {}
 for group_name, symbols in CORRELATION_GROUPS.items():
@@ -58,15 +64,18 @@ class RiskManager:
 
     def check_trade(self, signal: Signal, order_value: float) -> RiskCheck:
         """Run all risk checks on a proposed trade. Returns RiskCheck."""
+        # Fetch positions ONCE — avoids N+1 queries across sub-checks
+        positions = get_positions()
+
         checks = [
             self._check_account_status(),
             self._check_buying_power(order_value),
-            self._check_position_size(signal, order_value),
-            self._check_crypto_exposure(signal, order_value),
-            self._check_correlation_group(signal, order_value),
+            self._check_position_size(signal, order_value, positions),
+            self._check_crypto_exposure(signal, order_value, positions),
+            self._check_correlation_group(signal, order_value, positions),
             self._check_daily_loss(),
             self._check_max_drawdown(),
-            self._check_cash_reserve(order_value),
+            self._check_cash_reserve(order_value, positions),
             self._check_trade_count(),
         ]
         for check in checks:
@@ -111,14 +120,18 @@ class RiskManager:
     # Position-level checks
     # ------------------------------------------------------------------
 
-    def _check_position_size(self, signal: Signal, order_value: float) -> RiskCheck:
+    def _check_position_size(self, signal: Signal, order_value: float,
+                             positions: list[dict]) -> RiskCheck:
         max_value = self.portfolio_value * self.rules["max_position_pct"]
-        positions = get_positions()
+        leverage = LEVERAGE_FACTORS.get(signal.symbol, 1.0)
         existing = sum(
             p["qty"] * (p["current_price"] or p["avg_cost"])
             for p in positions if p["symbol"] == signal.symbol
         )
-        total = existing + order_value if signal.action == "buy" else existing
+        # Effective exposure accounts for leveraged ETFs
+        effective_existing = existing * leverage
+        effective_order = order_value * leverage
+        total = effective_existing + effective_order if signal.action == "buy" else effective_existing
 
         if total > max_value:
             return RiskCheck(
@@ -128,12 +141,12 @@ class RiskManager:
             )
         return RiskCheck(allowed=True, reason="Position size OK", signal=signal)
 
-    def _check_crypto_exposure(self, signal: Signal, order_value: float) -> RiskCheck:
+    def _check_crypto_exposure(self, signal: Signal, order_value: float,
+                               positions: list[dict]) -> RiskCheck:
         """Cap total crypto exposure at MAX_CRYPTO_EXPOSURE_PCT."""
         if signal.action != "buy" or not _is_crypto(signal.symbol):
             return RiskCheck(allowed=True, reason="Not a crypto buy", signal=signal)
 
-        positions = get_positions()
         crypto_value = sum(
             p["qty"] * (p["current_price"] or p["avg_cost"])
             for p in positions if _is_crypto(p["symbol"])
@@ -149,7 +162,8 @@ class RiskManager:
             )
         return RiskCheck(allowed=True, reason="Crypto exposure OK", signal=signal)
 
-    def _check_correlation_group(self, signal: Signal, order_value: float) -> RiskCheck:
+    def _check_correlation_group(self, signal: Signal, order_value: float,
+                                positions: list[dict]) -> RiskCheck:
         """Limit exposure within correlated asset groups."""
         if signal.action != "buy":
             return RiskCheck(allowed=True, reason="Not a buy", signal=signal)
@@ -159,12 +173,12 @@ class RiskManager:
             return RiskCheck(allowed=True, reason="No correlation group", signal=signal)
 
         group_symbols = CORRELATION_GROUPS[group]
-        positions = get_positions()
+        # Apply leverage factors so 2x ETFs count at effective exposure
         group_value = sum(
-            p["qty"] * (p["current_price"] or p["avg_cost"])
+            p["qty"] * (p["current_price"] or p["avg_cost"]) * LEVERAGE_FACTORS.get(p["symbol"], 1.0)
             for p in positions if p["symbol"] in group_symbols
         )
-        new_total = group_value + order_value
+        new_total = group_value + order_value * LEVERAGE_FACTORS.get(signal.symbol, 1.0)
         max_group = self.portfolio_value * MAX_CORRELATED_EXPOSURE_PCT
 
         if new_total > max_group:
@@ -208,12 +222,12 @@ class RiskManager:
             )
         return RiskCheck(allowed=True, reason="Drawdown OK", signal=Signal("risk", "", "hold", 0, ""))
 
-    def _check_cash_reserve(self, order_value: float) -> RiskCheck:
+    def _check_cash_reserve(self, order_value: float,
+                            positions: list[dict]) -> RiskCheck:
         min_cash = self.portfolio_value * self.rules["min_cash_reserve_pct"]
         # Use broker's actual cash if available
         cash = self.account.get("cash", None)
         if cash is None:
-            positions = get_positions()
             positions_value = sum(p["qty"] * (p["current_price"] or p["avg_cost"]) for p in positions)
             cash = self.portfolio_value - positions_value
         remaining = cash - order_value

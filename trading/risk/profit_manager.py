@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from trading.db.store import log_action
+from trading.db.store import log_action, save_watermark, load_watermarks, delete_watermark
 
 # ---------------------------------------------------------------------------
 # Profit management parameters (self-contained, not in config.py)
@@ -36,7 +36,11 @@ class ProfitTracker:
     """
 
     def __init__(self) -> None:
-        self._high_watermarks: dict[str, float] = {}
+        # Load persisted watermarks from DB on startup
+        try:
+            self._high_watermarks: dict[str, float] = load_watermarks()
+        except Exception:
+            self._high_watermarks = {}
 
     # -- public API --------------------------------------------------------
 
@@ -45,6 +49,11 @@ class ProfitTracker:
         prev = self._high_watermarks.get(symbol)
         if prev is None or current_price > prev:
             self._high_watermarks[symbol] = current_price
+            # Persist to DB so watermarks survive restarts
+            try:
+                save_watermark(symbol, current_price)
+            except Exception:
+                pass  # DB write failure must not break trading
 
     def get_high(self, symbol: str) -> float | None:
         """Return the high watermark for *symbol*, or ``None`` if unseen."""
@@ -53,6 +62,10 @@ class ProfitTracker:
     def remove(self, symbol: str) -> None:
         """Drop tracking data when a position is fully closed."""
         self._high_watermarks.pop(symbol, None)
+        try:
+            delete_watermark(symbol)
+        except Exception:
+            pass
 
     # -- helpers -----------------------------------------------------------
 
@@ -64,6 +77,10 @@ class ProfitTracker:
         """
         if symbol not in self._high_watermarks:
             self._high_watermarks[symbol] = avg_cost
+            try:
+                save_watermark(symbol, avg_cost)
+            except Exception:
+                pass
 
     @property
     def symbols(self) -> list[str]:

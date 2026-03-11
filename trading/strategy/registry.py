@@ -1,9 +1,12 @@
 """Strategy registry — auto-discovers and manages all strategy classes."""
 
 import importlib
+import logging
 import pkgutil
 
 from trading.strategy.base import Strategy
+
+log = logging.getLogger(__name__)
 
 _registry: dict[str, type[Strategy]] = {}
 _discovered = False
@@ -50,5 +53,5 @@ def _auto_discover():
         if modname not in ("base", "registry", "indicators", "__init__"):
             try:
                 importlib.import_module(f"trading.strategy.{modname}")
-            except Exception:
-                pass  # Skip broken strategy modules silently
+            except Exception as e:
+                log.error("Failed to load strategy module %s: %s", modname, e)

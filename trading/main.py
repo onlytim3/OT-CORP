@@ -228,6 +228,23 @@ def cmd_adapt():
 
 def cmd_daemon(paper: bool = False, interval: int = 4):
     """Start the autonomous trading daemon."""
+    from trading.config import validate_config, ConfigError
+
+    if paper:
+        import trading.config as cfg
+        cfg.TRADING_MODE = "paper"
+
+    # Validate config and API connectivity before starting the daemon
+    console.print("[bold]Pre-flight checks...[/bold]")
+    try:
+        warnings = validate_config(test_api=True)
+        for w in warnings:
+            console.print(f"  [yellow]⚠ {w}[/yellow]")
+        console.print("  [green]✓ Config valid, API connected[/green]")
+    except ConfigError as e:
+        console.print(f"\n[bold red]STARTUP ABORTED: {e}[/bold red]")
+        return
+
     from trading.scheduler import start_daemon
     start_daemon(interval_hours=interval, paper=paper)
 

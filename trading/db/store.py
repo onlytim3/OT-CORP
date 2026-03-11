@@ -135,6 +135,23 @@ def init_db():
                 data JSON
             );
 
+            CREATE TABLE IF NOT EXISTS watermarks (
+                symbol TEXT PRIMARY KEY,
+                high_price REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS deferred_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                strength REAL,
+                strategy TEXT,
+                reason TEXT,
+                expires_at TEXT NOT NULL
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -472,3 +489,56 @@ def get_action_log_summary():
             "errors_today": errors_today,
             "last_run": last_run[0] if last_run else None,
         }
+
+
+# --- Watermarks (ProfitTracker persistence) ---
+
+def save_watermark(symbol: str, high_price: float):
+    """Persist a high watermark for trailing stop tracking."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO watermarks (symbol, high_price, updated_at) VALUES (?, ?, ?)",
+            (symbol, high_price, _now()),
+        )
+
+
+def load_watermarks() -> dict:
+    """Load all persisted high watermarks. Returns {symbol: high_price}."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT symbol, high_price FROM watermarks").fetchall()
+        return {r["symbol"]: r["high_price"] for r in rows}
+
+
+def delete_watermark(symbol: str):
+    """Remove watermark when position is fully closed."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM watermarks WHERE symbol=?", (symbol,))
+
+
+# --- Deferred Signals (ETF signal queue) ---
+
+def save_deferred_signal(symbol: str, action: str, strength: float,
+                         strategy: str, reason: str, expires_at: str):
+    """Queue an ETF signal for execution when market opens."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO deferred_signals (timestamp, symbol, action, strength, strategy, reason, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (_now(), symbol, action, strength, strategy, reason, expires_at),
+        )
+
+
+def get_deferred_signals() -> list:
+    """Get all pending deferred signals that haven't expired."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM deferred_signals WHERE expires_at > ? ORDER BY timestamp",
+            (_now(),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def clear_deferred_signal(signal_id: int):
+    """Remove a deferred signal after execution."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM deferred_signals WHERE id=?", (signal_id,))

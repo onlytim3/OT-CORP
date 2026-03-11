@@ -170,6 +170,75 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+
+# ---------------------------------------------------------------------------
+# Startup validation
+# ---------------------------------------------------------------------------
+
+class ConfigError(Exception):
+    """Raised when a required configuration value is missing or invalid."""
+
+
+def validate_config(test_api: bool = True) -> list[str]:
+    """Validate all required config values and optionally test API connectivity.
+
+    Returns a list of warnings (non-fatal issues).
+    Raises ConfigError for fatal misconfigurations.
+    """
+    warnings: list[str] = []
+
+    # -- Required keys --------------------------------------------------------
+    if not ALPACA_API_KEY:
+        raise ConfigError(
+            "ALPACA_API_KEY is not set. Add it to your .env file. "
+            "Sign up at https://alpaca.markets to get API keys."
+        )
+    if not ALPACA_SECRET_KEY:
+        raise ConfigError(
+            "ALPACA_SECRET_KEY is not set. Add it to your .env file."
+        )
+
+    # -- Trading mode sanity --------------------------------------------------
+    if TRADING_MODE not in ("paper", "live"):
+        raise ConfigError(
+            f"TRADING_MODE must be 'paper' or 'live', got '{TRADING_MODE}'"
+        )
+
+    if TRADING_MODE == "live" and "paper" in ALPACA_BASE_URL:
+        raise ConfigError(
+            "TRADING_MODE is 'live' but ALPACA_BASE_URL points to paper API. "
+            "This mismatch could cause unexpected behaviour."
+        )
+
+    # -- Optional but warned --------------------------------------------------
+    if not FRED_API_KEY:
+        warnings.append(
+            "FRED_API_KEY not set — TIPS yield and macro strategies will fail."
+        )
+
+    # -- API connectivity test ------------------------------------------------
+    if test_api:
+        try:
+            from trading.execution.alpaca_client import get_account
+            account = get_account()
+            if account.get("trading_blocked"):
+                raise ConfigError(
+                    "Alpaca account has trading_blocked=True. "
+                    "Check your account status at https://app.alpaca.markets"
+                )
+            status = account.get("status", "UNKNOWN")
+            if status not in ("ACTIVE", "active"):
+                warnings.append(f"Account status is '{status}', expected ACTIVE.")
+        except ConfigError:
+            raise
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to connect to Alpaca API: {e}. "
+                "Check your API keys and network connectivity."
+            ) from e
+
+    return warnings
+
 # --- Learning ---
 LEARNING = {
     "min_trades_for_adaptation": 20,    # Need 20+ trades before suggesting changes

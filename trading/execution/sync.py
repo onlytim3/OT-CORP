@@ -230,15 +230,30 @@ def verify_fills() -> int:
 # 3. pair_trades — match buys with sells (FIFO) to realise P&L
 # ---------------------------------------------------------------------------
 
+def _reduce_trade_qty(trade_id: int, new_qty: float, new_total: float) -> None:
+    """Reduce an open trade's qty and total without closing it.
+
+    Used when a partial sell consumes only part of a buy position.
+    """
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE trades SET qty=?, total=? WHERE id=?",
+            (new_qty, new_total, trade_id),
+        )
+
+
 def pair_trades() -> int:
     """Match open buy trades with corresponding sell trades using FIFO order.
 
-    For each symbol that has both an unclosed buy AND an unclosed sell:
-      - Compute P&L = (sell_price - buy_price) * qty
-      - Close the buy trade via close_trade()
-      - Record outcome in the journal via record_outcome()
+    For each symbol that has both an unclosed buy AND an unclosed sell the
+    function walks buys oldest-first, consuming sell quantity against them:
 
-    The sell trade is also marked closed so it is not matched again.
+      - If sell_qty >= buy_qty: the buy is fully matched and closed.
+      - If sell_qty < buy_qty: the buy is *partially* matched -- its qty is
+        reduced by the matched amount and it stays open for future pairing.
+      - The sell trade is always fully closed (it represents a completed exit).
+      - P&L is computed on the matched quantity only:
+            matched_qty * (sell_price - buy_price)
 
     Returns the number of pairings made.
     """
@@ -276,74 +291,100 @@ def pair_trades() -> int:
 
         buy_idx = 0
         for sell in sells:
-            if buy_idx >= len(buys):
-                break
+            sell_remaining: float = sell.get("qty", 0)
+            sell_total_pnl: float = 0.0  # accumulate P&L across partial matches
 
-            buy = buys[buy_idx]
-            buy_trade_id = buy["id"]
-            sell_trade_id = sell["id"]
+            # Consume sell quantity against buys until it is exhausted.
+            while sell_remaining > 0 and buy_idx < len(buys):
+                buy = buys[buy_idx]
+                buy_trade_id = buy["id"]
+                sell_trade_id = sell["id"]
 
-            buy_price = buy.get("price") or 0
-            sell_price = sell.get("price") or 0
-            qty = min(buy.get("qty", 0), sell.get("qty", 0))
+                buy_price = buy.get("price") or 0
+                sell_price = sell.get("price") or 0
+                buy_qty: float = buy.get("qty", 0)
 
-            if qty <= 0 or buy_price <= 0 or sell_price <= 0:
-                buy_idx += 1
-                continue
+                if buy_qty <= 0 or buy_price <= 0 or sell_price <= 0:
+                    buy_idx += 1
+                    continue
 
-            pnl = (sell_price - buy_price) * qty
+                matched_qty = min(buy_qty, sell_remaining)
+                pnl = (sell_price - buy_price) * matched_qty
+                sell_total_pnl += pnl
 
-            try:
-                # Close the buy trade with the sell price and computed P&L.
-                close_trade(buy_trade_id, sell_price, pnl)
-
-                # Also close the sell trade so it cannot be matched again.
-                close_trade(sell_trade_id, sell_price, pnl)
-
-                console.print(
-                    f"[green]pair_trades: {symbol} buy #{buy_trade_id} + sell #{sell_trade_id} "
-                    f"-> P&L ${pnl:+.2f}[/green]"
-                )
-                log_action(
-                    "trade",
-                    "trade_paired",
-                    symbol=symbol,
-                    details=(
-                        f"Buy #{buy_trade_id} @ ${buy_price:.2f} paired with "
-                        f"sell #{sell_trade_id} @ ${sell_price:.2f}, "
-                        f"qty {qty}, P&L ${pnl:+.2f}"
-                    ),
-                )
-
-                # Record outcome in the trade journal.
                 try:
-                    record_outcome(
-                        trade_id=buy_trade_id,
-                        pnl=pnl,
-                        exit_price=sell_price,
-                        entry_price=buy_price,
+                    if matched_qty >= buy_qty:
+                        # Buy is fully consumed -- close it.
+                        close_trade(buy_trade_id, sell_price, pnl)
+                        buy_idx += 1
+                    else:
+                        # Buy is only partially consumed -- reduce its qty.
+                        remaining_buy_qty = buy_qty - matched_qty
+                        _reduce_trade_qty(
+                            buy_trade_id,
+                            remaining_buy_qty,
+                            remaining_buy_qty * buy_price,
+                        )
+                        # Update the in-memory dict so subsequent iterations
+                        # within this sync run see the reduced quantity.
+                        buy["qty"] = remaining_buy_qty
+                        buy["total"] = remaining_buy_qty * buy_price
+
+                    sell_remaining -= matched_qty
+
+                    console.print(
+                        f"[green]pair_trades: {symbol} buy #{buy_trade_id} + sell #{sell_trade_id} "
+                        f"matched {matched_qty} units -> P&L ${pnl:+.2f}[/green]"
                     )
+                    log_action(
+                        "trade",
+                        "trade_paired",
+                        symbol=symbol,
+                        details=(
+                            f"Buy #{buy_trade_id} @ ${buy_price:.2f} paired with "
+                            f"sell #{sell_trade_id} @ ${sell_price:.2f}, "
+                            f"matched_qty {matched_qty}, P&L ${pnl:+.2f}"
+                        ),
+                    )
+
+                    # Record outcome in the trade journal.
+                    try:
+                        record_outcome(
+                            trade_id=buy_trade_id,
+                            pnl=pnl,
+                            exit_price=sell_price,
+                            entry_price=buy_price,
+                        )
+                    except Exception as exc:
+                        console.print(
+                            f"[yellow]pair_trades: journal record_outcome failed for trade "
+                            f"{buy_trade_id}: {exc}[/yellow]"
+                        )
+
+                    paired += 1
+
                 except Exception as exc:
                     console.print(
-                        f"[yellow]pair_trades: journal record_outcome failed for trade "
-                        f"{buy_trade_id}: {exc}[/yellow]"
+                        f"[red]pair_trades: failed to pair {symbol} buy #{buy_trade_id} "
+                        f"with sell #{sell_trade_id}: {exc}[/red]"
                     )
+                    log_action(
+                        "error",
+                        "pair_trades_error",
+                        symbol=symbol,
+                        details=f"Buy #{buy_trade_id}, Sell #{sell_trade_id}: {exc}",
+                    )
+                    buy_idx += 1  # Skip this buy and try the next one.
+                    break  # Stop consuming this sell on error.
 
-                paired += 1
-                buy_idx += 1
-
+            # Always close the sell trade -- it represents a completed exit.
+            # Use the accumulated P&L from all partial matches against this sell.
+            try:
+                close_trade(sell["id"], sell.get("price", 0), sell_total_pnl)
             except Exception as exc:
                 console.print(
-                    f"[red]pair_trades: failed to pair {symbol} buy #{buy_trade_id} "
-                    f"with sell #{sell_trade_id}: {exc}[/red]"
+                    f"[red]pair_trades: failed to close sell #{sell['id']}: {exc}[/red]"
                 )
-                log_action(
-                    "error",
-                    "pair_trades_error",
-                    symbol=symbol,
-                    details=f"Buy #{buy_trade_id}, Sell #{sell_trade_id}: {exc}",
-                )
-                buy_idx += 1  # Skip this buy and try the next one.
 
     console.print(f"[green]pair_trades: {paired} trade(s) paired[/green]")
     log_action("system", "pair_trades", details=f"Paired {paired} trades")

@@ -7,8 +7,13 @@ ETF order submission while still allowing 24/7 crypto trades.
 No external dependencies -- uses only stdlib datetime and zoneinfo.
 """
 
+from __future__ import annotations
+
+import logging
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -20,27 +25,131 @@ UTC = ZoneInfo("UTC")
 NYSE_OPEN = time(9, 30)   # 9:30 AM Eastern
 NYSE_CLOSE = time(16, 0)  # 4:00 PM Eastern
 
-# NYSE holidays for 2026.
-# Sources: NYSE Rule 7.2 and historical calendar.
-US_HOLIDAYS_2026: frozenset[date] = frozenset(
-    {
-        date(2026, 1, 1),   # New Year's Day
-        date(2026, 1, 19),  # Martin Luther King Jr. Day (3rd Monday of Jan)
-        date(2026, 2, 16),  # Presidents' Day (3rd Monday of Feb)
-        date(2026, 4, 3),   # Good Friday
-        date(2026, 5, 25),  # Memorial Day (last Monday of May)
-        date(2026, 6, 19),  # Juneteenth National Independence Day
-        date(2026, 7, 3),   # Independence Day observed (Jul 4 is Saturday)
-        date(2026, 9, 7),   # Labor Day (1st Monday of Sep)
-        date(2026, 11, 26), # Thanksgiving Day (4th Thursday of Nov)
-        date(2026, 12, 25), # Christmas Day
-    }
-)
+# Per-year cache so holidays are computed at most once per year.
+_holidays_cache: dict[int, set[date]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Holiday computation (NYSE Rule 7.2)
+# ---------------------------------------------------------------------------
+
+
+def _compute_easter(year: int) -> date:
+    """Return Easter Sunday for *year* using the Anonymous Gregorian algorithm.
+
+    Reference: Meeus, *Astronomical Algorithms*, Chapter 9.
+    """
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7  # noqa: E741
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return date(year, month, day + 1)
+
+
+def _observe(d: date) -> date:
+    """Shift a holiday to observed date per NYSE rules.
+
+    If the holiday falls on Saturday it is observed on the preceding Friday.
+    If it falls on Sunday it is observed on the following Monday.
+    """
+    wd = d.weekday()  # Mon=0 .. Sun=6
+    if wd == 5:       # Saturday -> Friday
+        return d - timedelta(days=1)
+    if wd == 6:       # Sunday -> Monday
+        return d + timedelta(days=1)
+    return d
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """Return the *n*-th occurrence of *weekday* in the given month.
+
+    *weekday* follows Python convention (Monday=0 .. Sunday=6).
+    *n* is 1-based (1 = first, 2 = second, ...).
+    """
+    first = date(year, month, 1)
+    # Days until the first target weekday in the month.
+    offset = (weekday - first.weekday()) % 7
+    return first + timedelta(days=offset + 7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    """Return the last occurrence of *weekday* in the given month."""
+    # Start from the last day of the month.
+    if month == 12:
+        last = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        last = date(year, month + 1, 1) - timedelta(days=1)
+    offset = (last.weekday() - weekday) % 7
+    return last - timedelta(days=offset)
+
+
+def get_nyse_holidays(year: int) -> set[date]:
+    """Compute and return the set of NYSE market holidays for *year*.
+
+    Results are cached so repeated calls for the same year are free.
+    """
+    if year in _holidays_cache:
+        return _holidays_cache[year]
+
+    holidays: set[date] = set()
+
+    # New Year's Day -- Jan 1 (observed Mon if Sun; Fri if Sat).
+    holidays.add(_observe(date(year, 1, 1)))
+
+    # Martin Luther King Jr. Day -- 3rd Monday of January.
+    holidays.add(_nth_weekday(year, 1, 0, 3))
+
+    # Presidents' Day -- 3rd Monday of February.
+    holidays.add(_nth_weekday(year, 2, 0, 3))
+
+    # Good Friday -- Friday before Easter Sunday.
+    easter = _compute_easter(year)
+    holidays.add(easter - timedelta(days=2))
+
+    # Memorial Day -- last Monday of May.
+    holidays.add(_last_weekday(year, 5, 0))
+
+    # Juneteenth -- June 19 (observed).
+    holidays.add(_observe(date(year, 6, 19)))
+
+    # Independence Day -- July 4 (observed).
+    holidays.add(_observe(date(year, 7, 4)))
+
+    # Labor Day -- 1st Monday of September.
+    holidays.add(_nth_weekday(year, 9, 0, 1))
+
+    # Thanksgiving Day -- 4th Thursday of November.
+    holidays.add(_nth_weekday(year, 11, 3, 4))
+
+    # Christmas Day -- Dec 25 (observed).
+    holidays.add(_observe(date(year, 12, 25)))
+
+    _holidays_cache[year] = holidays
+    return holidays
 
 
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
+
+
+def _holidays_for_date(d: date) -> set[date]:
+    """Return NYSE holidays for the year of *d*, with a warning for far-future dates."""
+    today = date.today()
+    if d.year > today.year + 1:
+        logger.warning(
+            "Querying NYSE holidays for %d, which is more than 1 year in the "
+            "future. Computed holidays may be less reliable if the NYSE "
+            "calendar changes.",
+            d.year,
+        )
+    return get_nyse_holidays(d.year)
 
 
 def is_market_open(now: datetime | None = None) -> bool:
@@ -62,7 +171,7 @@ def is_market_open(now: datetime | None = None) -> bool:
         return False
 
     # Holiday check.
-    if now_et.date() in US_HOLIDAYS_2026:
+    if now_et.date() in _holidays_for_date(now_et.date()):
         return False
 
     # Regular session window.
@@ -135,7 +244,7 @@ def next_market_open(now: datetime | None = None) -> datetime:
 
     # Walk forward until we land on a valid trading day.
     for _ in range(10):  # At most a long-weekend + holidays span.
-        if candidate.weekday() < 5 and candidate not in US_HOLIDAYS_2026:
+        if candidate.weekday() < 5 and candidate not in _holidays_for_date(candidate):
             open_et = datetime.combine(candidate, NYSE_OPEN, tzinfo=ET)
             return open_et.astimezone(UTC)
         candidate += timedelta(days=1)

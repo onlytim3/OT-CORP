@@ -20,6 +20,7 @@ Integrates:
 
 import logging
 import os
+import signal as signal_mod
 import time
 import traceback
 from datetime import datetime, timezone
@@ -193,6 +194,36 @@ def run_trading_cycle():
         )
 
         # ---------------------------------------------------------------
+        # Phase 3.5: Replay deferred signals from previous cycles
+        # ---------------------------------------------------------------
+        try:
+            from trading.db.store import get_deferred_signals, clear_deferred_signal
+            deferred = get_deferred_signals()
+            if deferred:
+                from trading.strategy.base import Signal
+                for ds in deferred:
+                    can_trade_deferred, _ = can_trade_now(ds["symbol"])
+                    if can_trade_deferred:
+                        replay_signal = Signal(
+                            strategy=ds["strategy"],
+                            symbol=ds["symbol"],
+                            action=ds["action"],
+                            strength=ds["strength"],
+                            reason=f"Deferred replay: {ds['reason']}",
+                        )
+                        consolidated.append(replay_signal)
+                        clear_deferred_signal(ds["id"])
+                        console.print(f"  [green]REPLAYED deferred {ds['symbol']} {ds['action']}[/green]")
+                        log_action("signal", "deferred_replay", symbol=ds["symbol"],
+                                   details=f"Replayed from {ds['timestamp']}")
+                    # Clean up expired signals silently
+                # Re-log consolidated count if replays added
+                if any(can_trade_now(ds["symbol"])[0] for ds in deferred):
+                    log.info("After deferred replay: %d consolidated signals", len(consolidated))
+        except Exception as e:
+            log.warning("Deferred signal replay failed: %s", e)
+
+        # ---------------------------------------------------------------
         # Phase 4: Risk check + market hours gate + execute
         # ---------------------------------------------------------------
         risk_mgr = RiskManager(portfolio_value, account=account)
@@ -210,12 +241,27 @@ def run_trading_cycle():
             can_trade, reason = can_trade_now(signal.symbol)
             if not can_trade:
                 blocked_count += 1
+                # Queue signal for execution when market opens (expires in 8h)
+                from trading.db.store import save_deferred_signal
+                from datetime import timedelta
+                expires = (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()
+                try:
+                    save_deferred_signal(
+                        symbol=signal.symbol,
+                        action=signal.action,
+                        strength=signal.strength,
+                        strategy=signal.strategy,
+                        reason=reason,
+                        expires_at=expires,
+                    )
+                except Exception:
+                    pass
                 log_action(
-                    "risk_block", "market_closed",
+                    "risk_block", "market_closed_queued",
                     symbol=signal.symbol,
-                    details=reason,
+                    details=f"Queued for market open: {reason}",
                 )
-                console.print(f"  [yellow]DEFERRED {signal.symbol}: {reason}[/yellow]")
+                console.print(f"  [yellow]QUEUED {signal.symbol}: {reason}[/yellow]")
                 continue
 
             # Size the order (volatility-adjusted + strategy budgets)
@@ -595,6 +641,15 @@ def start_daemon(interval_hours=4, paper=False):
     except Exception:
         pass
 
+    # Reconcile any orphaned orders from a previous crash
+    try:
+        from trading.execution.alpaca_client import reconcile_orders_on_startup
+        fixed = reconcile_orders_on_startup()
+        if fixed:
+            console.print(f"  [yellow]Reconciled {fixed} orphaned order(s) from Alpaca[/yellow]")
+    except Exception as e:
+        log.warning("Order reconciliation on startup failed: %s", e)
+
     # Run immediately on start
     run_trading_cycle()
 
@@ -603,17 +658,30 @@ def start_daemon(interval_hours=4, paper=False):
     schedule.every(15).minutes.do(check_stop_losses)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
 
+    # Graceful shutdown via SIGTERM/SIGINT
+    _shutdown_requested = False
+
+    def _handle_shutdown(signum, frame):
+        nonlocal _shutdown_requested
+        _shutdown_requested = True
+        sig_name = signal_mod.Signals(signum).name
+        log.info("Received %s — completing current cycle before shutdown", sig_name)
+        console.print(f"\n[yellow]Received {sig_name} — shutting down gracefully...[/yellow]")
+
+    signal_mod.signal(signal_mod.SIGTERM, _handle_shutdown)
+    signal_mod.signal(signal_mod.SIGINT, _handle_shutdown)
+
     consecutive_errors = 0
     max_consecutive_errors = 10
     backoff_minutes = 5
 
     try:
-        while True:
+        while not _shutdown_requested:
             try:
                 schedule.run_pending()
                 consecutive_errors = 0  # Reset on success
             except KeyboardInterrupt:
-                raise  # Let the outer handler catch it
+                break
             except Exception as exc:
                 consecutive_errors += 1
                 log.error("Daemon loop error (%d/%d): %s", consecutive_errors, max_consecutive_errors, exc)
@@ -634,11 +702,14 @@ def start_daemon(interval_hours=4, paper=False):
 
             time.sleep(30)
     except KeyboardInterrupt:
-        log_action("scheduler", "daemon_stopped", details="Keyboard interrupt")
-        log.info("Daemon stopped by user")
-        console.print("\n[yellow]Daemon stopped.[/yellow]")
-        try:
-            from trading.monitor.notifications import notify
-            _notify_safe(notify, "Daemon Stopped", "Trading daemon stopped by user", "warning")
-        except Exception:
-            pass
+        pass
+
+    # Clean shutdown
+    log_action("scheduler", "daemon_stopped", details="Graceful shutdown")
+    log.info("Daemon stopped gracefully")
+    console.print("\n[yellow]Daemon stopped.[/yellow]")
+    try:
+        from trading.monitor.notifications import notify
+        _notify_safe(notify, "Daemon Stopped", "Trading daemon stopped gracefully", "warning")
+    except Exception:
+        pass
