@@ -49,7 +49,7 @@ def _estimate_volatility(symbol: str) -> float:
     """
     try:
         if "/" in symbol:
-            # Crypto — use CoinGecko OHLC
+            # Crypto — use Alpaca bars via crypto.get_ohlc
             from trading.data.crypto import get_ohlc
             from trading.config import CRYPTO_SYMBOLS
             reverse_map = {v: k for k, v in CRYPTO_SYMBOLS.items()}
@@ -61,12 +61,18 @@ def _estimate_volatility(symbol: str) -> float:
                 return 1.0
             closes = df["close"].values
         else:
-            # ETF — use yfinance
+            # ETF — use Alpaca IEX bars via commodities
             from trading.data.commodities import get_etf_history
             df = get_etf_history(symbol, period="1mo")
             if df.empty or len(df) < 5:
                 return 1.0
-            closes = df["Close"].values
+            # Handle both Alpaca (capitalized) and yfinance column names
+            if "Close" in df.columns:
+                closes = df["Close"].values
+            elif "close" in df.columns:
+                closes = df["close"].values
+            else:
+                return 1.0
 
         # Calculate daily returns and ATR-style volatility
         returns = np.diff(closes) / closes[:-1]

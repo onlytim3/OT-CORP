@@ -21,7 +21,7 @@ TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
 
 # --- Paths ---
 DB_PATH = PROJECT_ROOT / "trading" / "db" / "trading.db"
-KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge"
+KNOWLEDGE_DIR = PROJECT_ROOT / "trading" / "knowledge"
 JOURNALS_DIR = KNOWLEDGE_DIR / "journals"
 REVIEWS_DIR = KNOWLEDGE_DIR / "reviews"
 STRATEGIES_DIR = KNOWLEDGE_DIR / "strategies"
@@ -134,12 +134,15 @@ STRATEGY_ENABLED = {
 }
 
 # --- Data Sources ---
-COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+# CoinGecko removed in v3 — all crypto data comes from Alpaca Data API (free, no rate limits)
+# ETF data: Alpaca IEX feed (free) with yfinance fallback
+# Sentiment: alternative.me Fear & Greed (Alpaca doesn't provide sentiment)
+# Economic: FRED (Alpaca doesn't provide macro data)
 FEAR_GREED_URL = "https://api.alternative.me/fng/"
 FRED_BASE = "https://api.stlouisfed.org/fred"
 
-# --- Alpaca Crypto Symbol Mapping ---
-# CoinGecko ID → Alpaca trading symbol
+# --- Crypto Symbol Mapping ---
+# CoinGecko-style coin ID → Alpaca trading symbol (kept for backward compat)
 CRYPTO_SYMBOLS = {
     "bitcoin": "BTC/USD",
     "ethereum": "ETH/USD",

@@ -59,25 +59,19 @@ def _now_str():
 
 
 def _get_account():
-    if TRADING_MODE == "paper":
-        from trading.execution.paper import get_paper_account
-        return get_paper_account()
+    """Get account from Alpaca (paper or live handled by alpaca_client config)."""
     from trading.execution.alpaca_client import get_account
     return get_account()
 
 
 def _get_positions():
-    if TRADING_MODE == "paper":
-        from trading.execution.paper import get_paper_positions
-        return get_paper_positions()
+    """Get positions from Alpaca (paper or live handled by alpaca_client config)."""
     from trading.execution.alpaca_client import get_positions_from_alpaca
     return get_positions_from_alpaca()
 
 
 def _execute_order(symbol, side, notional=None, qty=None):
-    if TRADING_MODE == "paper":
-        from trading.execution.paper import submit_paper_order
-        return submit_paper_order(symbol, side, notional=notional, qty=qty)
+    """Execute order via Alpaca (paper or live handled by alpaca_client config)."""
     from trading.execution.alpaca_client import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty)
 
@@ -268,6 +262,26 @@ def run_trading_cycle():
                 continue
 
             if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                # Poll for fill data if not immediately available
+                filled_qty = order.get("filled_qty")
+                filled_price = order.get("filled_avg_price")
+                if (not filled_qty or not filled_price) and order.get("id"):
+                    from trading.execution.alpaca_client import get_order_status
+                    for _poll in range(3):
+                        time.sleep(1)
+                        try:
+                            fill_info = get_order_status(order["id"])
+                            if fill_info.get("filled_qty"):
+                                filled_qty = fill_info["filled_qty"]
+                                filled_price = fill_info.get("filled_avg_price")
+                                order["status"] = fill_info.get("status", order["status"])
+                                break
+                        except Exception:
+                            pass
+
+                qty_f = float(filled_qty) if filled_qty else 0
+                price_f = float(filled_price) if filled_price else 0
+
                 # Find the context from the contributing strategy
                 contributing = (signal.data or {}).get("contributing_strategies", [])
                 context = contexts.get(contributing[0], {}) if contributing else {}
@@ -275,9 +289,9 @@ def run_trading_cycle():
                 trade_id = insert_trade(
                     symbol=signal.symbol,
                     side=signal.action,
-                    qty=float(order.get("filled_qty") or order.get("qty") or 0),
-                    price=float(order.get("filled_avg_price") or 0),
-                    total=order_value,
+                    qty=qty_f,
+                    price=price_f,
+                    total=price_f * qty_f if (price_f and qty_f) else order_value,
                     strategy=signal.strategy,
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
@@ -291,8 +305,8 @@ def run_trading_cycle():
                     result=order["status"],
                     data={
                         "trade_id": trade_id,
-                        "qty": float(order.get("filled_qty") or 0),
-                        "price": float(order.get("filled_avg_price") or 0),
+                        "qty": qty_f,
+                        "price": price_f,
                     },
                 )
                 side_style = "green" if signal.action == "buy" else "red"
@@ -300,13 +314,14 @@ def run_trading_cycle():
                     f"  [{side_style}]{signal.action.upper()} "
                     f"${order_value:.2f} {signal.symbol} -- {order['status']}[/]"
                 )
-                log.info("Executed %s $%.2f %s -> %s",
-                         signal.action, order_value, signal.symbol, order["status"])
+                log.info("Executed %s $%.2f %s -> %s (qty=%.6f, price=%.2f)",
+                         signal.action, order_value, signal.symbol, order["status"],
+                         qty_f, price_f)
                 # Notify
                 _notify_safe(
                     notify_trade,
                     signal.symbol, signal.action, order_value,
-                    float(order.get("filled_avg_price") or 0),
+                    price_f,
                     signal.strategy,
                 )
             else:
@@ -588,9 +603,35 @@ def start_daemon(interval_hours=4, paper=False):
     schedule.every(15).minutes.do(check_stop_losses)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
 
+    consecutive_errors = 0
+    max_consecutive_errors = 10
+    backoff_minutes = 5
+
     try:
         while True:
-            schedule.run_pending()
+            try:
+                schedule.run_pending()
+                consecutive_errors = 0  # Reset on success
+            except KeyboardInterrupt:
+                raise  # Let the outer handler catch it
+            except Exception as exc:
+                consecutive_errors += 1
+                log.error("Daemon loop error (%d/%d): %s", consecutive_errors, max_consecutive_errors, exc)
+                log_action("error", "daemon_loop", details=f"Error {consecutive_errors}/{max_consecutive_errors}: {exc}")
+
+                if consecutive_errors >= max_consecutive_errors:
+                    pause_msg = f"Too many consecutive errors ({consecutive_errors}), pausing {backoff_minutes}m"
+                    log.warning(pause_msg)
+                    console.print(f"[red]{pause_msg}[/red]")
+                    log_action("scheduler", "daemon_backoff", details=pause_msg)
+                    try:
+                        from trading.monitor.notifications import notify
+                        _notify_safe(notify, "Daemon Backoff", pause_msg, "warning")
+                    except Exception:
+                        pass
+                    time.sleep(backoff_minutes * 60)
+                    consecutive_errors = 0  # Reset after backoff
+
             time.sleep(30)
     except KeyboardInterrupt:
         log_action("scheduler", "daemon_stopped", details="Keyboard interrupt")

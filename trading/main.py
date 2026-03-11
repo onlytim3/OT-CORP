@@ -4,39 +4,26 @@ import sys
 from rich.console import Console
 
 from trading.db.store import init_db, insert_trade, update_trade_status, insert_signal
-from trading.config import TRADING_MODE
 
 console = Console()
 
 
 def get_account():
-    """Get account info based on trading mode."""
-    if TRADING_MODE == "paper":
-        from trading.execution.paper import get_paper_account
-        return get_paper_account()
-    else:
-        from trading.execution.alpaca_client import get_account
-        return get_account()
+    """Get account from Alpaca (paper or live handled by alpaca_client config)."""
+    from trading.execution.alpaca_client import get_account as _get_account
+    return _get_account()
 
 
 def get_positions_list():
-    """Get positions based on trading mode."""
-    if TRADING_MODE == "paper":
-        from trading.execution.paper import get_paper_positions
-        return get_paper_positions()
-    else:
-        from trading.execution.alpaca_client import get_positions_from_alpaca
-        return get_positions_from_alpaca()
+    """Get positions from Alpaca (paper or live handled by alpaca_client config)."""
+    from trading.execution.alpaca_client import get_positions_from_alpaca
+    return get_positions_from_alpaca()
 
 
 def execute_order(symbol, side, notional=None, qty=None):
-    """Execute an order based on trading mode."""
-    if TRADING_MODE == "paper":
-        from trading.execution.paper import submit_paper_order
-        return submit_paper_order(symbol, side, notional=notional, qty=qty)
-    else:
-        from trading.execution.alpaca_client import submit_order
-        return submit_order(symbol, side, notional=notional, qty=qty)
+    """Execute order via Alpaca (paper or live handled by alpaca_client config)."""
+    from trading.execution.alpaca_client import submit_order
+    return submit_order(symbol, side, notional=notional, qty=qty)
 
 
 def cmd_run(paper: bool = False):

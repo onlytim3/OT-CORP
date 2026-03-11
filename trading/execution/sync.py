@@ -13,7 +13,6 @@ import traceback
 
 from rich.console import Console
 
-from trading.config import TRADING_MODE
 from trading.db.store import (
     close_trade,
     get_db,
@@ -25,7 +24,6 @@ from trading.db.store import (
     upsert_position,
 )
 from trading.execution.alpaca_client import get_order_status, get_positions_from_alpaca
-from trading.execution.paper import get_paper_positions
 from trading.learning.journal import record_outcome
 
 console = Console()
@@ -50,10 +48,7 @@ def sync_positions() -> int:
     Returns the number of positions synced.
     """
     try:
-        if TRADING_MODE == "paper":
-            broker_positions = get_paper_positions()
-        else:
-            broker_positions = get_positions_from_alpaca()
+        broker_positions = get_positions_from_alpaca()
     except Exception as exc:
         console.print(f"[red]sync_positions: failed to fetch broker positions: {exc}[/red]")
         log_action("error", "sync_positions_fetch", details=str(exc))
@@ -155,24 +150,7 @@ def verify_fills() -> int:
         symbol = trade.get("symbol", "?")
 
         try:
-            if TRADING_MODE == "paper":
-                # Paper orders fill instantly. If we still have a non-terminal
-                # record it means the status update was missed. Mark it filled
-                # using whatever price the trade already has on record.
-                update_trade_status(trade_id, "filled")
-                console.print(
-                    f"[cyan]verify_fills: paper trade {trade_id} ({symbol}) marked filled[/cyan]"
-                )
-                log_action(
-                    "trade",
-                    "fill_verified_paper",
-                    symbol=symbol,
-                    details=f"Trade {trade_id} marked filled (paper mode)",
-                )
-                verified += 1
-                continue
-
-            # Live / Alpaca paper-api mode — need an order ID to poll.
+            # Need an order ID to poll Alpaca for fill status.
             if not alpaca_order_id:
                 console.print(
                     f"[yellow]verify_fills: trade {trade_id} ({symbol}) has no alpaca_order_id, skipping[/yellow]"
@@ -189,19 +167,18 @@ def verify_fills() -> int:
                 # Update trade status to filled.
                 update_trade_status(trade_id, "filled")
 
-                # If the broker returned a filled price, update the trade
-                # record so that price and total reflect the actual fill.
+                # Update trade record with actual fill data (price, qty, total).
                 if filled_price is not None:
                     try:
                         price_f = float(filled_price)
                         qty_f = float(filled_qty) if filled_qty else trade.get("qty", 0)
                         with get_db() as conn:
                             conn.execute(
-                                "UPDATE trades SET price=?, total=? WHERE id=?",
-                                (price_f, price_f * qty_f, trade_id),
+                                "UPDATE trades SET qty=?, price=?, total=? WHERE id=?",
+                                (qty_f, price_f, price_f * qty_f, trade_id),
                             )
                     except (ValueError, TypeError):
-                        pass  # Non-numeric price string — leave trade price as-is.
+                        pass  # Non-numeric value — leave trade as-is.
 
                 console.print(
                     f"[green]verify_fills: trade {trade_id} ({symbol}) filled @ {filled_price}[/green]"
