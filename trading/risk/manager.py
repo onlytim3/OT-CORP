@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from trading.config import RISK, CRYPTO_SYMBOLS
+from trading.risk.profit_manager import TAKE_PROFIT_PCT, TRAILING_STOP_ACTIVATE
 from trading.db.store import get_positions, get_daily_pnl, get_trades
 from trading.strategy.base import Signal
 
@@ -296,3 +297,84 @@ class RiskManager:
             "num_positions": len(positions),
             "positions": positions,
         }
+
+
+# ---------------------------------------------------------------------------
+# Trade target computation — SL/TP must be set before any trade
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TradeTargets:
+    """Pre-computed stop loss and take profit levels for a trade."""
+    entry_price: float
+    stop_loss_price: float
+    take_profit_price: float
+    trailing_stop_activate_price: float
+    risk_reward_ratio: float
+    max_loss_pct: float
+    max_gain_pct: float
+    max_loss_value: float      # Dollar loss at SL for the given order size
+    max_gain_value: float      # Dollar gain at TP for the given order size
+
+
+def compute_trade_targets(
+    symbol: str,
+    entry_price: float,
+    order_value: float,
+    signal_strength: float = 0.5,
+) -> TradeTargets:
+    """Compute stop loss and take profit targets before entering a trade.
+
+    The SL is based on RISK['stop_loss_pct'] with adjustments for:
+      - Leveraged ETFs (tighter SL to account for amplified moves)
+      - Signal strength (stronger signals get slightly wider stops)
+
+    The TP uses profit_manager.TAKE_PROFIT_PCT with a minimum 2:1 R:R ratio.
+    """
+    base_sl_pct = RISK["stop_loss_pct"]
+    leverage = LEVERAGE_FACTORS.get(symbol, 1.0)
+
+    # Tighter stops for leveraged instruments (their moves are amplified)
+    effective_sl_pct = base_sl_pct / leverage
+
+    # Strong signals get slightly wider stops (up to +20% wider)
+    strength_adj = 1.0 + (signal_strength - 0.5) * 0.4  # 0.8x to 1.2x
+    effective_sl_pct *= strength_adj
+
+    # Clamp SL between 3% and 15%
+    effective_sl_pct = max(0.03, min(effective_sl_pct, 0.15))
+
+    # Take profit — at least 2:1 reward-to-risk ratio
+    base_tp_pct = TAKE_PROFIT_PCT
+    min_tp_from_rr = effective_sl_pct * 2.0  # 2:1 R:R minimum
+    effective_tp_pct = max(base_tp_pct, min_tp_from_rr)
+
+    # Trailing stop activation
+    trailing_activate_pct = TRAILING_STOP_ACTIVATE
+
+    # Compute price levels
+    stop_loss_price = entry_price * (1 - effective_sl_pct)
+    take_profit_price = entry_price * (1 + effective_tp_pct)
+    trailing_stop_activate_price = entry_price * (1 + trailing_activate_pct)
+
+    # Risk/reward ratio
+    risk = effective_sl_pct
+    reward = effective_tp_pct
+    rr_ratio = reward / risk if risk > 0 else 0
+
+    # Dollar values
+    qty_estimate = order_value / entry_price if entry_price > 0 else 0
+    max_loss_value = qty_estimate * (entry_price - stop_loss_price)
+    max_gain_value = qty_estimate * (take_profit_price - entry_price)
+
+    return TradeTargets(
+        entry_price=round(entry_price, 2),
+        stop_loss_price=round(stop_loss_price, 2),
+        take_profit_price=round(take_profit_price, 2),
+        trailing_stop_activate_price=round(trailing_stop_activate_price, 2),
+        risk_reward_ratio=round(rr_ratio, 2),
+        max_loss_pct=round(effective_sl_pct * 100, 2),
+        max_gain_pct=round(effective_tp_pct * 100, 2),
+        max_loss_value=round(max_loss_value, 2),
+        max_gain_value=round(max_gain_value, 2),
+    )

@@ -118,6 +118,166 @@ def api_trades():
     return jsonify(trades)
 
 
+@app.route("/api/position/<symbol>")
+def api_position_detail(symbol):
+    """Detailed breakdown for a single position — strategies, reasoning, risk."""
+    import json as _json
+    from trading.config import RISK
+    from trading.risk.manager import CORRELATION_GROUPS, LEVERAGE_FACTORS, compute_trade_targets
+    from trading.risk.profit_manager import TAKE_PROFIT_PCT, TRAILING_STOP_ACTIVATE, TRAILING_STOP_PCT
+
+    # Normalize: allow both BTCUSD and BTC/USD lookups
+    symbol_slash = symbol[:3] + "/" + symbol[3:] if "/" not in symbol and len(symbol) >= 6 else symbol
+    symbol_flat = symbol.replace("/", "")
+    match_symbols = list({symbol, symbol_slash, symbol_flat})
+
+    # Current position from Alpaca
+    positions = _safe_positions()
+    pos = next((p for p in positions if p["symbol"] in match_symbols), None)
+    if not pos:
+        return jsonify({"error": f"No open position for {symbol}"}), 404
+
+    current_price = pos["current_price"]
+    avg_cost = pos["avg_cost"]
+    qty = pos["qty"]
+    market_value = pos.get("market_value", qty * current_price)
+    pnl = pos.get("unrealized_pnl", 0) or 0
+    pnl_pct = ((current_price - avg_cost) / avg_cost * 100) if avg_cost else 0
+
+    # All trades for this symbol
+    placeholders = ",".join("?" for _ in match_symbols)
+    with get_db() as conn:
+        trades = [dict(r) for r in conn.execute(
+            f"SELECT * FROM trades WHERE symbol IN ({placeholders}) ORDER BY timestamp DESC LIMIT 20",
+            match_symbols,
+        ).fetchall()]
+
+        # All signals for this symbol (last 50)
+        signals = [dict(r) for r in conn.execute(
+            f"SELECT * FROM signals WHERE symbol IN ({placeholders}) ORDER BY timestamp DESC LIMIT 50",
+            match_symbols,
+        ).fetchall()]
+
+        # Journal entries for trades on this symbol
+        journal_entries = [dict(r) for r in conn.execute(
+            f"SELECT j.*, t.symbol, t.side, t.qty, t.price, t.strategy "
+            f"FROM journal j JOIN trades t ON j.trade_id = t.id "
+            f"WHERE t.symbol IN ({placeholders}) ORDER BY j.timestamp DESC LIMIT 10",
+            match_symbols,
+        ).fetchall()]
+
+    # Parse signal data JSON
+    for s in signals:
+        if s.get("data") and isinstance(s["data"], str):
+            try:
+                s["data"] = _json.loads(s["data"])
+            except Exception:
+                pass
+
+    # Parse journal market_context JSON
+    for j in journal_entries:
+        if j.get("market_context") and isinstance(j["market_context"], str):
+            try:
+                j["market_context"] = _json.loads(j["market_context"])
+            except Exception:
+                pass
+
+    # Strategies that contributed to opening this position
+    contributing_strategies = list({t["strategy"] for t in trades if t["strategy"] and t["side"] == "buy"})
+
+    # Recent buy signals with reasoning
+    buy_signals = [s for s in signals if s["signal"] == "buy"]
+    latest_reasons = {}
+    for s in buy_signals:
+        strat = s["strategy"]
+        if strat not in latest_reasons:
+            latest_reasons[strat] = {
+                "strategy": strat,
+                "strength": s["strength"],
+                "timestamp": s["timestamp"],
+                "data": s.get("data"),
+            }
+
+    # Risk analysis — use stored trade targets if available, else compute live
+    buy_trades = [t for t in trades if t["side"] == "buy"]
+    latest_buy = buy_trades[0] if buy_trades else None
+
+    # Check if trade has stored SL/TP targets
+    stored_sl = latest_buy.get("stop_loss_price") if latest_buy else None
+    stored_tp = latest_buy.get("take_profit_price") if latest_buy else None
+    stored_trail = latest_buy.get("trailing_stop_activate") if latest_buy else None
+    stored_rr = latest_buy.get("risk_reward_ratio") if latest_buy else None
+
+    if stored_sl and stored_tp:
+        # Use targets from the trade record
+        stop_loss_price = stored_sl
+        take_profit_price = stored_tp
+        trailing_activate_price = stored_trail or avg_cost * (1 + TRAILING_STOP_ACTIVATE)
+        rr_ratio = stored_rr or 0
+    else:
+        # Compute targets live (for legacy trades without stored targets)
+        targets = compute_trade_targets(
+            symbol=pos["symbol"],
+            entry_price=avg_cost,
+            order_value=market_value,
+        )
+        stop_loss_price = targets.stop_loss_price
+        take_profit_price = targets.take_profit_price
+        trailing_activate_price = targets.trailing_stop_activate_price
+        rr_ratio = targets.risk_reward_ratio
+
+    stop_loss_value = (stop_loss_price - current_price) * qty
+    take_profit_value = (take_profit_price - current_price) * qty
+    distance_to_stop = ((current_price - stop_loss_price) / current_price * 100) if current_price else 0
+    distance_to_tp = ((take_profit_price - current_price) / current_price * 100) if current_price else 0
+    sl_pct = ((avg_cost - stop_loss_price) / avg_cost * 100) if avg_cost else 0
+    tp_pct = ((take_profit_price - avg_cost) / avg_cost * 100) if avg_cost else 0
+
+    leverage = LEVERAGE_FACTORS.get(pos["symbol"], 1.0)
+
+    # Find correlation group
+    corr_group = None
+    for group_name, group_symbols in CORRELATION_GROUPS.items():
+        if symbol_slash in group_symbols or symbol_flat in group_symbols:
+            corr_group = group_name
+            break
+
+    # Total invested (sum of all buy trades)
+    total_invested = sum(t["total"] or 0 for t in trades if t["side"] == "buy")
+
+    return jsonify({
+        "symbol": pos["symbol"],
+        "qty": qty,
+        "avg_cost": avg_cost,
+        "current_price": current_price,
+        "market_value": market_value,
+        "pnl": pnl,
+        "pnl_pct": round(pnl_pct, 2),
+        "total_invested": total_invested,
+        "contributing_strategies": contributing_strategies,
+        "strategy_reasons": latest_reasons,
+        "trades": trades,
+        "journal_entries": journal_entries,
+        "risk": {
+            "stop_loss_pct": round(sl_pct, 2),
+            "stop_loss_price": round(stop_loss_price, 2),
+            "stop_loss_value": round(stop_loss_value, 2),
+            "distance_to_stop_pct": round(distance_to_stop, 2),
+            "take_profit_pct": round(tp_pct, 2),
+            "take_profit_price": round(take_profit_price, 2),
+            "take_profit_value": round(take_profit_value, 2),
+            "distance_to_tp_pct": round(distance_to_tp, 2),
+            "trailing_activate_price": round(trailing_activate_price, 2),
+            "risk_reward_ratio": round(rr_ratio, 2),
+            "leverage": leverage,
+            "correlation_group": corr_group,
+            "max_position_pct": RISK["max_position_pct"] * 100,
+            "max_daily_loss_pct": RISK["max_daily_loss_pct"] * 100,
+        },
+        "recent_signals": buy_signals[:10],
+    })
+
+
 @app.route("/api/health")
 def api_health():
     """Health check endpoint for monitoring and alerting."""

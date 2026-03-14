@@ -29,7 +29,7 @@ def execute_order(symbol, side, notional=None, qty=None):
 def cmd_run(paper: bool = False):
     """Run all strategies and execute trades."""
     from trading.strategy.registry import get_enabled_strategies
-    from trading.risk.manager import RiskManager
+    from trading.risk.manager import RiskManager, compute_trade_targets
     from trading.risk.portfolio import calculate_order_size
     from trading.learning.journal import create_journal_entry
     from trading.monitor.dashboard import show_signals, show_portfolio, show_positions
@@ -54,6 +54,10 @@ def cmd_run(paper: bool = False):
     all_signals = []
     executed = []
 
+    # Pre-fetch positions so we can skip sells for symbols we don't hold
+    positions = get_positions_list()
+    held_symbols = {p["symbol"] for p in positions}
+
     for strategy in strategies:
         console.print(f"[cyan]Running {strategy.name}...[/cyan]")
         try:
@@ -75,6 +79,14 @@ def cmd_run(paper: bool = False):
                 if not signal.is_actionable:
                     continue
 
+                # Skip sells for symbols we don't hold (avoid accidental shorts)
+                if signal.action == "sell":
+                    # Normalize: Alpaca positions use e.g. "BTCUSD" not "BTC/USD"
+                    norm = signal.symbol.replace("/", "")
+                    if norm not in held_symbols and signal.symbol not in held_symbols:
+                        console.print(f"  [dim]Skipping SELL {signal.symbol} — no position held[/dim]")
+                        continue
+
                 # Calculate order size
                 buy_signals_count = sum(1 for s in signals if s.action == "buy")
                 order_value = calculate_order_size(signal, portfolio_value, buy_signals_count)
@@ -88,22 +100,59 @@ def cmd_run(paper: bool = False):
                     console.print(f"  [red]BLOCKED: {risk_check.reason}[/red]")
                     continue
 
+                # Compute SL/TP targets before executing
+                entry_price = signal.data.get("price") if signal.data else None
+                if not entry_price:
+                    # Estimate entry from order value and known prices
+                    entry_price = order_value  # Will be refined after fill
+                    if "/" in signal.symbol:
+                        try:
+                            from trading.execution.alpaca_client import get_crypto_quote
+                            q = get_crypto_quote(signal.symbol)
+                            entry_price = q.get("mid") or entry_price
+                        except Exception:
+                            pass
+
+                targets = compute_trade_targets(
+                    symbol=signal.symbol,
+                    entry_price=entry_price,
+                    order_value=order_value,
+                    signal_strength=signal.strength,
+                )
+
                 # Execute
                 console.print(f"  [{'green' if signal.action == 'buy' else 'red'}]"
                               f"{signal.action.upper()} ${order_value:.2f} of {signal.symbol}[/]")
+                console.print(f"    [dim]SL: ${targets.stop_loss_price:,.2f} (-{targets.max_loss_pct:.1f}%) | "
+                              f"TP: ${targets.take_profit_price:,.2f} (+{targets.max_gain_pct:.1f}%) | "
+                              f"R:R {targets.risk_reward_ratio:.1f}:1[/dim]")
 
                 order = execute_order(signal.symbol, signal.action, notional=order_value)
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                    filled_price = float(order.get("filled_avg_price") or 0)
+                    # Recompute targets with actual fill price if available
+                    if filled_price > 0 and filled_price != entry_price:
+                        targets = compute_trade_targets(
+                            symbol=signal.symbol,
+                            entry_price=filled_price,
+                            order_value=order_value,
+                            signal_strength=signal.strength,
+                        )
+
                     trade_id = insert_trade(
                         symbol=signal.symbol,
                         side=signal.action,
                         qty=float(order.get("filled_qty") or order.get("qty") or 0),
-                        price=float(order.get("filled_avg_price") or 0),
+                        price=filled_price,
                         total=order_value,
                         strategy=signal.strategy,
                         status=order["status"],
                         alpaca_order_id=order.get("id"),
+                        stop_loss_price=targets.stop_loss_price,
+                        take_profit_price=targets.take_profit_price,
+                        trailing_stop_activate=targets.trailing_stop_activate_price,
+                        risk_reward_ratio=targets.risk_reward_ratio,
                     )
                     create_journal_entry(trade_id, signal, context)
                     executed.append(order)

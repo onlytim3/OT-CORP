@@ -181,10 +181,15 @@ def submit_order(symbol: str, side: str, notional: float = None, qty: float = No
     if client_order_id is None:
         client_order_id = str(uuid.uuid4())
 
+    # Crypto uses GTC; fractional stock/ETF orders must use DAY
+    is_crypto = "/" in symbol  # e.g. BTC/USD, ETH/USD
+    is_fractional = notional is not None or (qty is not None and qty != int(qty))
+    tif = TimeInForce.GTC if is_crypto else (TimeInForce.DAY if is_fractional else TimeInForce.GTC)
+
     kwargs = {
         "symbol": symbol,
         "side": order_side,
-        "time_in_force": TimeInForce.GTC,
+        "time_in_force": tif,
         "client_order_id": client_order_id,
     }
     if notional is not None:

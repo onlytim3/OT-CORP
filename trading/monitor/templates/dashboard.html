@@ -148,10 +148,144 @@
         .action-details { color: #ccc; flex: 1; }
         .action-symbol { color: #44aaff; font-weight: bold; }
 
+        /* Clickable rows */
+        .clickable { cursor: pointer; }
+        .clickable:hover { background: #1e1e3a !important; }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.75);
+            z-index: 1000;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 40px 20px;
+            overflow-y: auto;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: #12121e;
+            border: 1px solid #2a2a4a;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 720px;
+            max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid #1e1e3a;
+            background: #1a1a2e;
+            border-radius: 12px 12px 0 0;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        .modal-header h2 { font-size: 18px; color: #00ff88; margin: 0; }
+        .modal-close {
+            background: none;
+            border: 1px solid #333;
+            color: #888;
+            font-size: 20px;
+            cursor: pointer;
+            border-radius: 6px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-close:hover { color: #fff; border-color: #555; }
+        .modal-body { padding: 20px; }
+
+        .detail-section {
+            margin-bottom: 20px;
+        }
+        .detail-section h3 {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #1e1e3a;
+        }
+        .detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .detail-item {
+            background: #0d0d15;
+            border: 1px solid #1e1e3a;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        .detail-item .label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+        .detail-item .val { font-size: 16px; font-weight: bold; margin-top: 2px; }
+
+        .strategy-card {
+            background: #0d0d15;
+            border: 1px solid #1e1e3a;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        .strategy-card .strat-name { color: #44aaff; font-weight: bold; font-size: 13px; }
+        .strategy-card .strat-strength { color: #ffaa00; font-size: 12px; float: right; }
+        .strategy-card .strat-time { color: #555; font-size: 11px; margin-top: 4px; }
+
+        .risk-bar {
+            height: 6px;
+            background: #1e1e3a;
+            border-radius: 3px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+        .risk-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+
+        .trade-list-item {
+            display: flex;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid #1a1a2a;
+            font-size: 12px;
+            align-items: center;
+        }
+        .trade-list-item:last-child { border-bottom: none; }
+
+        .journal-entry {
+            background: #0d0d15;
+            border: 1px solid #1e1e3a;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+        .journal-entry .je-rationale { color: #ccc; line-height: 1.5; }
+        .journal-entry .je-meta { color: #555; font-size: 11px; margin-top: 6px; }
+
+        .modal-loading {
+            text-align: center;
+            padding: 40px;
+            color: #555;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .grid { grid-template-columns: 1fr; }
             .stats-bar { grid-template-columns: repeat(2, 1fr); }
+            .detail-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -252,7 +386,7 @@
                     </thead>
                     <tbody>
                         {% for p in positions %}
-                        <tr>
+                        <tr class="clickable" onclick="openPositionDetail('{{ p.symbol }}')">
                             <td class="action-symbol">{{ p.symbol }}</td>
                             <td class="text-right">{{ "%.4f"|format(p.qty) }}</td>
                             <td class="text-right">${{ "%.2f"|format(p.avg_cost) }}</td>
@@ -416,7 +550,196 @@
         <span id="refresh-status" style="color:#555;">Auto-refresh: 30s</span>
     </div>
 
+    <!-- Position Detail Modal -->
+    <div class="modal-overlay" id="positionModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modalTitle">Position Detail</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <div class="modal-loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
     <script>
+    function openPositionDetail(symbol) {
+        const modal = document.getElementById('positionModal');
+        const body = document.getElementById('modalBody');
+        const title = document.getElementById('modalTitle');
+        modal.classList.add('active');
+        body.innerHTML = '<div class="modal-loading">Loading position data...</div>';
+        title.textContent = symbol;
+
+        fetch('/api/position/' + symbol)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    body.innerHTML = '<div class="modal-loading">' + data.error + '</div>';
+                    return;
+                }
+                title.textContent = data.symbol;
+                body.innerHTML = renderPositionDetail(data);
+            })
+            .catch(err => {
+                body.innerHTML = '<div class="modal-loading">Failed to load: ' + err + '</div>';
+            });
+    }
+
+    function closeModal() {
+        document.getElementById('positionModal').classList.remove('active');
+    }
+
+    // Close on overlay click or Escape
+    document.getElementById('positionModal').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeModal();
+    });
+
+    function renderPositionDetail(d) {
+        const pnlClass = d.pnl >= 0 ? 'green' : 'red';
+        const pnlSign = d.pnl >= 0 ? '+' : '';
+
+        // Overview section
+        let html = '<div class="detail-section"><h3>Position Overview</h3><div class="detail-grid">';
+        html += detailItem('Quantity', d.qty.toFixed(6));
+        html += detailItem('Avg Cost', '$' + d.avg_cost.toFixed(2));
+        html += detailItem('Current Price', '$' + d.current_price.toFixed(2));
+        html += detailItem('Market Value', '$' + d.market_value.toFixed(2));
+        html += detailItem('Unrealized P&L', '<span class="' + pnlClass + '">' + pnlSign + '$' + d.pnl.toFixed(2) + ' (' + pnlSign + d.pnl_pct.toFixed(2) + '%)</span>');
+        html += detailItem('Total Invested', '$' + d.total_invested.toFixed(2));
+        html += '</div></div>';
+
+        // Risk section — SL & TP targets
+        const r = d.risk;
+        const stopDist = r.distance_to_stop_pct;
+        const tpDist = r.distance_to_tp_pct;
+        const stopColor = stopDist < 2 ? '#ff4444' : stopDist < 4 ? '#ffaa00' : '#00ff88';
+        const tpColor = tpDist < 2 ? '#00ff88' : '#44aaff';
+
+        html += '<div class="detail-section"><h3>Targets & Risk</h3>';
+
+        // R:R ratio banner
+        const rrColor = r.risk_reward_ratio >= 2 ? '#00ff88' : r.risk_reward_ratio >= 1.5 ? '#ffaa00' : '#ff4444';
+        html += '<div style="text-align:center;padding:12px;background:#0d0d15;border:1px solid #1e1e3a;border-radius:6px;margin-bottom:12px;">';
+        html += '<span style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:1px;">Risk / Reward Ratio</span>';
+        html += '<div style="font-size:28px;font-weight:bold;color:' + rrColor + ';margin-top:4px;">' + r.risk_reward_ratio.toFixed(1) + ' : 1</div>';
+        html += '</div>';
+
+        html += '<div class="detail-grid">';
+        // Stop Loss
+        html += detailItem('Stop Loss', '<span class="red">$' + r.stop_loss_price.toFixed(2) + '</span><br><span style="font-size:11px;color:#888;">-' + r.stop_loss_pct.toFixed(1) + '% from entry</span>');
+        // Take Profit
+        html += detailItem('Take Profit', '<span class="green">$' + r.take_profit_price.toFixed(2) + '</span><br><span style="font-size:11px;color:#888;">+' + r.take_profit_pct.toFixed(1) + '% from entry</span>');
+        // Loss at SL
+        html += detailItem('Max Loss at SL', '<span class="red">$' + r.stop_loss_value.toFixed(2) + '</span>');
+        // Gain at TP
+        html += detailItem('Max Gain at TP', '<span class="green">+$' + r.take_profit_value.toFixed(2) + '</span>');
+        // Distance to SL
+        html += detailItem('Distance to SL', '<span style="color:' + stopColor + '">' + stopDist.toFixed(2) + '%</span>');
+        // Distance to TP
+        html += detailItem('Distance to TP', '<span style="color:' + tpColor + '">' + tpDist.toFixed(2) + '%</span>');
+        // Trailing stop activation
+        html += detailItem('Trail Activates At', '$' + r.trailing_activate_price.toFixed(2));
+        if (r.leverage > 1) html += detailItem('Leverage', r.leverage + 'x');
+        if (r.correlation_group) html += detailItem('Correlation Group', r.correlation_group);
+        html += detailItem('Max Position Size', r.max_position_pct.toFixed(0) + '% of portfolio');
+        html += '</div>';
+
+        // Visual SL ← Price → TP bar
+        const slPrice = r.stop_loss_price;
+        const tpPrice = r.take_profit_price;
+        const range = tpPrice - slPrice;
+        const pricePos = range > 0 ? ((d.current_price - slPrice) / range * 100) : 50;
+        const clampedPos = Math.max(0, Math.min(100, pricePos));
+
+        html += '<div style="margin-top:14px;">';
+        html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-bottom:4px;">';
+        html += '<span>SL: $' + slPrice.toFixed(2) + '</span>';
+        html += '<span>TP: $' + tpPrice.toFixed(2) + '</span>';
+        html += '</div>';
+        html += '<div style="position:relative;height:10px;background:linear-gradient(90deg, #ff4444 0%, #ffaa00 30%, #00ff88 100%);border-radius:5px;">';
+        html += '<div style="position:absolute;top:-3px;left:' + clampedPos + '%;transform:translateX(-50%);width:16px;height:16px;background:#fff;border-radius:50%;border:2px solid #0a0a0f;"></div>';
+        html += '</div>';
+        html += '<div style="text-align:center;font-size:11px;color:#ccc;margin-top:6px;">Current: $' + d.current_price.toFixed(2) + '</div>';
+        html += '</div>';
+
+        html += '</div>';
+
+        // Strategies section
+        html += '<div class="detail-section"><h3>Contributing Strategies (' + d.contributing_strategies.length + ')</h3>';
+        if (Object.keys(d.strategy_reasons).length > 0) {
+            for (const [name, info] of Object.entries(d.strategy_reasons)) {
+                html += '<div class="strategy-card">';
+                html += '<span class="strat-name">' + name + '</span>';
+                html += '<span class="strat-strength">strength: ' + (info.strength || 0).toFixed(2) + '</span>';
+                html += '<div class="strat-time">' + (info.timestamp || '').substring(0, 19).replace('T', ' ') + '</div>';
+                if (info.data) {
+                    html += '<div style="margin-top:6px;font-size:11px;color:#888;">';
+                    for (const [k, v] of Object.entries(info.data)) {
+                        if (typeof v !== 'object') html += '<span style="margin-right:12px;">' + k + ': <span style="color:#ccc;">' + v + '</span></span>';
+                    }
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+        } else {
+            html += '<div style="color:#555;font-size:12px;">No recent buy signals recorded.</div>';
+        }
+        html += '</div>';
+
+        // Recent signals
+        if (d.recent_signals && d.recent_signals.length > 0) {
+            html += '<div class="detail-section"><h3>Recent Buy Signals</h3>';
+            for (const s of d.recent_signals.slice(0, 5)) {
+                html += '<div class="trade-list-item">';
+                html += '<span class="dim" style="min-width:110px;">' + (s.timestamp || '').substring(0, 16).replace('T', ' ') + '</span>';
+                html += '<span style="color:#44aaff;min-width:100px;">' + s.strategy + '</span>';
+                html += '<span class="yellow" style="min-width:50px;">str: ' + (s.strength || 0).toFixed(2) + '</span>';
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+
+        // Trade history
+        if (d.trades && d.trades.length > 0) {
+            html += '<div class="detail-section"><h3>Trade History (' + d.trades.length + ')</h3>';
+            for (const t of d.trades) {
+                const sideClass = t.side === 'buy' ? 'green' : 'red';
+                html += '<div class="trade-list-item">';
+                html += '<span class="dim" style="min-width:110px;">' + (t.timestamp || '').substring(0, 16).replace('T', ' ') + '</span>';
+                html += '<span class="' + sideClass + '" style="min-width:40px;font-weight:bold;">' + (t.side || '').toUpperCase() + '</span>';
+                html += '<span style="min-width:80px;text-align:right;">$' + (t.total || 0).toFixed(2) + '</span>';
+                html += '<span class="dim" style="min-width:90px;">' + (t.strategy || '') + '</span>';
+                html += '<span class="dim">' + (t.status || '') + '</span>';
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+
+        // Journal entries
+        if (d.journal_entries && d.journal_entries.length > 0) {
+            html += '<div class="detail-section"><h3>Trade Journal</h3>';
+            for (const j of d.journal_entries) {
+                html += '<div class="journal-entry">';
+                html += '<div class="je-rationale">' + (j.rationale || 'No rationale recorded') + '</div>';
+                if (j.lesson) html += '<div style="margin-top:6px;color:#ffaa00;">Lesson: ' + j.lesson + '</div>';
+                html += '<div class="je-meta">' + (j.timestamp || '').substring(0, 16).replace('T', ' ') + ' &bull; ' + (j.strategy || '') + ' &bull; ' + (j.side || '').toUpperCase() + '</div>';
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+
+        return html;
+    }
+
+    function detailItem(label, value) {
+        return '<div class="detail-item"><div class="label">' + label + '</div><div class="val">' + value + '</div></div>';
+    }
+
     // AJAX auto-refresh — updates stats + positions + actions without full reload
     (function() {
         const REFRESH_INTERVAL = 30000; // 30 seconds

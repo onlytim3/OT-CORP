@@ -43,7 +43,11 @@ def init_db():
                 alpaca_order_id TEXT,
                 closed_at TEXT,
                 close_price REAL,
-                pnl REAL
+                pnl REAL,
+                stop_loss_price REAL,
+                take_profit_price REAL,
+                trailing_stop_activate REAL,
+                risk_reward_ratio REAL
             );
 
             CREATE TABLE IF NOT EXISTS positions (
@@ -169,6 +173,18 @@ def init_db():
             END;
         """)
 
+        # --- Migrate existing tables (add SL/TP columns) ---
+        for col, coltype in [
+            ("stop_loss_price", "REAL"),
+            ("take_profit_price", "REAL"),
+            ("trailing_stop_activate", "REAL"),
+            ("risk_reward_ratio", "REAL"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {coltype}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
         # --- Performance Indexes ---
         conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);
@@ -204,12 +220,16 @@ def _now():
 
 # --- Trade Operations ---
 
-def insert_trade(symbol, side, qty, price, total, strategy, status="pending", alpaca_order_id=None):
+def insert_trade(symbol, side, qty, price, total, strategy, status="pending", alpaca_order_id=None,
+                  stop_loss_price=None, take_profit_price=None, trailing_stop_activate=None,
+                  risk_reward_ratio=None):
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO trades (timestamp, symbol, side, qty, price, total, strategy, status, alpaca_order_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (_now(), symbol, side, qty, price, total, strategy, status, alpaca_order_id),
+            "INSERT INTO trades (timestamp, symbol, side, qty, price, total, strategy, status, alpaca_order_id, "
+            "stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (_now(), symbol, side, qty, price, total, strategy, status, alpaca_order_id,
+             stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio),
         )
         return cur.lastrowid
 
