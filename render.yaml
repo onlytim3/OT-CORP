@@ -7,7 +7,7 @@ services:
     runtime: python
     region: ohio
     plan: starter
-    buildCommand: pip install -r requirements.txt
+    buildCommand: "pip install -r requirements.txt && cd dashboard && npm install && npm run build"
     startCommand: bash start.sh
     healthCheckPath: /api/health
     autoDeploy: true

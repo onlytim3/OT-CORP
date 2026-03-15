@@ -5,6 +5,8 @@ import { Trading } from "./pages/Trading";
 import { Agents } from "./pages/Agents";
 import { Analytics } from "./pages/Analytics";
 
+const basename = import.meta.env.BASE_URL || '/app/';
+
 export const router = createBrowserRouter([
   {
     path: "/",
@@ -16,4 +18,4 @@ export const router = createBrowserRouter([
       { path: "analytics", Component: Analytics },
     ],
   },
-]);
+], { basename: basename.replace(/\/$/, '') });

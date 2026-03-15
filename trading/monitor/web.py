@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 
 try:
     from flask_cors import CORS as _CORS
@@ -34,6 +34,25 @@ if _CORS:
     _CORS(app, origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"])
 
 _START_TIME = time.monotonic()
+
+# ---------------------------------------------------------------------------
+# React Dashboard (served from dashboard/dist/ at /app/)
+# ---------------------------------------------------------------------------
+_REACT_DIST = Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
+
+
+@app.route("/app/")
+@app.route("/app/<path:path>")
+def serve_react(path=""):
+    """Serve the React SPA from the pre-built dashboard/dist/ directory."""
+    if not _REACT_DIST.is_dir():
+        return jsonify({"error": "React dashboard not built. Run: cd dashboard && npm run build"}), 404
+    # Serve static assets (JS, CSS, images)
+    full_path = _REACT_DIST / path
+    if path and full_path.is_file():
+        return send_from_directory(str(_REACT_DIST), path)
+    # SPA fallback — serve index.html for all routes
+    return send_from_directory(str(_REACT_DIST), "index.html")
 
 
 # ---------------------------------------------------------------------------

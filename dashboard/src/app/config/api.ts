@@ -1,5 +1,6 @@
 // API Configuration for OT-CORP Trading System
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5050';
+// In production (served by Flask), use same origin. In dev, use local Flask server.
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:5050');
 
 export const api = {
   baseUrl: API_BASE_URL,
