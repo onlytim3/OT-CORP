@@ -61,6 +61,8 @@ def _to_alpaca(symbol: str) -> str:
 
 def get_account() -> dict:
     """Get account info from AsterDex, formatted like Alpaca's response."""
+    import os
+    from trading.config import TRADING_MODE
     from trading.execution.aster_client import aster_get_account, is_aster_configured
 
     if not is_aster_configured():
@@ -82,12 +84,21 @@ def get_account() -> dict:
         unrealized_pnl = acct.get("totalUnrealizedProfit", 0.0)
         equity = total_balance + unrealized_pnl
 
+        # Paper mode: use simulated balance (PAPER_BALANCE env or $1000 default)
+        # so the system can generate realistic signals and position sizing
+        is_paper = TRADING_MODE == "paper"
+        if is_paper:
+            paper_balance = float(os.getenv("PAPER_BALANCE", "1000"))
+            equity = max(equity, paper_balance)
+            available = max(available, paper_balance)
+            total_balance = max(total_balance, paper_balance)
+
         return {
             "portfolio_value": equity,
             "cash": available,
             "buying_power": available,
             "equity": equity,
-            "paper": False,  # AsterDex is live (testnet is separate base URL)
+            "paper": is_paper,
             "status": "ACTIVE",
             "trading_blocked": False,
             "total_wallet_balance": total_balance,

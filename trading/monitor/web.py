@@ -644,9 +644,9 @@ def api_mode():
 
     from trading.db.store import log_action
     log_action(
-        action="mode_switch",
+        "system",
+        "mode_switch",
         details=f"Switched from {old_mode} to {new_mode}",
-        level="warning" if new_mode == "live" else "info",
     )
 
     return jsonify({"mode": cfg.TRADING_MODE, "previous": old_mode})
