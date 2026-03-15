@@ -906,7 +906,7 @@
     <div class="header">
         <div style="display:flex;align-items:center;gap:12px;">
             <h1>OT-CORP.</h1>
-            <span class="mode {{ 'mode-paper' if mode == 'PAPER' else 'mode-live' }}">{{ mode }}</span>
+            <span id="modeLabel" class="mode {{ 'mode-paper' if mode == 'PAPER' else 'mode-live' }}" style="cursor:pointer;user-select:none;" onclick="toggleModeModal()" title="Click to switch trading mode">{{ mode }}</span>
         </div>
         <div id="healthStrip" style="display:flex;gap:16px;font-size:12px;color:var(--text-secondary);">
             <span id="healthDaemon" style="display:flex;align-items:center;gap:4px;">
@@ -1259,7 +1259,87 @@
         </div>
     </div>
 
+    <!-- Mode Switch Modal -->
+    <div id="modeModal" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:32px;max-width:420px;width:90%;text-align:center;">
+            <h2 id="modeModalTitle" style="margin:0 0 8px;">Switch Trading Mode</h2>
+            <p id="modeModalDesc" style="color:var(--text-secondary);margin:0 0 24px;font-size:14px;line-height:1.5;"></p>
+            <div id="modeModalActions" style="display:flex;gap:12px;justify-content:center;">
+                <!-- Filled dynamically -->
+            </div>
+        </div>
+    </div>
+
     <script>
+    // ---- Mode switch ----
+    let _currentMode = '{{ mode }}';
+
+    function toggleModeModal() {
+        const modal = document.getElementById('modeModal');
+        const title = document.getElementById('modeModalTitle');
+        const desc = document.getElementById('modeModalDesc');
+        const actions = document.getElementById('modeModalActions');
+
+        const targetMode = _currentMode === 'PAPER' ? 'live' : 'paper';
+        const targetLabel = targetMode.toUpperCase();
+
+        if (targetMode === 'live') {
+            title.textContent = '⚠️ Switch to LIVE Trading?';
+            desc.innerHTML = 'This will execute <strong>real trades with real money</strong>.<br>Make sure your account is funded and you understand the risks.';
+            actions.innerHTML = `
+                <button onclick="closeModeModal()" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text-primary);cursor:pointer;font-size:14px;">Cancel</button>
+                <button onclick="switchMode('live')" style="padding:10px 24px;border-radius:8px;border:none;background:var(--color-red);color:#fff;cursor:pointer;font-weight:600;font-size:14px;">Go LIVE</button>
+            `;
+        } else {
+            title.textContent = 'Switch to Paper Trading?';
+            desc.innerHTML = 'The system will switch to simulated trades.<br>No real money will be used.';
+            actions.innerHTML = `
+                <button onclick="closeModeModal()" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text-primary);cursor:pointer;font-size:14px;">Cancel</button>
+                <button onclick="switchMode('paper')" style="padding:10px 24px;border-radius:8px;border:none;background:var(--color-green);color:#fff;cursor:pointer;font-weight:600;font-size:14px;">Switch to Paper</button>
+            `;
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    function closeModeModal() {
+        document.getElementById('modeModal').style.display = 'none';
+    }
+
+    async function switchMode(mode) {
+        const actions = document.getElementById('modeModalActions');
+        actions.innerHTML = '<span style="color:var(--text-secondary);">Switching...</span>';
+
+        try {
+            const confirm = mode === 'live';
+            const resp = await fetch('/api/mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: mode, confirm: confirm}),
+            });
+            const data = await resp.json();
+
+            if (resp.ok) {
+                _currentMode = data.mode.toUpperCase();
+                const label = document.getElementById('modeLabel');
+                label.textContent = _currentMode;
+                label.className = 'mode ' + (_currentMode === 'PAPER' ? 'mode-paper' : 'mode-live');
+                closeModeModal();
+            } else {
+                actions.innerHTML = `<span style="color:var(--color-red);">${data.error || 'Failed to switch'}</span>
+                    <button onclick="closeModeModal()" style="margin-top:8px;padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text-primary);cursor:pointer;">Close</button>`;
+            }
+        } catch (err) {
+            actions.innerHTML = `<span style="color:var(--color-red);">Network error: ${err.message}</span>
+                <button onclick="closeModeModal()" style="margin-top:8px;padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text-primary);cursor:pointer;">Close</button>`;
+        }
+    }
+
+    // Close on background click
+    document.getElementById('modeModal').addEventListener('click', function(e) {
+        if (e.target === this) closeModeModal();
+    });
+
     // ---- Modal management ----
     const _modal = document.getElementById('detailModal');
     const _modalBody = document.getElementById('modalBody');

@@ -612,6 +612,46 @@ def api_chat():
         return jsonify({"answer": f"Sorry, I encountered an error: {exc}"}), 200
 
 
+@app.route("/api/mode", methods=["GET", "POST"])
+def api_mode():
+    """Get or switch trading mode (paper/live)."""
+    import trading.config as cfg
+
+    if request.method == "GET":
+        return jsonify({"mode": cfg.TRADING_MODE})
+
+    data = request.get_json(silent=True) or {}
+    new_mode = data.get("mode", "").lower()
+    if new_mode not in ("paper", "live"):
+        return jsonify({"error": "mode must be 'paper' or 'live'"}), 400
+
+    # Safety: require confirmation for live mode
+    if new_mode == "live" and not data.get("confirm"):
+        return jsonify({
+            "error": "Switching to LIVE mode requires confirmation",
+            "confirm_required": True,
+            "message": "This will execute real trades with real money. "
+                       "Send again with {\"mode\": \"live\", \"confirm\": true} to proceed.",
+        }), 400
+
+    old_mode = cfg.TRADING_MODE
+    cfg.TRADING_MODE = new_mode
+
+    # Persist to .env if DATA_DIR is set (Render), otherwise just runtime
+    env_path = Path(os.environ.get("DATA_DIR", "")) / ".env.mode"
+    if env_path.parent.exists():
+        env_path.write_text(f"TRADING_MODE={new_mode}\n")
+
+    from trading.db.store import log_action
+    log_action(
+        action="mode_switch",
+        details=f"Switched from {old_mode} to {new_mode}",
+        level="warning" if new_mode == "live" else "info",
+    )
+
+    return jsonify({"mode": cfg.TRADING_MODE, "previous": old_mode})
+
+
 @app.route("/api/health")
 def api_health():
     """Health check endpoint for monitoring and alerting."""

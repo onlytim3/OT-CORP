@@ -34,6 +34,12 @@ TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
 _DATA_DIR = Path(os.getenv("DATA_DIR", ""))
 if _DATA_DIR and _DATA_DIR.exists():
     DB_PATH = _DATA_DIR / "trading.db"
+    # Load persisted mode override (set via dashboard toggle)
+    _mode_file = _DATA_DIR / ".env.mode"
+    if _mode_file.exists():
+        for line in _mode_file.read_text().strip().splitlines():
+            if line.startswith("TRADING_MODE="):
+                TRADING_MODE = line.split("=", 1)[1].strip()
 else:
     DB_PATH = PROJECT_ROOT / "trading" / "db" / "trading.db"
 KNOWLEDGE_DIR = PROJECT_ROOT / "trading" / "knowledge"
