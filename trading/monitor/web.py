@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask import Flask, render_template, jsonify, request, send_from_directory, redirect
 
 try:
     from flask_cors import CORS as _CORS
@@ -132,6 +132,11 @@ def _add_position_ages(positions: list) -> list:
 # ---------------------------------------------------------------------------
 
 @app.route("/")
+def root_redirect():
+    return redirect("/app/")
+
+
+@app.route("/old-dashboard")
 def dashboard():
     account = _safe_account()
     positions = _add_position_ages(sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
