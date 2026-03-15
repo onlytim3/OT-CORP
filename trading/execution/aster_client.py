@@ -623,9 +623,11 @@ def aster_submit_order(
         "side": side,
         "type": order_type,
         "quantity": str(quantity),
-        "timeInForce": time_in_force,
         "positionSide": position_side,
     }
+    # timeInForce only applies to LIMIT-type orders; MARKET/STOP_MARKET reject it
+    if order_type in ("LIMIT", "STOP", "TAKE_PROFIT"):
+        params["timeInForce"] = time_in_force
     if price is not None:
         params["price"] = str(price)
     if reduce_only is not None:

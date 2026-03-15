@@ -1,5 +1,6 @@
 """Flask web dashboard — autonomous monitoring interface."""
 
+import json
 import logging
 import os
 import time
@@ -74,12 +75,30 @@ def dashboard():
         for p in positions
     )
 
+    # Group consecutive identical actions for cleaner display
+    grouped_actions = []
+    for a in actions:
+        a_dict = dict(a) if not isinstance(a, dict) else a
+        if (grouped_actions
+                and grouped_actions[-1].get("action") == a_dict.get("action")
+                and grouped_actions[-1].get("category") == a_dict.get("category")):
+            grouped_actions[-1]["repeat_count"] = grouped_actions[-1].get("repeat_count", 1) + 1
+        else:
+            a_copy = dict(a_dict)
+            a_copy["repeat_count"] = 1
+            grouped_actions.append(a_copy)
+
+    # Sparkline data: portfolio values from P&L history (oldest first)
+    sparkline_data = json.dumps(
+        [p.get("portfolio_value", 0) for p in reversed(pnl_history)]
+    )
+
     return render_template(
         "dashboard.html",
         account=account,
         positions=positions,
         summary=summary,
-        actions=actions,
+        actions=grouped_actions,
         trades=trades,
         signals=signals,
         pnl_history=pnl_history,
@@ -87,6 +106,7 @@ def dashboard():
         positions_value=positions_value,
         mode="PAPER" if get_setting("trading_mode", TRADING_MODE) == "paper" else "LIVE",
         risk=RISK,
+        sparkline_data=sparkline_data,
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
 
