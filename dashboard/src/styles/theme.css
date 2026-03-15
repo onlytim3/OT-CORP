@@ -1,0 +1,184 @@
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+
+  /* Solid Black Theme */
+  --background: #000000;
+  --foreground: #e8e8e8;
+
+  --card: #0a0a0a;
+  --card-foreground: #e8e8e8;
+  --card-border: rgba(192, 192, 192, 0.15);
+
+  --popover: #0a0a0a;
+  --popover-foreground: #e8e8e8;
+
+  /* Chrome Blue Accent */
+  --primary: #4a9eff;
+  --primary-foreground: #000000;
+
+  /* Silver Secondary */
+  --secondary: #1a1a1a;
+  --secondary-foreground: #c0c0c0;
+
+  /* Muted Silver */
+  --muted: #141414;
+  --muted-foreground: #888888;
+
+  /* Chrome Accent */
+  --accent: #141414;
+  --accent-foreground: #c0c0c0;
+
+  /* Metallic Red */
+  --destructive: #ff4466;
+  --destructive-foreground: #ffffff;
+
+  /* Borders - Silver */
+  --border: rgba(192, 192, 192, 0.12);
+  --input: rgba(192, 192, 192, 0.08);
+  --input-background: #0a0a0a;
+  --switch-background: #1a1a1a;
+
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: rgba(74, 158, 255, 0.4);
+
+  /* Chart Colors */
+  --chart-1: #4a9eff;
+  --chart-2: #00d4aa;
+  --chart-3: #c0c0c0;
+  --chart-4: #ff6b9d;
+  --chart-5: #ffd700;
+
+  --radius: 0.5rem;
+
+  /* Sidebar */
+  --sidebar: #000000;
+  --sidebar-foreground: #c0c0c0;
+  --sidebar-primary: #4a9eff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #0a0a0a;
+  --sidebar-accent-foreground: #e8e8e8;
+  --sidebar-border: rgba(192, 192, 192, 0.08);
+  --sidebar-ring: rgba(74, 158, 255, 0.4);
+}
+
+@theme inline {
+  --color-background: #000000;
+  --color-foreground: var(--foreground);
+  --color-card: #0a0a0a;
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-black text-foreground;
+    font-family: 'JetBrains Mono', 'Share Tech Mono', 'SF Mono', 'Fira Code', monospace;
+  }
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+    color: #e8e8e8;
+    font-family: 'Share Tech Mono', 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+    color: #e8e8e8;
+    font-family: 'Share Tech Mono', 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+    color: #c0c0c0;
+    font-family: 'Share Tech Mono', 'JetBrains Mono', monospace;
+    letter-spacing: 0.03em;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+    color: #c0c0c0;
+    font-family: 'Share Tech Mono', 'JetBrains Mono', monospace;
+  }
+
+  label {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  button {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  input {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+
+  code, pre {
+    font-family: 'JetBrains Mono', 'Share Tech Mono', monospace;
+  }
+
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}

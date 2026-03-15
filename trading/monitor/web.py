@@ -9,6 +9,11 @@ from pathlib import Path
 
 from flask import Flask, render_template, jsonify, request
 
+try:
+    from flask_cors import CORS as _CORS
+except ImportError:
+    _CORS = None
+
 from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TIMEZONE
 from trading.db.store import (
     init_db, get_db, get_trades, get_positions, get_daily_pnl,
@@ -23,6 +28,10 @@ app = Flask(
     __name__,
     template_folder=str(Path(__file__).parent / "templates"),
 )
+
+# Enable CORS for React dashboard dev server
+if _CORS:
+    _CORS(app, origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"])
 
 _START_TIME = time.monotonic()
 
@@ -948,6 +957,62 @@ def api_health():
         "positions_count": positions_count,
     }
     return jsonify(payload), status_code
+
+
+@app.route("/api/volume/<symbol>")
+def api_volume(symbol):
+    """Volume analysis for a symbol (e.g. BTCUSDT)."""
+    try:
+        from trading.risk.volume_gate import full_volume_analysis
+        analysis = full_volume_analysis(symbol.upper())
+        if analysis is None:
+            return jsonify({"error": "No volume data available", "symbol": symbol}), 404
+        return jsonify({
+            "symbol": symbol.upper(),
+            "ratio": analysis.ratio,
+            "trend": analysis.trend,
+            "spread_bps": analysis.spread_bps,
+            "recent_quote_volume": analysis.recent_quote_volume,
+            "sizing_multiplier": analysis.sizing_multiplier,
+            "thresholds": {
+                "min_volume_ratio": RISK.get("min_volume_ratio", 0.30),
+                "volume_exit_ratio": RISK.get("volume_exit_ratio", 0.20),
+                "max_spread_bps": RISK.get("max_spread_bps", 50),
+            },
+        })
+    except Exception as e:
+        log.exception("Volume analysis failed for %s", symbol)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/volume")
+def api_volume_all():
+    """Volume analysis for all open positions."""
+    try:
+        from trading.risk.volume_gate import full_volume_analysis
+        from trading.data.aster import alpaca_to_aster
+        positions = get_positions_from_alpaca()
+        results = []
+        for pos in positions:
+            sym = pos.get("symbol", "")
+            aster_sym = alpaca_to_aster(sym)
+            if not aster_sym:
+                continue
+            analysis = full_volume_analysis(aster_sym)
+            if analysis:
+                results.append({
+                    "symbol": sym,
+                    "aster_symbol": aster_sym,
+                    "ratio": analysis.ratio,
+                    "trend": analysis.trend,
+                    "spread_bps": analysis.spread_bps,
+                    "recent_quote_volume": analysis.recent_quote_volume,
+                    "sizing_multiplier": analysis.sizing_multiplier,
+                })
+        return jsonify(results)
+    except Exception as e:
+        log.exception("Volume analysis failed")
+        return jsonify({"error": str(e)}), 500
 
 
 def start_dashboard(host="127.0.0.1", port=None, debug=False):
