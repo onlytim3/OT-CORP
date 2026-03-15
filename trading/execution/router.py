@@ -10,6 +10,7 @@ the router converts to AsterDex format (BTCUSDT) before execution.
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
@@ -91,11 +92,16 @@ def _to_alpaca(symbol: str) -> str:
 # ---------------------------------------------------------------------------
 
 def get_account() -> dict:
-    """Get account info from AsterDex, formatted like Alpaca's response."""
+    """Get account info — paper mode uses local simulation, live uses AsterDex."""
     import os
     from trading.config import TRADING_MODE
     from trading.db.store import get_setting
     from trading.execution.aster_client import aster_get_account, is_aster_configured
+
+    # Paper mode: use fully simulated account
+    mode = get_setting("trading_mode", TRADING_MODE)
+    if mode == "paper":
+        return _paper_get_account()
 
     if not is_aster_configured():
         log.warning("AsterDex not configured, returning empty account")
@@ -116,21 +122,12 @@ def get_account() -> dict:
         unrealized_pnl = acct.get("totalUnrealizedProfit", 0.0)
         equity = total_balance + unrealized_pnl
 
-        # Paper mode: use simulated balance (PAPER_BALANCE env or $1000 default)
-        # so the system can generate realistic signals and position sizing
-        is_paper = get_setting("trading_mode", TRADING_MODE) == "paper"
-        if is_paper:
-            paper_balance = float(os.getenv("PAPER_BALANCE", "1000"))
-            equity = max(equity, paper_balance)
-            available = max(available, paper_balance)
-            total_balance = max(total_balance, paper_balance)
-
         return {
             "portfolio_value": equity,
             "cash": available,
             "buying_power": available,
             "equity": equity,
-            "paper": is_paper,
+            "paper": False,
             "status": "ACTIVE",
             "trading_blocked": False,
             "total_wallet_balance": total_balance,
@@ -151,7 +148,13 @@ def get_account() -> dict:
 
 
 def get_positions_from_aster() -> list[dict]:
-    """Get positions from AsterDex, formatted like Alpaca's response."""
+    """Get positions — paper mode reads from DB, live mode from AsterDex."""
+    from trading.config import TRADING_MODE
+    from trading.db.store import get_setting
+    mode = get_setting("trading_mode", TRADING_MODE)
+    if mode == "paper":
+        return _paper_get_positions()
+
     from trading.execution.aster_client import aster_get_positions, is_aster_configured
 
     if not is_aster_configured():
@@ -205,7 +208,7 @@ def submit_order(
     leverage: int = 1,
     stop_loss_price: Optional[float] = None,
 ) -> dict:
-    """Submit an order to AsterDex, returning Alpaca-compatible response.
+    """Submit an order — paper mode simulates locally, live mode hits AsterDex.
 
     Args:
         symbol: Alpaca-style symbol (BTC/USD) or AsterDex (BTCUSDT).
@@ -218,6 +221,14 @@ def submit_order(
     Returns dict matching Alpaca order response format:
         id, status, symbol, side, qty, filled_qty, filled_avg_price, etc.
     """
+    # Check if paper mode — simulate locally
+    from trading.config import TRADING_MODE
+    from trading.db.store import get_setting
+    mode = get_setting("trading_mode", TRADING_MODE)
+    if mode == "paper":
+        return _paper_submit_order(symbol, side, notional=notional, qty=qty,
+                                   stop_loss_price=stop_loss_price)
+
     from trading.execution.aster_client import (
         aster_submit_order,
         get_aster_mark_prices,
@@ -489,7 +500,13 @@ def get_order_status(order_id: str, symbol: str = None) -> dict:
 
 
 def close_position(symbol: str) -> dict:
-    """Close a position by submitting an opposite market order."""
+    """Close a position — paper mode uses DB, live mode uses AsterDex."""
+    from trading.config import TRADING_MODE
+    from trading.db.store import get_setting
+    mode = get_setting("trading_mode", TRADING_MODE)
+    if mode == "paper":
+        return _paper_close_position(symbol)
+
     from trading.execution.aster_client import aster_get_positions
 
     aster_sym = _to_aster(symbol)
@@ -599,3 +616,357 @@ def _round_qty(aster_symbol: str, qty: float) -> float:
 
     # Fallback: round to 2 decimals
     return round(qty, 2)
+
+
+# ---------------------------------------------------------------------------
+# Paper Trading Simulation
+# ---------------------------------------------------------------------------
+# In paper mode, orders are simulated locally using real market prices.
+# Positions are tracked in the `paper_positions` table in SQLite.
+# No orders are sent to AsterDex. When switching to live mode, paper
+# positions are ignored and real exchange positions take over.
+# ---------------------------------------------------------------------------
+
+def _init_paper_tables():
+    """Create paper trading tables if they don't exist."""
+    from trading.db.store import get_db
+    with get_db() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS paper_positions (
+                symbol TEXT PRIMARY KEY,
+                side TEXT NOT NULL DEFAULT 'long',
+                qty REAL NOT NULL DEFAULT 0,
+                avg_cost REAL NOT NULL DEFAULT 0,
+                strategy TEXT,
+                opened_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS paper_balance (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                cash REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+        """)
+
+
+def _get_paper_cash() -> float:
+    """Get current paper cash balance."""
+    from trading.db.store import get_db
+    import os
+    _init_paper_tables()
+    with get_db() as conn:
+        row = conn.execute("SELECT cash FROM paper_balance WHERE id = 1").fetchone()
+        if row:
+            return row["cash"]
+        # Initialize with PAPER_BALANCE
+        initial = float(os.getenv("PAPER_BALANCE", "1000"))
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO paper_balance (id, cash, updated_at) VALUES (1, ?, ?)",
+            (initial, now),
+        )
+        return initial
+
+
+def _set_paper_cash(cash: float):
+    """Update paper cash balance."""
+    from trading.db.store import get_db
+    _init_paper_tables()
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO paper_balance (id, cash, updated_at) VALUES (1, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET cash = excluded.cash, updated_at = excluded.updated_at",
+            (cash, now),
+        )
+
+
+def _paper_submit_order(
+    symbol: str,
+    side: str,
+    notional: Optional[float] = None,
+    qty: Optional[float] = None,
+    stop_loss_price: Optional[float] = None,
+) -> dict:
+    """Simulate an order using real market prices, no exchange interaction.
+
+    Fills instantly at the current mark price. Updates paper_positions and
+    paper_balance tables in the DB.
+    """
+    from trading.execution.aster_client import get_aster_mark_prices
+    from trading.db.store import get_db, log_action
+
+    _init_paper_tables()
+    aster_sym = _to_aster(symbol)
+    side_lower = side.lower()
+
+    # Get real market price
+    try:
+        mark_data = get_aster_mark_prices(aster_sym)
+        fill_price = mark_data.get("markPrice", 0)
+    except Exception as e:
+        log.warning("Paper: could not get mark price for %s: %s", aster_sym, e)
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "rejected",
+            "reason": f"Could not get market price for {symbol}",
+            "symbol": symbol, "side": side,
+            "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
+        }
+
+    if fill_price <= 0:
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "rejected",
+            "reason": f"Invalid mark price for {symbol}",
+            "symbol": symbol, "side": side,
+            "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
+        }
+
+    # Calculate qty from notional
+    if qty is None and notional is not None and fill_price > 0:
+        qty = notional / fill_price
+
+    if qty is None or qty <= 0:
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "rejected",
+            "reason": "Could not calculate order quantity",
+            "symbol": symbol, "side": side,
+            "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
+        }
+
+    # Round to exchange step size (even paper should be realistic)
+    qty = _round_qty(aster_sym, qty)
+    if qty <= 0:
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "rejected",
+            "reason": f"Order too small for {aster_sym}",
+            "symbol": symbol, "side": side,
+            "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
+        }
+
+    order_value = qty * fill_price
+    cash = _get_paper_cash()
+    order_id = str(uuid.uuid4())[:12]
+    now = datetime.now(timezone.utc).isoformat()
+    sym_key = symbol.replace("/", "")  # Normalize: BTC/USD → BTCUSD
+
+    with get_db() as conn:
+        # Get existing position
+        pos_row = conn.execute(
+            "SELECT * FROM paper_positions WHERE symbol = ?", (sym_key,)
+        ).fetchone()
+        existing_qty = pos_row["qty"] if pos_row else 0
+        existing_cost = pos_row["avg_cost"] if pos_row else 0
+        existing_side = pos_row["side"] if pos_row else "long"
+
+        if side_lower == "buy":
+            # Check cash
+            if order_value > cash:
+                return {
+                    "id": order_id, "status": "rejected",
+                    "reason": f"Insufficient paper cash: ${cash:.2f} < ${order_value:.2f}",
+                    "symbol": symbol, "side": side,
+                    "qty": qty, "filled_qty": 0, "filled_avg_price": 0,
+                }
+
+            # Deduct cash
+            _set_paper_cash(cash - order_value)
+
+            if pos_row and existing_side == "long" and existing_qty > 0:
+                # Add to existing long — weighted avg cost
+                new_qty = existing_qty + qty
+                new_avg = ((existing_qty * existing_cost) + (qty * fill_price)) / new_qty
+                conn.execute(
+                    "UPDATE paper_positions SET qty = ?, avg_cost = ?, updated_at = ? WHERE symbol = ?",
+                    (new_qty, new_avg, now, sym_key),
+                )
+            elif pos_row and existing_side == "short" and existing_qty > 0:
+                # Buying against a short — reduce short position
+                if qty >= existing_qty:
+                    # Close short entirely (and maybe go long)
+                    pnl = existing_qty * (existing_cost - fill_price)
+                    _set_paper_cash(_get_paper_cash() + pnl + existing_qty * fill_price)
+                    remaining = qty - existing_qty
+                    if remaining > 0:
+                        conn.execute(
+                            "UPDATE paper_positions SET side = 'long', qty = ?, avg_cost = ?, updated_at = ? WHERE symbol = ?",
+                            (remaining, fill_price, now, sym_key),
+                        )
+                    else:
+                        conn.execute("DELETE FROM paper_positions WHERE symbol = ?", (sym_key,))
+                else:
+                    conn.execute(
+                        "UPDATE paper_positions SET qty = ?, updated_at = ? WHERE symbol = ?",
+                        (existing_qty - qty, now, sym_key),
+                    )
+                    pnl = qty * (existing_cost - fill_price)
+                    _set_paper_cash(_get_paper_cash() + pnl + qty * fill_price)
+            else:
+                # New long position
+                conn.execute(
+                    "INSERT INTO paper_positions (symbol, side, qty, avg_cost, strategy, opened_at, updated_at) "
+                    "VALUES (?, 'long', ?, ?, ?, ?, ?)",
+                    (sym_key, qty, fill_price, "", now, now),
+                )
+
+        elif side_lower == "sell":
+            if pos_row and existing_side == "long" and existing_qty > 0:
+                # Selling a long position — realize P&L
+                sell_qty = min(qty, existing_qty)
+                pnl = sell_qty * (fill_price - existing_cost)
+                _set_paper_cash(_get_paper_cash() + sell_qty * fill_price)
+
+                remaining = existing_qty - sell_qty
+                if remaining > 1e-10:
+                    conn.execute(
+                        "UPDATE paper_positions SET qty = ?, updated_at = ? WHERE symbol = ?",
+                        (remaining, now, sym_key),
+                    )
+                else:
+                    conn.execute("DELETE FROM paper_positions WHERE symbol = ?", (sym_key,))
+            else:
+                # Opening a short or adding to short
+                margin_needed = order_value  # 1x margin for shorts
+                if margin_needed > cash:
+                    return {
+                        "id": order_id, "status": "rejected",
+                        "reason": f"Insufficient paper cash for short: ${cash:.2f} < ${margin_needed:.2f}",
+                        "symbol": symbol, "side": side,
+                        "qty": qty, "filled_qty": 0, "filled_avg_price": 0,
+                    }
+                _set_paper_cash(cash - margin_needed)
+
+                if pos_row and existing_side == "short":
+                    new_qty = existing_qty + qty
+                    new_avg = ((existing_qty * existing_cost) + (qty * fill_price)) / new_qty
+                    conn.execute(
+                        "UPDATE paper_positions SET qty = ?, avg_cost = ?, updated_at = ? WHERE symbol = ?",
+                        (new_qty, new_avg, now, sym_key),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO paper_positions (symbol, side, qty, avg_cost, strategy, opened_at, updated_at) "
+                        "VALUES (?, 'short', ?, ?, ?, ?, ?)",
+                        (sym_key, qty, fill_price, "", now, now),
+                    )
+
+    log.info("PAPER FILL: %s %s %.6f %s @ $%.4f ($%.2f)",
+             side_lower.upper(), symbol, qty, aster_sym, fill_price, order_value)
+
+    return {
+        "id": order_id,
+        "status": "filled",
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "filled_qty": qty,
+        "filled_avg_price": fill_price,
+        "order_type": "MARKET",
+        "paper": True,
+    }
+
+
+def _paper_get_positions() -> list[dict]:
+    """Get paper positions from DB, with live mark prices for P&L."""
+    from trading.db.store import get_db
+    from trading.execution.aster_client import get_aster_mark_prices
+
+    _init_paper_tables()
+
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM paper_positions WHERE qty > 0").fetchall()
+
+    if not rows:
+        return []
+
+    result = []
+    for row in rows:
+        row = dict(row)
+        sym_key = row["symbol"]
+        qty = row["qty"]
+        avg_cost = row["avg_cost"]
+        side = row.get("side", "long")
+
+        # Get current mark price
+        aster_sym = _to_aster(sym_key)
+        try:
+            mark_data = get_aster_mark_prices(aster_sym)
+            mark_price = mark_data.get("markPrice", avg_cost)
+        except Exception:
+            mark_price = avg_cost
+
+        if side == "long":
+            unrealized = qty * (mark_price - avg_cost)
+        else:
+            unrealized = qty * (avg_cost - mark_price)
+
+        unrealized_pct = (mark_price - avg_cost) / avg_cost if avg_cost > 0 else 0
+        if side == "short":
+            unrealized_pct = -unrealized_pct
+
+        result.append({
+            "symbol": sym_key,
+            "qty": qty,
+            "avg_cost": avg_cost,
+            "current_price": mark_price,
+            "market_value": qty * mark_price,
+            "unrealized_pl": unrealized,
+            "unrealized_plpc": unrealized_pct,
+            "side": side,
+            "strategy": row.get("strategy", ""),
+            "aster_symbol": aster_sym,
+            "leverage": 1,
+            "liquidation_price": 0,
+            "paper": True,
+        })
+
+    return result
+
+
+def _paper_close_position(symbol: str) -> dict:
+    """Close a paper position by simulating a market order."""
+    from trading.db.store import get_db
+
+    _init_paper_tables()
+    sym_key = symbol.replace("/", "")
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM paper_positions WHERE symbol = ?", (sym_key,)
+        ).fetchone()
+
+    if not row or row["qty"] <= 0:
+        return {"status": "no_position", "symbol": symbol}
+
+    close_side = "sell" if row["side"] == "long" else "buy"
+    return _paper_submit_order(symbol, close_side, qty=row["qty"])
+
+
+def _paper_get_account() -> dict:
+    """Get paper account summary with real-time position values."""
+    import os
+    _init_paper_tables()
+
+    cash = _get_paper_cash()
+    positions = _paper_get_positions()
+
+    positions_value = sum(p["market_value"] for p in positions)
+    unrealized_pnl = sum(p["unrealized_pl"] for p in positions)
+    equity = cash + positions_value
+
+    return {
+        "portfolio_value": equity,
+        "cash": cash,
+        "buying_power": cash,
+        "equity": equity,
+        "paper": True,
+        "status": "ACTIVE",
+        "trading_blocked": False,
+        "total_wallet_balance": cash,
+        "unrealized_pnl": unrealized_pnl,
+        "margin_balance": equity,
+    }
