@@ -417,6 +417,8 @@ h1, h2, h3 {
 
 .card-body {
     padding: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .card-empty {
@@ -431,8 +433,12 @@ h1, h2, h3 {
    ======================================== */
 table {
     width: 100%;
+    min-width: 600px;
     border-collapse: collapse;
     font-size: 13px;
+}
+table.table-compact {
+    min-width: unset;
 }
 th {
     text-align: left;
@@ -1408,7 +1414,7 @@ th.text-right, td.text-right {
         <div class="card">
             <div class="card-header">Risk Parameters</div>
             <div class="card-body">
-                <table>
+                <table class="table-compact">
                     <tbody>
                         <tr>
                             <td>Max Position Size</td>
