@@ -7,20 +7,24 @@ Agents continuously converse with each other through recommendations:
   - Regime Agent:       detects regime shifts, recommends strategy switching
   - Learning Agent:     synthesizes lessons, updates knowledge base
 
-Safe actions are auto-applied. Dangerous actions require human review.
+All actions are auto-applied with full autonomy. The executor ensures
+work is actually done — not just logged:
 
-Auto-approved (safe):
+Immediate execution:
   - Disable a strategy losing money (win rate < 25% over 20+ trades)
   - Shift allocation away from underperformers
   - Tighten risk parameters during drawdown
-  - Update knowledge base with new findings
-  - Log recommendations and reasoning
+  - Reduce sizing during event risk
+  - Trim budgets on concentrated positions
+  - Re-enable backtest-approved strategies during underinvestment
+  - Build strategy code for implementation requests
+  - Fill coverage gaps with auto-generated strategies
+  - Queue disabled strategies for re-evaluation via backtest
 
-Requires human review (dangerous):
-  - Enable a new untested strategy
-  - Increase leverage
-  - Loosen risk limits
-  - Deploy new strategy code
+Verification (each cycle):
+  - Check previous cycle's actions actually took effect
+  - Re-apply failed actions with escalation tracking
+  - Log verification failures to activity log
 
 Usage:
     from trading.intelligence.autonomous import run_autonomous_cycle
@@ -68,6 +72,12 @@ BACKTEST_MIN_TRADES = 5              # Need at least 5 trades to judge
 BACKTEST_LOOKBACK_DAYS = 365         # Test against past year of data
 BACKTEST_COOLDOWN_DAYS = 7           # Don't re-test within 7 days
 BACKTEST_MAX_PER_CYCLE = 3           # Max backtests per autonomous cycle
+
+# Follow-through verification
+VERIFY_LOOKBACK_HOURS = 6            # Check actions from last N hours
+MAX_FOLLOWUP_ESCALATIONS = 3         # Re-raise failed action up to N times
+CONCENTRATION_MAX_PCT = 0.25         # Trim budget when position > 25%
+EVENT_RISK_SIZING_MULT = 0.6         # Reduce sizing during event risk
 
 # Agent identifiers
 PERF_AGENT = "performance_agent"
@@ -771,6 +781,120 @@ def _backtest_agent_think() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Verification — ensure previous cycle's actions actually took effect
+# ---------------------------------------------------------------------------
+
+def _verify_previous_actions() -> list[dict]:
+    """Check that actions from the last cycle actually took effect.
+
+    Returns new recommendations for any actions that failed verification.
+    """
+    followups = []
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=VERIFY_LOOKBACK_HOURS)).isoformat()
+
+    history = get_recommendation_history(limit=50)
+    recent_applied = [
+        r for r in history
+        if r.get("resolution") == "applied"
+        and r.get("timestamp", "") >= cutoff
+    ]
+
+    for rec in recent_applied:
+        action = rec.get("action", "")
+        target = rec.get("target", "")
+        data = json.loads(rec["data"]) if isinstance(rec.get("data"), str) else (rec.get("data") or {})
+        escalation = data.get("_escalation_count", 0)
+
+        if escalation >= MAX_FOLLOWUP_ESCALATIONS:
+            continue  # Already escalated enough
+
+        verified = True
+        failure_reason = ""
+
+        try:
+            if action == "auto_disable" and target in STRATEGY_ENABLED:
+                if STRATEGY_ENABLED.get(target, False):
+                    verified = False
+                    failure_reason = f"Strategy '{target}' was disabled but is now enabled again"
+
+            elif action == "backtest_discard" and target in STRATEGY_ENABLED:
+                if STRATEGY_ENABLED.get(target, False):
+                    verified = False
+                    failure_reason = f"Strategy '{target}' was discarded but is still enabled"
+
+            elif action == "emergency_halt":
+                still_enabled = [s for s, v in STRATEGY_ENABLED.items() if v]
+                if still_enabled:
+                    verified = False
+                    failure_reason = f"Emergency halt issued but {len(still_enabled)} strategies still enabled: {still_enabled[:3]}"
+
+            elif action == "tighten_risk":
+                adjustments = data.get("adjustments", {})
+                for param, expected in adjustments.items():
+                    actual = RISK.get(param)
+                    if actual is not None and actual != expected:
+                        verified = False
+                        failure_reason = f"Risk param '{param}' expected {expected} but is {actual}"
+                        break
+
+            elif action == "reduce_budget":
+                try:
+                    from trading.risk.portfolio import STRATEGY_BUDGETS
+                    expected = data.get("new_budget")
+                    actual = STRATEGY_BUDGETS.get(target)
+                    if expected and actual and abs(actual - expected) > 0.001:
+                        verified = False
+                        failure_reason = f"Budget for '{target}' expected {expected} but is {actual}"
+                except ImportError:
+                    pass
+
+            elif action == "implement_strategy":
+                # Check if the strategy file was actually generated
+                import pathlib
+                strat_dir = pathlib.Path("trading/strategies")
+                snake = target.lower().replace(" ", "_").replace("-", "_")
+                expected_file = strat_dir / f"{snake}.py"
+                if not expected_file.exists():
+                    verified = False
+                    failure_reason = f"Strategy '{target}' was requested but file {expected_file} not found"
+
+        except Exception as e:
+            log.debug("Verification check failed for %s: %s", action, e)
+            continue  # Don't escalate on verification errors
+
+        if not verified:
+            log.warning("VERIFY FAILED: %s on '%s' — %s", action, target, failure_reason)
+            followups.append({
+                "from_agent": EXECUTOR_AGENT,
+                "to_agent": EXECUTOR_AGENT,
+                "category": rec.get("category", "followup"),
+                "action": action,  # Re-issue the same action
+                "target": target,
+                "reasoning": (
+                    f"[FOLLOW-UP #{escalation + 1}] Previous action did not take effect: "
+                    f"{failure_reason}. Re-applying."
+                ),
+                "data": {
+                    **data,
+                    "_escalation_count": escalation + 1,
+                    "_original_timestamp": rec.get("timestamp"),
+                    "auto_approve": True,
+                },
+            })
+
+            log_action(
+                "autonomous", "verification_failed",
+                details=f"{action} on '{target}': {failure_reason}",
+                data={"escalation": escalation + 1, "original_rec_id": rec.get("id")},
+            )
+
+    if followups:
+        log.info("VERIFY: %d actions need re-application", len(followups))
+
+    return followups
+
+
+# ---------------------------------------------------------------------------
 # Executor — applies safe recommendations automatically
 # ---------------------------------------------------------------------------
 
@@ -892,40 +1016,192 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 result = f"Enabled strategy '{target}'"
                 log.info("AUTO-ENABLE: %s — %s", target, rec["reasoning"][:100])
 
-            elif action in ("research_finding", "performance_alert", "event_risk",
-                            "concentration_warning", "re_evaluate", "underinvestment_alert"):
-                # Informational — log and save to knowledge base
+            elif action == "event_risk":
+                # Actually reduce sizing during event risk — don't just log it
+                sizing_mult = data.get("suggested_sizing_mult", EVENT_RISK_SIZING_MULT)
+                try:
+                    from trading.risk.portfolio import STRATEGY_BUDGETS, DEFAULT_BUDGET
+                    adjusted = 0
+                    for strat in list(STRATEGY_BUDGETS.keys()):
+                        if STRATEGY_ENABLED.get(strat, False):
+                            old = STRATEGY_BUDGETS[strat]
+                            STRATEGY_BUDGETS[strat] = round(old * sizing_mult, 4)
+                            adjusted += 1
+                    # Also tighten stop losses during events
+                    if "stop_loss_pct" in RISK:
+                        old_sl = RISK["stop_loss_pct"]
+                        RISK["stop_loss_pct"] = round(old_sl * 0.8, 4)  # 20% tighter
+                        log.warning("EVENT RISK: Tightened stop_loss_pct %s → %s", old_sl, RISK["stop_loss_pct"])
+                    result = f"Event risk: reduced sizing by {sizing_mult:.0%} on {adjusted} strategies, tightened stops"
+                    log.warning("EVENT RISK APPLIED: %s — %s", result, rec["reasoning"][:100])
+                except Exception as e:
+                    result = f"Event risk sizing reduction failed: {e}"
+                insert_knowledge(
+                    title=f"Event Risk Applied — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=rec["from_agent"], category="agent_intelligence",
+                    content=rec["reasoning"], key_rules=json.dumps(data),
+                )
+
+            elif action == "concentration_warning":
+                # Actually reduce budget for the concentrated position
+                try:
+                    from trading.risk.portfolio import STRATEGY_BUDGETS, DEFAULT_BUDGET
+                    concentration = data.get("concentration_pct", 0)
+                    if concentration > CONCENTRATION_MAX_PCT and target:
+                        # Find strategies trading this symbol and reduce their budgets
+                        positions = get_positions()
+                        concentrated_strats = set()
+                        for p in positions:
+                            if p.get("symbol", "").replace("/", "") == target.replace("/", ""):
+                                strat = p.get("strategy", "")
+                                if strat:
+                                    concentrated_strats.add(strat)
+                        for strat in concentrated_strats:
+                            old = STRATEGY_BUDGETS.get(strat, DEFAULT_BUDGET)
+                            new_budget = round(old * 0.5, 4)  # Halve the budget
+                            STRATEGY_BUDGETS[strat] = new_budget
+                            log.warning("CONCENTRATION: Reduced %s budget %s → %s", strat, old, new_budget)
+                        result = f"Concentration warning: reduced budgets for {len(concentrated_strats)} strategies on {target}"
+                    else:
+                        result = f"Concentration warning noted for {target} ({concentration:.0%})"
+                except Exception as e:
+                    result = f"Concentration budget reduction failed: {e}"
+                insert_knowledge(
+                    title=f"Concentration Action: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=rec["from_agent"], category="agent_intelligence",
+                    content=rec["reasoning"], key_rules=json.dumps(data),
+                )
+
+            elif action in ("re_evaluate", "re_evaluate_disabled"):
+                # Actually queue the strategy for backtest instead of just logging
+                if target and target in STRATEGY_ENABLED:
+                    try:
+                        from trading.db.store import insert_backtest_result
+                        # Clear cooldown by marking last backtest as stale
+                        # The backtest agent will pick it up next cycle
+                        log.info("RE-EVALUATE: Clearing backtest cooldown for '%s'", target)
+                        # Force it into the backtest queue by inserting a stale placeholder
+                        insert_backtest_result(
+                            strategy=target,
+                            days=0,
+                            metrics={"triggered_by": "re_evaluate", "stale": True},
+                            verdict="needs_retest",
+                        )
+                        result = f"Re-evaluation queued: '{target}' added to backtest queue"
+                    except Exception as e:
+                        result = f"Re-evaluation queue failed: {e}"
+                else:
+                    result = f"Re-evaluation: target '{target}' not found in strategy registry"
+                insert_knowledge(
+                    title=f"Re-evaluation Queued: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=rec["from_agent"], category="agent_intelligence",
+                    content=rec["reasoning"], key_rules=json.dumps(data),
+                )
+
+            elif action == "underinvestment_alert":
+                # Try to re-enable strategies that passed backtest but are disabled
+                try:
+                    enabled_count = 0
+                    for strat, is_enabled in STRATEGY_ENABLED.items():
+                        if is_enabled:
+                            continue
+                        # Check if it has a passing backtest
+                        last_bt = get_last_backtest(strat)
+                        if last_bt and last_bt.get("verdict") == "adopt":
+                            STRATEGY_ENABLED[strat] = True
+                            enabled_count += 1
+                            log.info("UNDERINVESTMENT: Re-enabled '%s' (passed backtest)", strat)
+                            if enabled_count >= 2:
+                                break  # Don't re-enable too many at once
+                    if enabled_count:
+                        result = f"Underinvestment: re-enabled {enabled_count} backtest-approved strategies"
+                    else:
+                        result = "Underinvestment: no backtest-approved disabled strategies to re-enable"
+                except Exception as e:
+                    result = f"Underinvestment re-enable failed: {e}"
+                insert_knowledge(
+                    title=f"Underinvestment Action — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=rec["from_agent"], category="agent_intelligence",
+                    content=rec["reasoning"], key_rules=json.dumps(data),
+                )
+
+            elif action in ("research_finding", "performance_alert"):
+                # Genuinely informational — log to knowledge base
                 insert_knowledge(
                     title=f"Agent {rec['from_agent']}: {action} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
-                    source=rec["from_agent"],
-                    category="agent_intelligence",
-                    content=rec["reasoning"],
-                    key_rules=json.dumps(data),
+                    source=rec["from_agent"], category="agent_intelligence",
+                    content=rec["reasoning"], key_rules=json.dumps(data),
                 )
                 result = f"Agent intelligence logged: {action}"
                 log.info("AGENT INTELLIGENCE: [%s] %s — %s", rec["from_agent"], action, rec["reasoning"][:100])
 
             elif action == "implement_strategy":
-                # Research agent wants a new strategy built — log to knowledge base as deferred
-                insert_knowledge(
-                    title=f"Strategy Implementation Request: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
-                    source=f"agent_{rec.get('from_agent', 'unknown')}",
-                    category="deferred_implementation",
-                    content=rec["reasoning"],
-                    key_rules=json.dumps(data),
-                )
-                result = f"Strategy implementation '{target}' logged to knowledge base (deferred)"
-                log.info("DEFERRED IMPLEMENTATION: %s — %s", target, rec["reasoning"][:100])
+                # Build the strategy immediately instead of deferring
+                built = False
+                try:
+                    from trading.intelligence.strategy_builder import generate_strategy_code
+                    spec = {
+                        "name": target,
+                        "category": data.get("category", "trend_following"),
+                        "description": rec["reasoning"],
+                        "data_needed": data.get("data_needed", []),
+                        "priority": data.get("priority", 5),
+                    }
+                    gen = generate_strategy_code(spec)
+                    if gen and gen.get("file"):
+                        built = True
+                        result = f"Strategy '{target}' built → {gen['file']} (disabled, awaiting backtest)"
+                        log.info("STRATEGY BUILT: %s → %s", target, gen["file"])
+                except Exception as e:
+                    log.warning("Strategy build failed for '%s': %s", target, e)
+
+                if not built:
+                    # Fall back to deferred if build fails
+                    insert_knowledge(
+                        title=f"Strategy Implementation Request: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                        source=f"agent_{rec.get('from_agent', 'unknown')}",
+                        category="deferred_implementation",
+                        content=rec["reasoning"], key_rules=json.dumps(data),
+                    )
+                    result = f"Strategy build failed for '{target}', deferred to knowledge base"
 
             elif action == "coverage_gap":
-                # Research agent identified a category with zero coverage — acknowledge
+                # Log the gap AND trigger the research agent to find implementations
                 insert_knowledge(
-                    title=f"Coverage Gap Acknowledged: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    title=f"Coverage Gap: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
                     source=f"agent_{rec.get('from_agent', 'unknown')}",
                     category="coverage_gap",
-                    content=rec["reasoning"],
-                    key_rules=json.dumps(data),
+                    content=rec["reasoning"], key_rules=json.dumps(data),
                 )
+                # Try to find and build a strategy for this gap category
+                try:
+                    from trading.intelligence.strategy_researcher import analyze_gaps
+                    from trading.intelligence.strategy_builder import generate_strategy_code
+                    analysis = analyze_gaps()
+                    # Find top candidate matching this gap category
+                    candidates = [
+                        s for s in analysis.implementation_queue
+                        if s.category == target
+                    ]
+                    if candidates:
+                        top = candidates[0]
+                        spec = {
+                            "name": top.name,
+                            "category": top.category,
+                            "description": getattr(top, "description", rec["reasoning"]),
+                            "data_needed": top.data_needed,
+                            "priority": top.priority,
+                        }
+                        gen = generate_strategy_code(spec)
+                        if gen and gen.get("file"):
+                            result = f"Coverage gap '{target}': built '{top.name}' → {gen['file']}"
+                            log.info("COVERAGE GAP FILLED: %s → %s", target, gen["file"])
+                        else:
+                            result = f"Coverage gap '{target}': found candidate '{top.name}' but build failed"
+                    else:
+                        result = f"Coverage gap '{target}' logged — no implementation candidates found"
+                except Exception as e:
+                    result = f"Coverage gap '{target}' logged — auto-fill failed: {e}"
                 result = f"Coverage gap '{target}' acknowledged and logged to knowledge base"
                 log.info("COVERAGE GAP: %s — %s", target, rec["reasoning"][:100])
 
@@ -1036,6 +1312,19 @@ def run_autonomous_cycle() -> dict:
 
     all_recommendations = []
     agent_results = {}
+
+    # --- Phase 0: Verify previous cycle's actions took effect ---
+    try:
+        followups = _verify_previous_actions()
+        if followups:
+            all_recommendations.extend(followups)
+            agent_results["verification"] = f"{len(followups)} follow-ups"
+            log.warning("VERIFY: %d actions from last cycle need re-application", len(followups))
+        else:
+            agent_results["verification"] = "all clear"
+    except Exception as e:
+        log.error("Verification phase failed: %s", e)
+        agent_results["verification"] = f"error: {e}"
 
     # --- Each agent thinks ---
     agents = [
