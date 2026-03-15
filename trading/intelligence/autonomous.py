@@ -36,7 +36,8 @@ from trading.db.store import (
     get_trades, get_daily_pnl, get_positions, log_action,
     insert_recommendation, get_pending_recommendations,
     resolve_recommendation, get_recommendation_history,
-    insert_knowledge,
+    insert_knowledge, insert_backtest_result, get_last_backtest,
+    get_strategies_needing_backtest,
 )
 
 log = logging.getLogger(__name__)
@@ -57,12 +58,24 @@ DRAWDOWN_HALT_THRESHOLD = 0.18      # Emergency halt at 18% drawdown
 REALLOCATION_INTERVAL_HOURS = 24    # Rebalance allocations daily
 PERFORMANCE_REVIEW_TRADES = 50      # Look at last 50 trades per strategy
 
+# Backtest-before-adopt thresholds
+BACKTEST_ADOPT_WIN_RATE = 0.60       # Auto-enable if win rate >= 60%
+BACKTEST_ADOPT_SHARPE = 0.3          # Minimum Sharpe to adopt
+BACKTEST_ADOPT_MAX_DD = 0.20         # Max drawdown to still adopt
+BACKTEST_DISCARD_WIN_RATE = 0.30     # Discard if win rate < 30%
+BACKTEST_DISCARD_MAX_DD = 0.30       # Discard if drawdown > 30%
+BACKTEST_MIN_TRADES = 5              # Need at least 5 trades to judge
+BACKTEST_LOOKBACK_DAYS = 365         # Test against past year of data
+BACKTEST_COOLDOWN_DAYS = 7           # Don't re-test within 7 days
+BACKTEST_MAX_PER_CYCLE = 3           # Max backtests per autonomous cycle
+
 # Agent identifiers
 PERF_AGENT = "performance_agent"
 RESEARCH_AGENT = "research_agent"
 RISK_AGENT = "risk_agent"
 REGIME_AGENT = "regime_agent"
 LEARNING_AGENT = "learning_agent"
+BACKTEST_AGENT = "backtest_agent"
 EXECUTOR_AGENT = "executor_agent"
 
 
@@ -526,6 +539,192 @@ def _learning_agent_think() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Backtest Agent — validates strategies against historical data before adopt
+# ---------------------------------------------------------------------------
+
+def _backtest_agent_think() -> list[dict]:
+    """Backtest agent runs strategies against a year of historical data.
+
+    Scans for strategies needing validation:
+    1. Disabled strategies that haven't been tested recently
+    2. Newly enabled strategies with < 5 live trades
+    3. All strategies past their cooldown period
+
+    Runs up to BACKTEST_MAX_PER_CYCLE backtests per cycle.
+    """
+    recommendations = []
+
+    # Get strategies due for backtesting
+    candidates = get_strategies_needing_backtest(cooldown_days=BACKTEST_COOLDOWN_DAYS)
+    if not candidates:
+        return recommendations
+
+    # Prioritize: disabled strategies first (re-evaluation), then enabled with few trades
+    all_trades = get_trades(limit=1000)
+    trades_by_strat = {}
+    for t in all_trades:
+        strat = t.get("strategy", "unknown")
+        trades_by_strat.setdefault(strat, []).append(t)
+
+    disabled = [s for s in candidates if not STRATEGY_ENABLED.get(s, False)]
+    undertested = [
+        s for s in candidates
+        if STRATEGY_ENABLED.get(s, False)
+        and len(trades_by_strat.get(s, [])) < 5
+    ]
+    rest = [s for s in candidates if s not in disabled and s not in undertested]
+
+    # Order: disabled first, then undertested, then the rest
+    ordered = disabled + undertested + rest
+
+    # Get current portfolio value for starting capital
+    daily = get_daily_pnl(limit=1)
+    starting_capital = daily[0]["portfolio_value"] if daily else 1000.0
+
+    tested = 0
+    for strategy_name in ordered:
+        if tested >= BACKTEST_MAX_PER_CYCLE:
+            break
+
+        try:
+            from trading.backtest.engine import Backtester, _fetch_historical_data
+            from trading.strategy.registry import get_strategy
+
+            # Verify strategy exists
+            if get_strategy(strategy_name) is None:
+                continue
+
+            log.info("BACKTEST: Running %d-day backtest for '%s'", BACKTEST_LOOKBACK_DAYS, strategy_name)
+
+            historical_data = _fetch_historical_data(strategy_name, BACKTEST_LOOKBACK_DAYS)
+
+            end_date = datetime.now(timezone.utc).date() - timedelta(days=1)
+            start_date = end_date - timedelta(days=BACKTEST_LOOKBACK_DAYS)
+
+            backtester = Backtester(
+                starting_capital=starting_capital,
+                commission_pct=0.001,
+            )
+            result = backtester.run(
+                strategy_name=strategy_name,
+                historical_data=historical_data,
+                start_date=str(start_date),
+                end_date=str(end_date),
+            )
+
+            m = result.metrics
+            win_rate = m.get("win_rate", 0)
+            sharpe = m.get("sharpe_ratio", 0)
+            max_dd = m.get("max_drawdown", 0)
+            total_trades = m.get("total_trades", 0)
+
+            # Evaluate against thresholds
+            if total_trades < BACKTEST_MIN_TRADES:
+                verdict = "inconclusive"
+                reasoning = (
+                    f"Backtest of '{strategy_name}' over {BACKTEST_LOOKBACK_DAYS} days "
+                    f"produced only {total_trades} trades (min {BACKTEST_MIN_TRADES}). "
+                    f"Insufficient data to judge — deferring."
+                )
+            elif (win_rate >= BACKTEST_ADOPT_WIN_RATE
+                  and sharpe >= BACKTEST_ADOPT_SHARPE
+                  and max_dd <= BACKTEST_ADOPT_MAX_DD):
+                verdict = "adopt"
+                reasoning = (
+                    f"Backtest PASSED for '{strategy_name}': "
+                    f"win_rate={win_rate*100:.0f}% (≥{BACKTEST_ADOPT_WIN_RATE*100:.0f}%), "
+                    f"Sharpe={sharpe:.2f} (≥{BACKTEST_ADOPT_SHARPE}), "
+                    f"max_dd={max_dd*100:.1f}% (≤{BACKTEST_ADOPT_MAX_DD*100:.0f}%), "
+                    f"{total_trades} trades over {BACKTEST_LOOKBACK_DAYS} days. "
+                    f"Recommending auto-enable."
+                )
+            elif (win_rate < BACKTEST_DISCARD_WIN_RATE
+                  or max_dd > BACKTEST_DISCARD_MAX_DD):
+                verdict = "discard"
+                reasoning = (
+                    f"Backtest FAILED for '{strategy_name}': "
+                    f"win_rate={win_rate*100:.0f}%, Sharpe={sharpe:.2f}, "
+                    f"max_dd={max_dd*100:.1f}%, {total_trades} trades. "
+                    f"Below adoption thresholds — keeping disabled."
+                )
+            else:
+                verdict = "inconclusive"
+                reasoning = (
+                    f"Backtest MIXED for '{strategy_name}': "
+                    f"win_rate={win_rate*100:.0f}%, Sharpe={sharpe:.2f}, "
+                    f"max_dd={max_dd*100:.1f}%, {total_trades} trades. "
+                    f"Does not clearly pass or fail — deferring for review."
+                )
+
+            # Record result in DB
+            insert_backtest_result(strategy_name, BACKTEST_LOOKBACK_DAYS, m, verdict)
+
+            # Emit recommendation based on verdict
+            if verdict == "adopt":
+                recommendations.append({
+                    "from_agent": BACKTEST_AGENT,
+                    "to_agent": EXECUTOR_AGENT,
+                    "category": "enable_strategy",
+                    "action": "backtest_adopt",
+                    "target": strategy_name,
+                    "reasoning": reasoning,
+                    "data": {
+                        "win_rate": round(win_rate, 3),
+                        "sharpe": round(sharpe, 4),
+                        "max_drawdown": round(max_dd, 4),
+                        "total_trades": total_trades,
+                        "total_pnl": round(m.get("total_pnl", 0), 2),
+                        "lookback_days": BACKTEST_LOOKBACK_DAYS,
+                        "auto_approve": True,
+                    },
+                })
+            elif verdict == "discard":
+                recommendations.append({
+                    "from_agent": BACKTEST_AGENT,
+                    "to_agent": EXECUTOR_AGENT,
+                    "category": "disable_strategy",
+                    "action": "backtest_discard",
+                    "target": strategy_name,
+                    "reasoning": reasoning,
+                    "data": {
+                        "win_rate": round(win_rate, 3),
+                        "sharpe": round(sharpe, 4),
+                        "max_drawdown": round(max_dd, 4),
+                        "total_trades": total_trades,
+                        "lookback_days": BACKTEST_LOOKBACK_DAYS,
+                        "auto_approve": True,
+                    },
+                })
+            else:
+                recommendations.append({
+                    "from_agent": BACKTEST_AGENT,
+                    "to_agent": LEARNING_AGENT,
+                    "category": "research_finding",
+                    "action": "backtest_inconclusive",
+                    "target": strategy_name,
+                    "reasoning": reasoning,
+                    "data": {
+                        "win_rate": round(win_rate, 3),
+                        "sharpe": round(sharpe, 4),
+                        "max_drawdown": round(max_dd, 4),
+                        "total_trades": total_trades,
+                        "lookback_days": BACKTEST_LOOKBACK_DAYS,
+                        "auto_approve": True,
+                    },
+                })
+
+            tested += 1
+            log.info("BACKTEST: '%s' verdict=%s (win=%.0f%%, sharpe=%.2f, dd=%.1f%%)",
+                     strategy_name, verdict, win_rate * 100, sharpe, max_dd * 100)
+
+        except Exception as e:
+            log.warning("BACKTEST: Failed for '%s': %s", strategy_name, e)
+            continue
+
+    return recommendations
+
+
+# ---------------------------------------------------------------------------
 # Executor — applies safe recommendations automatically
 # ---------------------------------------------------------------------------
 
@@ -615,6 +814,32 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     key_rules=json.dumps(data),
                 )
                 result = "Meta-analysis saved to knowledge base"
+
+            elif action == "backtest_adopt" and target in STRATEGY_ENABLED:
+                STRATEGY_ENABLED[target] = True
+                result = (
+                    f"Backtest-adopted strategy '{target}' — "
+                    f"win_rate={data.get('win_rate', 0)*100:.0f}%, "
+                    f"sharpe={data.get('sharpe', 0):.2f}"
+                )
+                log.info("BACKTEST-ADOPT: %s — %s", target, rec["reasoning"][:100])
+
+            elif action == "backtest_discard":
+                if target in STRATEGY_ENABLED:
+                    STRATEGY_ENABLED[target] = False
+                insert_knowledge(
+                    title=f"Backtest Discard: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source="backtest_agent",
+                    category="backtest_discard",
+                    content=rec["reasoning"],
+                    key_rules=json.dumps(data),
+                )
+                result = (
+                    f"Backtest-discarded strategy '{target}' — "
+                    f"win_rate={data.get('win_rate', 0)*100:.0f}%, "
+                    f"sharpe={data.get('sharpe', 0):.2f}"
+                )
+                log.info("BACKTEST-DISCARD: %s — %s", target, rec["reasoning"][:100])
 
             elif action == "enable_strategy" and target in STRATEGY_ENABLED:
                 STRATEGY_ENABLED[target] = True
@@ -773,6 +998,7 @@ def run_autonomous_cycle() -> dict:
         ("regime", _regime_agent_think),
         ("research", _research_agent_think),
         ("learning", _learning_agent_think),
+        ("backtest", _backtest_agent_think),
     ]
 
     for agent_name, think_fn in agents:

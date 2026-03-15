@@ -9,7 +9,7 @@ from pathlib import Path
 
 from flask import Flask, render_template, jsonify, request
 
-from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH
+from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TIMEZONE
 from trading.db.store import (
     init_db, get_db, get_trades, get_positions, get_daily_pnl,
     get_signals, get_action_log, get_action_log_summary,
@@ -30,6 +30,15 @@ _START_TIME = time.monotonic()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _display_now() -> str:
+    """Current time formatted in the user's display timezone."""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(DISPLAY_TIMEZONE)
+        return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def _safe_account():
     """Get account info without crashing the dashboard."""
@@ -107,7 +116,7 @@ def dashboard():
         mode="PAPER" if get_setting("trading_mode", TRADING_MODE) == "paper" else "LIVE",
         risk=RISK,
         sparkline_data=sparkline_data,
-        now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        now=_display_now(),
     )
 
 
@@ -753,7 +762,8 @@ def api_recommendation_detail(rec_id):
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
-    """Chat assistant endpoint — answers questions about the trading system."""
+    """Chat assistant endpoint — operator console first, then read-only fallback."""
+    from trading.monitor.operator import handle_operator_message
     from trading.monitor.chat import handle_chat
 
     data = request.get_json(silent=True) or {}
@@ -762,11 +772,34 @@ def api_chat():
         return jsonify({"error": "No message provided"}), 400
 
     try:
+        # Try operator console first (actions + enhanced reads)
+        result = handle_operator_message(message)
+        if result is not None:
+            return jsonify(result)
+        # Fall through to read-only chat
         answer = handle_chat(message)
         return jsonify({"answer": answer})
     except Exception as exc:
         log.exception("Chat handler error")
         return jsonify({"answer": f"Sorry, I encountered an error: {exc}"}), 200
+
+
+@app.route("/api/chat/confirm", methods=["POST"])
+def api_chat_confirm():
+    """Confirm a pending operator action."""
+    from trading.monitor.operator import handle_operator_message
+
+    data = request.get_json(silent=True) or {}
+    action_id = data.get("action_id", "").strip()
+    if not action_id:
+        return jsonify({"error": "No action_id provided"}), 400
+
+    try:
+        result = handle_operator_message("", confirmed_action_id=action_id)
+        return jsonify(result)
+    except Exception as exc:
+        log.exception("Operator confirm error")
+        return jsonify({"answer": f"Action failed: {exc}"}), 200
 
 
 @app.route("/api/mode", methods=["GET", "POST"])

@@ -29,6 +29,10 @@ FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 # --- Trading Mode ---
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
 
+# --- Timezone ---
+# Display timezone for dashboard and logs (internal storage stays UTC)
+DISPLAY_TIMEZONE = os.getenv("DISPLAY_TIMEZONE", "Africa/Lagos")  # WAT (UTC+1)
+
 # --- Initial Capital ---
 # In paper mode, default to PAPER_BALANCE; in live mode, use funded amount
 PAPER_BALANCE = float(os.getenv("PAPER_BALANCE", "1000"))

@@ -38,6 +38,66 @@ from trading.db.store import (
 log = logging.getLogger(__name__)
 console = Console()
 
+
+# ---------------------------------------------------------------------------
+# Pre-trade narration — human-readable story of why a trade is happening
+# ---------------------------------------------------------------------------
+
+def _narrate_trade(signal, order_value, portfolio_value, risk_check, context, stop_loss_price=None):
+    """Build a human-readable pre-trade narration.
+
+    Combines signal data, market context, risk parameters, and position sizing
+    into a narrative that explains *why* this trade is being taken.
+    """
+    lines = []
+    sym = signal.symbol
+    action = signal.action.upper()
+    strength = signal.strength
+
+    # --- Opening: what we're doing ---
+    pct_of_portfolio = (order_value / portfolio_value * 100) if portfolio_value > 0 else 0
+    lines.append(
+        f"{action} {sym} — ${order_value:.2f} "
+        f"({pct_of_portfolio:.1f}% of portfolio)"
+    )
+
+    # --- Signal source ---
+    contributing = (signal.data or {}).get("contributing_strategies", [])
+    if contributing:
+        lines.append(
+            f"Signal consensus from {len(contributing)} strategies: "
+            f"{', '.join(contributing)} (combined strength: {strength:.2f})"
+        )
+    else:
+        lines.append(
+            f"Signal from {signal.strategy} (strength: {strength:.2f})"
+        )
+
+    # --- Signal rationale ---
+    if signal.reason:
+        lines.append(f"Rationale: {signal.reason}")
+
+    # --- Market context (from strategy) ---
+    if context:
+        ctx_parts = []
+        for k, v in list(context.items())[:6]:
+            if isinstance(v, float):
+                ctx_parts.append(f"{k}={v:.4f}")
+            elif isinstance(v, (int, str)):
+                ctx_parts.append(f"{k}={v}")
+        if ctx_parts:
+            lines.append(f"Market context: {', '.join(ctx_parts)}")
+
+    # --- Risk & sizing ---
+    if stop_loss_price and stop_loss_price > 0:
+        lines.append(f"Stop loss set at ${stop_loss_price:.2f}")
+
+    if risk_check and hasattr(risk_check, 'reason') and risk_check.reason:
+        lines.append(f"Risk check: {risk_check.reason}")
+
+    return " | ".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Persistent tracker -- created once, lives for the daemon's lifetime
 # ---------------------------------------------------------------------------
@@ -114,6 +174,11 @@ def run_trading_cycle():
     if db_mode and db_mode != _cfg.TRADING_MODE:
         log.info("Trading mode synced from DB: %s → %s", _cfg.TRADING_MODE, db_mode)
         _cfg.TRADING_MODE = db_mode
+
+    # Apply operator overrides (strategy enable/disable, risk params)
+    from trading.monitor.operator_hooks import apply_strategy_overrides, apply_risk_overrides
+    apply_strategy_overrides()
+    apply_risk_overrides()
 
     log_action("strategy_run", "cycle_start", details=f"Mode: {_cfg.TRADING_MODE}")
     log.info("Trading cycle started")
@@ -378,6 +443,27 @@ def run_trading_cycle():
             except Exception as e:
                 log.debug("Could not compute trade targets for %s: %s", signal.symbol, e)
 
+            # Pre-trade narration
+            contributing = (signal.data or {}).get("contributing_strategies", [])
+            ctx = contexts.get(contributing[0], {}) if contributing else {}
+            narration = _narrate_trade(
+                signal, order_value, portfolio_value, risk_check, ctx, stop_loss_price
+            )
+            log.info("PRE-TRADE: %s", narration)
+            console.print(f"  [bold cyan]>> {narration}[/bold cyan]")
+            log_action(
+                "trade", "pre_trade_narration",
+                symbol=signal.symbol,
+                details=narration,
+                data={
+                    "action": signal.action,
+                    "order_value": order_value,
+                    "strength": signal.strength,
+                    "strategy": signal.strategy,
+                    "contributing": contributing,
+                },
+            )
+
             # Execute (with error handling for insufficient funds, etc.)
             try:
                 order = _execute_order(signal.symbol, signal.action, notional=order_value,
@@ -414,10 +500,6 @@ def run_trading_cycle():
                 qty_f = float(filled_qty) if filled_qty else 0
                 price_f = float(filled_price) if filled_price else 0
 
-                # Find the context from the contributing strategy
-                contributing = (signal.data or {}).get("contributing_strategies", [])
-                context = contexts.get(contributing[0], {}) if contributing else {}
-
                 trade_id = insert_trade(
                     symbol=signal.symbol,
                     side=signal.action,
@@ -428,7 +510,7 @@ def run_trading_cycle():
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
                 )
-                create_journal_entry(trade_id, signal, context)
+                create_journal_entry(trade_id, signal, ctx, narration=narration)
                 executed_count += 1
                 log_action(
                     "trade", signal.action,
@@ -573,6 +655,15 @@ def run_trading_cycle():
         except Exception as e:
             log.warning("Autonomous cycle failed (non-fatal): %s", e)
             console.print(f"[yellow]Autonomous cycle skipped: {e}[/yellow]")
+
+        # ---------------------------------------------------------------
+        # Phase 8: Check operator alerts
+        # ---------------------------------------------------------------
+        try:
+            from trading.monitor.operator_hooks import check_alerts
+            check_alerts()
+        except Exception as e:
+            log.warning("Alert check failed (non-fatal): %s", e)
 
     except Exception as e:
         log_action("error", "cycle_crash", details=str(e))

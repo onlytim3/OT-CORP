@@ -178,6 +178,20 @@ def init_db():
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS backtest_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy TEXT NOT NULL,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                days INTEGER,
+                sharpe REAL,
+                win_rate REAL,
+                max_drawdown REAL,
+                total_return REAL,
+                total_trades INTEGER,
+                verdict TEXT,
+                data TEXT
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -233,6 +247,9 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_reviews_period ON reviews(period);
             CREATE INDEX IF NOT EXISTS idx_reviews_end_date ON reviews(end_date);
+
+            CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_results(strategy);
+            CREATE INDEX IF NOT EXISTS idx_backtest_timestamp ON backtest_results(timestamp);
         """)
 
 
@@ -660,3 +677,51 @@ def get_recommendation_history(limit: int = 50) -> list:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Backtest Results ---
+
+def insert_backtest_result(strategy: str, days: int, metrics: dict, verdict: str) -> int:
+    """Record a backtest result for a strategy."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO backtest_results "
+            "(strategy, timestamp, days, sharpe, win_rate, max_drawdown, total_return, total_trades, verdict, data) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (strategy, _now(), days,
+             metrics.get("sharpe_ratio", 0),
+             metrics.get("win_rate", 0),
+             metrics.get("max_drawdown", 0),
+             metrics.get("total_pnl", 0),
+             metrics.get("total_trades", 0),
+             verdict,
+             json.dumps(metrics)),
+        )
+        return cur.lastrowid
+
+
+def get_last_backtest(strategy: str) -> dict | None:
+    """Get the most recent backtest result for a strategy."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM backtest_results WHERE strategy=? ORDER BY timestamp DESC LIMIT 1",
+            (strategy,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_strategies_needing_backtest(cooldown_days: int = 7) -> list[str]:
+    """Get strategies that haven't been backtested within the cooldown period."""
+    from trading.config import STRATEGY_ENABLED
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=cooldown_days)).isoformat()
+    with get_db() as conn:
+        # Get strategies with recent backtests
+        rows = conn.execute(
+            "SELECT DISTINCT strategy FROM backtest_results WHERE timestamp > ?",
+            (cutoff,),
+        ).fetchall()
+        recently_tested = {r["strategy"] for r in rows}
+
+    # All known strategies minus recently tested ones
+    return [s for s in STRATEGY_ENABLED if s not in recently_tested]

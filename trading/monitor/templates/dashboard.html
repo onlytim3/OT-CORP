@@ -1562,6 +1562,8 @@ th.text-right, td.text-right {
         <button class="chat-chip" onclick="chatChip('Active signals')">Signals</button>
         <button class="chat-chip" onclick="chatChip('Strategy overview')">Strategies</button>
         <button class="chat-chip" onclick="chatChip('Risk exposure')">Risk</button>
+        <button class="chat-chip" onclick="chatChip('Give me a briefing')" style="border-color:var(--accent);color:var(--accent);">Briefing</button>
+        <button class="chat-chip" onclick="chatChip('Run a cycle now')" style="border-color:var(--orange);color:var(--orange);">&#9889; Run Cycle</button>
     </div>
     <div class="chat-input-area">
         <input class="chat-input" id="chatInput" type="text" placeholder="Ask about your portfolio..." autocomplete="off">
@@ -2364,7 +2366,11 @@ function sendChat() {
     .then(r => r.json())
     .then(data => {
         removeTyping(typingId);
-        appendMessage('bot', data.answer || data.error || 'No response');
+        if (data.confirm) {
+            appendConfirmation(data.answer, data.confirm);
+        } else {
+            appendMessage('bot', data.answer || data.error || 'No response');
+        }
         chatSend.disabled = false;
     })
     .catch(err => {
@@ -2372,6 +2378,66 @@ function sendChat() {
         appendMessage('bot', 'Connection error: ' + err);
         chatSend.disabled = false;
     });
+}
+
+function appendConfirmation(answer, confirm) {
+    const div = document.createElement('div');
+    div.className = 'chat-msg chat-msg-bot';
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble';
+    bubble.innerHTML = formatMarkdown(answer);
+
+    // Warning badge
+    if (confirm.warning) {
+        const warn = document.createElement('div');
+        warn.style.cssText = 'margin-top:8px;padding:6px 10px;border-radius:8px;background:rgba(255,149,0,0.15);color:var(--orange);font-size:12px;';
+        warn.textContent = '\u26a0\ufe0f ' + confirm.warning;
+        bubble.appendChild(warn);
+    }
+
+    // Buttons
+    const btnWrap = document.createElement('div');
+    btnWrap.style.cssText = 'margin-top:10px;display:flex;gap:8px;';
+    const btnConfirm = document.createElement('button');
+    btnConfirm.textContent = 'Confirm';
+    btnConfirm.style.cssText = 'padding:6px 16px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:13px;cursor:pointer;font-weight:600;';
+    const btnCancel = document.createElement('button');
+    btnCancel.textContent = 'Cancel';
+    btnCancel.style.cssText = 'padding:6px 16px;border-radius:8px;border:1px solid var(--separator);background:transparent;color:var(--text-secondary);font-size:13px;cursor:pointer;';
+
+    btnConfirm.onclick = function() {
+        btnConfirm.disabled = true;
+        btnCancel.disabled = true;
+        btnConfirm.textContent = 'Executing...';
+        fetch('/api/chat/confirm', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action_id: confirm.action_id}),
+        })
+        .then(r => r.json())
+        .then(data => {
+            btnConfirm.textContent = '\u2713 Done';
+            btnConfirm.style.background = 'var(--green)';
+            appendMessage('bot', data.answer || 'Action completed.');
+        })
+        .catch(err => {
+            btnConfirm.textContent = 'Failed';
+            btnConfirm.style.background = 'var(--red)';
+            appendMessage('bot', 'Confirmation failed: ' + err);
+        });
+    };
+
+    btnCancel.onclick = function() {
+        btnWrap.innerHTML = '<span style="color:var(--text-tertiary);font-size:12px;">Cancelled</span>';
+        appendMessage('bot', 'Action cancelled. No changes made.');
+    };
+
+    btnWrap.appendChild(btnConfirm);
+    btnWrap.appendChild(btnCancel);
+    bubble.appendChild(btnWrap);
+    div.appendChild(bubble);
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 function appendMessage(role, text) {

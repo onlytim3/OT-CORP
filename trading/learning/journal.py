@@ -9,17 +9,23 @@ from trading.db.store import insert_journal, update_journal_outcome, get_journal
 from trading.strategy.base import Signal
 
 
-def create_journal_entry(trade_id: int, signal: Signal, market_context: dict) -> int:
+def create_journal_entry(trade_id: int, signal: Signal, market_context: dict,
+                         narration: str = "") -> int:
     """Create a journal entry when a trade is executed.
 
     Args:
         trade_id: The database ID of the trade
         signal: The signal that triggered the trade
         market_context: Current market conditions from the strategy
+        narration: Human-readable pre-trade narration explaining the trade
 
     Returns the journal entry ID.
     """
-    rationale = signal.reason
+    # Combine narration with signal reason for a complete rationale
+    if narration:
+        rationale = f"{narration}\n\n---\nSignal reason: {signal.reason}"
+    else:
+        rationale = signal.reason
     tags = ",".join(filter(None, [signal.strategy, signal.symbol.replace("/", "-")]))
 
     insert_journal(
