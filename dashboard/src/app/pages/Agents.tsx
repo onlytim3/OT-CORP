@@ -151,33 +151,38 @@ export function Agents() {
             <p className="text-[#888888] text-center py-8">No recent recommendations</p>
           ) : (
             <div className="space-y-3">
-              {recent.map((rec) => (
-                <div key={rec.id} onClick={() => setSelectedRec(rec)}
-                  className="p-4 border border-white/10 rounded-lg hover:border-white/20 hover:bg-white/5 transition-colors cursor-pointer">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      {rec.status === 'accepted' ? (
-                        <CheckCircle2 className="size-5 text-[#00d4aa]" />
-                      ) : rec.status === 'rejected' ? (
-                        <XCircle className="size-5 text-[#ff4466]" />
-                      ) : (
-                        <Clock className="size-5 text-[#ffa500]" />
-                      )}
-                      <div>
-                        <p className="font-medium text-[#e8e8e8]">{rec.action}</p>
-                        <p className="text-xs text-[#888888]">{rec.from_agent} → {rec.target}</p>
+              {recent.map((rec) => {
+                const resolved = rec.resolution || rec.status;
+                const isApplied = resolved === 'applied' || resolved === 'accepted';
+                const isRejected = resolved === 'rejected';
+                return (
+                  <div key={rec.id} onClick={() => setSelectedRec(rec)}
+                    className="p-4 border border-white/10 rounded-lg hover:border-white/20 hover:bg-white/5 transition-colors cursor-pointer">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        {isApplied ? (
+                          <CheckCircle2 className="size-5 text-[#00d4aa]" />
+                        ) : isRejected ? (
+                          <XCircle className="size-5 text-[#ff4466]" />
+                        ) : (
+                          <Clock className="size-5 text-[#ffa500]" />
+                        )}
+                        <div>
+                          <p className="font-medium text-[#e8e8e8]">{rec.action}</p>
+                          <p className="text-xs text-[#888888]">{rec.from_agent} → {rec.target}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <Badge variant={isApplied ? 'default' : isRejected ? 'destructive' : 'secondary'}>
+                          {isApplied ? 'applied' : resolved}
+                        </Badge>
+                        <p className="text-xs text-[#888888] mt-1">{new Date(rec.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <Badge variant={rec.status === 'accepted' ? 'default' : rec.status === 'rejected' ? 'destructive' : 'secondary'}>
-                        {rec.status}
-                      </Badge>
-                      <p className="text-xs text-[#888888] mt-1">{new Date(rec.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</p>
-                    </div>
+                    <p className="text-sm text-[#c0c0c0] ml-8 line-clamp-2">{rec.reasoning}</p>
                   </div>
-                  <p className="text-sm text-[#c0c0c0] ml-8 line-clamp-2">{rec.reasoning}</p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
@@ -234,9 +239,15 @@ export function Agents() {
                 </div>
                 <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
                   <p className="text-xs sm:text-sm text-[#888888] mb-1">Status</p>
-                  <Badge variant={selectedRec.status === 'accepted' ? 'default' : selectedRec.status === 'rejected' ? 'destructive' : 'secondary'}>
-                    {selectedRec.status}
-                  </Badge>
+                  {(() => {
+                    const res = selectedRec.resolution || selectedRec.status;
+                    const applied = res === 'applied' || res === 'accepted';
+                    return (
+                      <Badge variant={applied ? 'default' : res === 'rejected' ? 'destructive' : 'secondary'}>
+                        {applied ? 'applied' : res}
+                      </Badge>
+                    );
+                  })()}
                 </div>
                 <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
                   <p className="text-xs sm:text-sm text-[#888888] mb-1">Time</p>

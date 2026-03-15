@@ -127,6 +127,8 @@ export interface Recommendation {
   action: string;
   target: string;
   status: string;
+  resolution?: string;
+  outcome?: string;
   data: Record<string, unknown> | null;
   reasoning: string;
 }

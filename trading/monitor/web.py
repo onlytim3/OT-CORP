@@ -741,7 +741,17 @@ def api_agents():
     result = {"pending": [], "recent": [], "activity": [], "agent_stats": []}
 
     try:
+        import json as _json
         recs = get_recommendation_history(limit=100)
+
+        # Parse data field from JSON string if needed
+        for r in recs:
+            if r.get("data") and isinstance(r["data"], str):
+                try:
+                    r["data"] = _json.loads(r["data"])
+                except Exception:
+                    pass
+
         result["pending"] = [r for r in recs if r.get("status") == "pending"]
         result["recent"] = [r for r in recs if r.get("status") != "pending"][:10]
 
@@ -753,6 +763,9 @@ def api_agents():
         agent_stats = {}
         for r in recs:
             agent = r.get("from_agent", "unknown")
+            # Skip executor_agent from tiles — it's the executor, not a thinking agent
+            if agent == "executor_agent":
+                continue
             if agent not in agent_stats:
                 agent_stats[agent] = {
                     "name": agent,
@@ -766,11 +779,12 @@ def api_agents():
             s = agent_stats[agent]
             s["total"] += 1
             status = r.get("status", "pending")
+            resolution = r.get("resolution", "")
             if status == "pending":
                 s["pending"] += 1
-            elif status in ("applied", "accepted"):
+            elif resolution in ("applied", "accepted"):
                 s["applied"] += 1
-            elif status in ("rejected",):
+            elif resolution in ("rejected",):
                 s["rejected"] += 1
             cat = r.get("category", "other")
             s["categories"][cat] = s["categories"].get(cat, 0) + 1
