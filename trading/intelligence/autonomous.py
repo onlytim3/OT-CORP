@@ -1064,6 +1064,18 @@ def run_autonomous_cycle() -> dict:
     # --- Execute safe recommendations ---
     applied = _execute_safe_recommendations(all_recommendations)
 
+    # --- Strategy Builder: generate code for deferred implementations ---
+    try:
+        from trading.intelligence.strategy_builder import build_pending_strategies
+        built = build_pending_strategies()
+        if built:
+            agent_results["builder"] = len(built)
+            for b in built:
+                log.info("BUILDER: Generated strategy %s → %s", b["name"], b["file"])
+    except Exception as e:
+        log.error("Strategy builder failed: %s", e)
+        agent_results["builder"] = f"error: {e}"
+
     # --- Summary ---
     auto_count = sum(1 for r in all_recommendations if r.get("data", {}).get("auto_approve"))
     review_count = len(all_recommendations) - auto_count
