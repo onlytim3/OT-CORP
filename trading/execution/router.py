@@ -183,7 +183,7 @@ def get_positions_from_aster() -> list[dict]:
                 "avg_cost": entry_price,
                 "current_price": mark_price,
                 "market_value": qty * mark_price,
-                "unrealized_pl": unrealized,
+                "unrealized_pnl": unrealized,
                 "unrealized_plpc": (mark_price - entry_price) / entry_price if entry_price > 0 else 0,
                 "side": side,
                 "strategy": "",  # AsterDex doesn't track this; DB has it
@@ -932,7 +932,7 @@ def _paper_get_positions() -> list[dict]:
             "avg_cost": avg_cost,
             "current_price": mark_price,
             "market_value": qty * mark_price,
-            "unrealized_pl": unrealized,
+            "unrealized_pnl": unrealized,
             "unrealized_plpc": unrealized_pct,
             "side": side,
             "strategy": row.get("strategy", ""),
@@ -973,7 +973,7 @@ def _paper_get_account() -> dict:
     positions = _paper_get_positions()
 
     positions_value = sum(p["market_value"] for p in positions)
-    unrealized_pnl = sum(p["unrealized_pl"] for p in positions)
+    unrealized_pnl = sum(p["unrealized_pnl"] for p in positions)
     equity = cash + positions_value
 
     return {

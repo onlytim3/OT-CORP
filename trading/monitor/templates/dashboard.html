@@ -1353,6 +1353,7 @@ th.text-right, td.text-right {
                             <th>Symbol</th>
                             <th>Side</th>
                             <th class="text-right">Amount</th>
+                            <th class="text-right">P&L</th>
                             <th>Strategy</th>
                         </tr>
                     </thead>
@@ -1365,6 +1366,10 @@ th.text-right, td.text-right {
                                 {{ t.side|upper }}
                             </td>
                             <td class="text-right">${{ "%.2f"|format(t.total or 0) }}</td>
+                            {% set tpnl = t.pnl or 0 %}
+                            <td class="text-right {{ 'green' if tpnl > 0 else 'red' if tpnl < 0 else 'dim' }}">
+                                {% if tpnl != 0 %}${{ "%+.2f"|format(tpnl) }}{% else %}—{% endif %}
+                            </td>
                             <td class="dim">{{ t.strategy or '' }}</td>
                         </tr>
                         {% endfor %}

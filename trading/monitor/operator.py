@@ -543,7 +543,7 @@ def _intent_close_position(msg: str, lower: str) -> dict | None:
     qty = pos.get("qty", 0)
     price = pos.get("current_price", 0)
     value = pos.get("market_value", qty * price)
-    pnl = pos.get("unrealized_pl", 0)
+    pnl = pos.get("unrealized_pnl", 0)
     side = pos.get("side", "long")
 
     desc = (f"Close **{symbol}** {side} position\n"
@@ -939,7 +939,7 @@ def _read_briefing(msg: str, lower: str) -> dict:
         if positions:
             lines.append(f"\n**Open Positions** ({len(positions)}):")
             for p in positions:
-                pnl = p.get("unrealized_pl", 0)
+                pnl = p.get("unrealized_pnl", 0)
                 lines.append(f"- {p['symbol']}: {p.get('side','?')} {p.get('qty',0):.4f} "
                            f"@ ${p.get('current_price',0):,.2f} (P&L: ${pnl:+,.2f})")
         else:
@@ -1501,8 +1501,8 @@ def _read_position_detail(msg: str, lower: str) -> dict:
     lines.append(f"- Avg cost: ${pos.get('avg_cost', 0):,.2f}")
     lines.append(f"- Current price: ${pos.get('current_price', 0):,.2f}")
     lines.append(f"- Market value: ${pos.get('market_value', 0):,.2f}")
-    pnl = pos.get("unrealized_pl", 0)
-    pnl_pct = pos.get("unrealized_plpc", 0) * 100
+    pnl = pos.get("unrealized_pnl", 0)
+    pnl_pct = pos.get("unrealized_pnlpc", 0) * 100
     lines.append(f"- Unrealized P&L: ${pnl:+,.2f} ({pnl_pct:+.1f}%)")
 
     if pos.get("leverage", 1) > 1:
