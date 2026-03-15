@@ -471,6 +471,14 @@ th.text-right, td.text-right {
 .table-positions tbody tr {
     border-left: 3px solid transparent;
 }
+.table-positions tbody tr[data-pnl="positive"] {
+    border-left-color: var(--color-green);
+    background: rgba(48, 209, 88, 0.03);
+}
+.table-positions tbody tr[data-pnl="negative"] {
+    border-left-color: var(--color-red);
+    background: rgba(255, 69, 58, 0.03);
+}
 .table-positions tbody tr:hover {
     border-left-color: var(--color-blue);
 }
@@ -480,6 +488,153 @@ th.text-right, td.text-right {
 }
 .table-signals tbody tr[data-signal="sell"] {
     border-left: 3px solid var(--color-red);
+}
+
+/* Error alert banner */
+.alert-banner {
+    display: none;
+    padding: 12px 20px;
+    border-radius: var(--radius-card);
+    font-size: 13px;
+    font-weight: 500;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    animation: chatFadeIn 300ms ease-out;
+}
+.alert-banner.active { display: flex; }
+.alert-banner-error {
+    background: rgba(255, 69, 58, 0.12);
+    border: 1px solid rgba(255, 69, 58, 0.25);
+    color: var(--color-red);
+}
+.alert-banner-warning {
+    background: rgba(255, 149, 0, 0.12);
+    border: 1px solid rgba(255, 149, 0, 0.25);
+    color: var(--color-orange);
+}
+.alert-banner .alert-icon { font-size: 16px; flex-shrink: 0; }
+.alert-banner .alert-text { flex: 1; }
+.alert-banner .alert-dismiss {
+    background: none; border: none; color: inherit; cursor: pointer;
+    opacity: 0.6; font-size: 16px; padding: 4px;
+}
+.alert-banner .alert-dismiss:hover { opacity: 1; }
+
+/* Toast notifications */
+.toast-container {
+    position: fixed;
+    top: 70px;
+    right: 20px;
+    z-index: 1200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+.toast {
+    background: var(--bg-card);
+    border: 1px solid var(--separator);
+    border-radius: 12px;
+    padding: 10px 16px;
+    font-size: 13px;
+    box-shadow: var(--shadow-elevated);
+    animation: toastIn 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    pointer-events: auto;
+    max-width: 360px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.toast-trade { border-left: 3px solid var(--color-green); }
+.toast-error { border-left: 3px solid var(--color-red); }
+.toast-system { border-left: 3px solid var(--color-blue); }
+@keyframes toastIn {
+    from { opacity: 0; transform: translateX(40px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+@keyframes toastOut {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(40px); }
+}
+
+/* Allocation bar */
+.alloc-bar {
+    display: flex;
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 0 20px 12px;
+    background: var(--separator);
+}
+.alloc-segment {
+    height: 100%;
+    transition: width 300ms ease;
+}
+
+/* Action log filter pills */
+.log-filters {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.log-filter-pill {
+    padding: 4px 12px;
+    border-radius: 14px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid var(--separator);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+.log-filter-pill:hover { background: var(--bg-input); }
+.log-filter-pill.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+.load-more-btn {
+    display: block;
+    width: 100%;
+    padding: 10px;
+    background: transparent;
+    border: none;
+    border-top: 0.5px solid var(--separator);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.load-more-btn:hover { background: var(--bg-input); }
+
+/* Mobile card layout */
+@media (max-width: 768px) {
+    .pos-card-mobile { display: block; }
+    .pos-table-desktop { display: none; }
+    .pos-card-item {
+        padding: 12px 16px;
+        border-bottom: 0.5px solid var(--separator);
+        cursor: pointer;
+    }
+    .pos-card-item:last-child { border-bottom: none; }
+    .pos-card-item:active { background: var(--bg-input); }
+    .pos-card-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .pos-card-row + .pos-card-row {
+        margin-top: 4px;
+    }
+    .pos-card-symbol { font-weight: 600; color: var(--color-blue); font-size: 14px; }
+    .pos-card-pnl { font-family: 'SF Mono', ui-monospace, monospace; font-weight: 600; font-size: 14px; }
+    .pos-card-detail { font-size: 12px; color: var(--text-secondary); font-family: 'SF Mono', ui-monospace, monospace; }
+}
+@media (min-width: 769px) {
+    .pos-card-mobile { display: none; }
+    .pos-table-desktop { display: block; }
 }
 
 /* ========================================
@@ -1302,15 +1457,32 @@ th.text-right, td.text-right {
         </div>
     </div>
 
+    <!-- Error/Warning Banner -->
+    <div class="alert-banner alert-banner-error" id="alertBanner">
+        <span class="alert-icon">!</span>
+        <span class="alert-text" id="alertText"></span>
+        <button class="alert-dismiss" onclick="dismissAlert()">&times;</button>
+    </div>
+
     <!-- Main Grid -->
     <div class="grid">
 
         <!-- Positions -->
         <div class="card">
             <div class="card-header">Open Positions</div>
-            <div class="card-body">
+            <div class="card-body" id="positionsCard">
                 {% if positions %}
-                <table class="table-positions">
+                <!-- Allocation bar -->
+                <div class="alloc-bar" id="allocBar">
+                    {% set colors = ['#0A84FF', '#30D158', '#FF9F0A', '#BF5AF2', '#FF453A', '#64D2FF', '#FFD60A', '#FF375F'] %}
+                    {% for p in positions %}
+                    {% set pct = (p.market_value / account.portfolio_value * 100) if account.portfolio_value > 0 else 0 %}
+                    <div class="alloc-segment" style="width:{{ "%.1f"|format(pct) }}%;background:{{ colors[loop.index0 % 8] }};" title="{{ p.symbol }}: {{ "%.1f"|format(pct) }}%"></div>
+                    {% endfor %}
+                </div>
+                <!-- Desktop table -->
+                <div class="pos-table-desktop">
+                <table class="table-positions" id="positionsTable">
                     <thead>
                         <tr>
                             <th>Symbol</th>
@@ -1318,23 +1490,42 @@ th.text-right, td.text-right {
                             <th class="text-right">Avg Cost</th>
                             <th class="text-right">Current</th>
                             <th class="text-right">P&L</th>
+                            <th class="text-right">Age</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for p in positions %}
-                        <tr class="clickable" onclick="openPositionDetail('{{ p.symbol }}')">
+                        {% set pnl = p.get('unrealized_pnl', 0) or 0 %}
+                        <tr class="clickable" onclick="openPositionDetail('{{ p.symbol }}')" data-pnl="{{ 'positive' if pnl > 0 else 'negative' if pnl < 0 else 'zero' }}">
                             <td class="action-symbol">{{ p.symbol }}</td>
                             <td class="text-right">{{ "%.4f"|format(p.qty) }}</td>
                             <td class="text-right">${{ "%.2f"|format(p.avg_cost) }}</td>
                             <td class="text-right">${{ "%.2f"|format(p.current_price) }}</td>
-                            {% set pnl = p.get('unrealized_pnl', 0) or 0 %}
                             <td class="text-right {{ 'green' if pnl >= 0 else 'red' }}">
                                 ${{ "%+.2f"|format(pnl) }}
                             </td>
+                            <td class="text-right dim">{{ p.get('age', '') }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
+                </div>
+                <!-- Mobile cards -->
+                <div class="pos-card-mobile">
+                    {% for p in positions %}
+                    {% set pnl = p.get('unrealized_pnl', 0) or 0 %}
+                    <div class="pos-card-item" onclick="openPositionDetail('{{ p.symbol }}')" style="border-left:3px solid {{ 'var(--color-green)' if pnl > 0 else 'var(--color-red)' if pnl < 0 else 'transparent' }};">
+                        <div class="pos-card-row">
+                            <span class="pos-card-symbol">{{ p.symbol }}</span>
+                            <span class="pos-card-pnl {{ 'green' if pnl >= 0 else 'red' }}">${{ "%+.2f"|format(pnl) }}</span>
+                        </div>
+                        <div class="pos-card-row">
+                            <span class="pos-card-detail">{{ "%.4f"|format(p.qty) }} @ ${{ "%.2f"|format(p.avg_cost) }}</span>
+                            <span class="pos-card-detail">${{ "%.2f"|format(p.current_price) }} {{ p.get('age', '') }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
                 {% else %}
                     <div class="card-empty">No open positions.</div>
                 {% endif %}
@@ -1517,12 +1708,18 @@ th.text-right, td.text-right {
         <div class="card grid-full">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
                 Action Log
-                <span class="dim" style="font-size:12px;font-weight:400;">System events</span>
+                <div class="log-filters">
+                    <button class="log-filter-pill active" data-filter="all" onclick="filterActions('all', this)">All</button>
+                    <button class="log-filter-pill" data-filter="trade" onclick="filterActions('trade', this)">Trades</button>
+                    <button class="log-filter-pill" data-filter="error" onclick="filterActions('error', this)">Errors</button>
+                    <button class="log-filter-pill" data-filter="strategy_run" onclick="filterActions('strategy_run', this)">Strategy</button>
+                    <button class="log-filter-pill" data-filter="system" onclick="filterActions('system', this)">System</button>
+                </div>
             </div>
-            <div class="card-body">
+            <div class="card-body" id="actionLogBody">
                 {% if actions %}
-                    {% for a in actions[:15] %}
-                    <div class="action-item clickable" onclick="openActionDetail({{ a.id }})">
+                    {% for a in actions[:20] %}
+                    <div class="action-item clickable" data-category="{{ a.category }}" onclick="openActionDetail({{ a.id }})">
                         <span class="action-time">{{ a.timestamp[11:19] }}</span>
                         <span class="action-badge badge-{{ a.category }}">{{ a.category }}</span>
                         {% if a.symbol %}
@@ -1542,10 +1739,14 @@ th.text-right, td.text-right {
                     <div class="card-empty">No actions recorded yet. Start the daemon to begin trading.</div>
                 {% endif %}
             </div>
+            <button class="load-more-btn" id="loadMoreActions" onclick="loadMoreActions()">Load more</button>
         </div>
 
     </div>
 </div>
+
+<!-- Toast Notifications -->
+<div class="toast-container" id="toastContainer"></div>
 
 <!-- Chat Panel -->
 <button class="chat-toggle" id="chatToggle" title="Chat Assistant (C)">
@@ -2687,17 +2888,222 @@ loadStrategyPerformance();
 loadMarketIntelligence();
 loadAgentActivity();
 
-// ---- AJAX auto-refresh ----
+// ---- Toast Notifications ----
+let _lastTradeCount = {{ summary.trades_today }};
+let _lastErrorCount = {{ summary.errors_today|default(0) }};
+
+function showToast(message, type) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-' + (type || 'system');
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.animation = 'toastOut 300ms forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
+
+// ---- Error Alert Banner ----
+let _alertDismissed = false;
+function updateAlertBanner(summary) {
+    if (_alertDismissed) return;
+    const banner = document.getElementById('alertBanner');
+    const text = document.getElementById('alertText');
+    const errors = summary.errors_today || 0;
+    const lastRun = summary.last_run;
+
+    let msg = null;
+    let level = 'warning';
+
+    if (lastRun) {
+        const age = (Date.now() - new Date(lastRun).getTime()) / 60000;
+        if (age > 360) {
+            msg = 'Daemon has not completed a cycle in ' + Math.round(age / 60) + ' hours. System may be offline.';
+            level = 'error';
+        } else if (age > 30) {
+            msg = 'Last cycle was ' + Math.round(age) + ' minutes ago. Check daemon health.';
+            level = 'warning';
+        }
+    }
+
+    if (!msg && errors > 5) {
+        msg = errors + ' errors today. Check the action log for details.';
+        level = errors > 20 ? 'error' : 'warning';
+    }
+
+    if (msg) {
+        text.textContent = msg;
+        banner.className = 'alert-banner alert-banner-' + level + ' active';
+    } else {
+        banner.className = 'alert-banner';
+    }
+}
+function dismissAlert() {
+    _alertDismissed = true;
+    document.getElementById('alertBanner').className = 'alert-banner';
+}
+
+// ---- Action Log Filters ----
+let _activeLogFilter = 'all';
+function filterActions(category, btn) {
+    _activeLogFilter = category;
+    document.querySelectorAll('.log-filter-pill').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('#actionLogBody .action-item').forEach(item => {
+        if (category === 'all' || item.dataset.category === category) {
+            item.style.display = '';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+}
+
+let _actionOffset = 20;
+function loadMoreActions() {
+    fetch('/api/actions?limit=50&offset=' + _actionOffset).then(r => r.json()).then(actions => {
+        if (!actions || !actions.length) {
+            document.getElementById('loadMoreActions').textContent = 'No more actions';
+            document.getElementById('loadMoreActions').disabled = true;
+            return;
+        }
+        const body = document.getElementById('actionLogBody');
+        actions.forEach(a => {
+            const div = document.createElement('div');
+            div.className = 'action-item clickable';
+            div.dataset.category = a.category;
+            div.onclick = function() { openActionDetail(a.id); };
+            let html = '<span class="action-time">' + (a.timestamp || '').substring(11, 19) + '</span>';
+            html += '<span class="action-badge badge-' + a.category + '">' + a.category + '</span>';
+            if (a.symbol) html += '<span class="action-symbol">' + a.symbol + '</span>';
+            html += '<span class="action-details">' + a.action;
+            if (a.details) html += ' — ' + (a.details || '').substring(0, 80);
+            if (a.result) html += ' <span class="green">[' + a.result + ']</span>';
+            html += '</span>';
+            div.innerHTML = html;
+            if (_activeLogFilter !== 'all' && a.category !== _activeLogFilter) div.style.display = 'none';
+            body.appendChild(div);
+        });
+        _actionOffset += actions.length;
+    });
+}
+
+// ---- Live table rendering ----
+const _allocColors = ['#0A84FF', '#30D158', '#FF9F0A', '#BF5AF2', '#FF453A', '#64D2FF', '#FFD60A', '#FF375F'];
+
+function renderPositionsLive(positions, portfolioValue) {
+    const card = document.getElementById('positionsCard');
+    if (!card) return;
+    if (!positions || !positions.length) {
+        card.innerHTML = '<div class="card-empty">No open positions.</div>';
+        return;
+    }
+
+    // Allocation bar
+    let allocHtml = '<div class="alloc-bar" id="allocBar">';
+    positions.forEach((p, i) => {
+        const pct = portfolioValue > 0 ? (p.market_value / portfolioValue * 100) : 0;
+        allocHtml += '<div class="alloc-segment" style="width:' + pct.toFixed(1) + '%;background:' + _allocColors[i % 8] + ';" title="' + p.symbol + ': ' + pct.toFixed(1) + '%"></div>';
+    });
+    allocHtml += '</div>';
+
+    // Desktop table
+    let tableHtml = '<div class="pos-table-desktop"><table class="table-positions" id="positionsTable"><thead><tr>';
+    tableHtml += '<th>Symbol</th><th class="text-right">Qty</th><th class="text-right">Avg Cost</th><th class="text-right">Current</th><th class="text-right">P&L</th><th class="text-right">Age</th>';
+    tableHtml += '</tr></thead><tbody>';
+    positions.forEach(p => {
+        const pnl = p.unrealized_pnl || 0;
+        const pnlDir = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'zero';
+        const pnlClass = pnl >= 0 ? 'green' : 'red';
+        tableHtml += '<tr class="clickable" onclick="openPositionDetail(\'' + p.symbol + '\')" data-pnl="' + pnlDir + '">';
+        tableHtml += '<td class="action-symbol">' + p.symbol + '</td>';
+        tableHtml += '<td class="text-right">' + p.qty.toFixed(4) + '</td>';
+        tableHtml += '<td class="text-right">$' + p.avg_cost.toFixed(2) + '</td>';
+        tableHtml += '<td class="text-right">$' + p.current_price.toFixed(2) + '</td>';
+        tableHtml += '<td class="text-right ' + pnlClass + '">$' + (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '</td>';
+        tableHtml += '<td class="text-right dim">' + (p.age || '') + '</td>';
+        tableHtml += '</tr>';
+    });
+    tableHtml += '</tbody></table></div>';
+
+    // Mobile cards
+    let mobileHtml = '<div class="pos-card-mobile">';
+    positions.forEach(p => {
+        const pnl = p.unrealized_pnl || 0;
+        const pnlClass = pnl >= 0 ? 'green' : 'red';
+        const borderColor = pnl > 0 ? 'var(--color-green)' : pnl < 0 ? 'var(--color-red)' : 'transparent';
+        mobileHtml += '<div class="pos-card-item" onclick="openPositionDetail(\'' + p.symbol + '\')" style="border-left:3px solid ' + borderColor + ';">';
+        mobileHtml += '<div class="pos-card-row"><span class="pos-card-symbol">' + p.symbol + '</span><span class="pos-card-pnl ' + pnlClass + '">$' + (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '</span></div>';
+        mobileHtml += '<div class="pos-card-row"><span class="pos-card-detail">' + p.qty.toFixed(4) + ' @ $' + p.avg_cost.toFixed(2) + '</span><span class="pos-card-detail">$' + p.current_price.toFixed(2) + ' ' + (p.age || '') + '</span></div>';
+        mobileHtml += '</div>';
+    });
+    mobileHtml += '</div>';
+
+    card.innerHTML = allocHtml + tableHtml + mobileHtml;
+}
+
+function renderTradesLive(trades) {
+    const card = document.querySelector('.grid .card:nth-child(2) .card-body');
+    if (!card) return;
+    if (!trades || !trades.length) {
+        card.innerHTML = '<div class="card-empty">No trades yet.</div>';
+        return;
+    }
+    let html = '<table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th class="text-right">Amount</th><th class="text-right">P&L</th><th>Strategy</th></tr></thead><tbody>';
+    trades.forEach(t => {
+        const sideClass = t.side === 'buy' ? 'green' : 'red';
+        const tpnl = t.pnl || 0;
+        const pnlClass = tpnl > 0 ? 'green' : tpnl < 0 ? 'red' : 'dim';
+        html += '<tr class="clickable" onclick="openTradeDetail(' + t.id + ')">';
+        html += '<td class="dim">' + (t.timestamp || '').substring(5, 16) + '</td>';
+        html += '<td class="action-symbol">' + t.symbol + '</td>';
+        html += '<td class="' + sideClass + '">' + (t.side || '').toUpperCase() + '</td>';
+        html += '<td class="text-right">$' + (t.total || 0).toFixed(2) + '</td>';
+        html += '<td class="text-right ' + pnlClass + '">' + (tpnl !== 0 ? '$' + (tpnl >= 0 ? '+' : '') + tpnl.toFixed(2) : '\u2014') + '</td>';
+        html += '<td class="dim">' + (t.strategy || '') + '</td>';
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    card.innerHTML = html;
+}
+
+function renderActionsLive(actions) {
+    const body = document.getElementById('actionLogBody');
+    if (!body) return;
+    if (!actions || !actions.length) {
+        body.innerHTML = '<div class="card-empty">No actions recorded yet.</div>';
+        return;
+    }
+    let html = '';
+    actions.forEach(a => {
+        const display = (_activeLogFilter === 'all' || a.category === _activeLogFilter) ? '' : 'display:none;';
+        html += '<div class="action-item clickable" data-category="' + a.category + '" onclick="openActionDetail(' + a.id + ')" style="' + display + '">';
+        html += '<span class="action-time">' + (a.timestamp || '').substring(11, 19) + '</span>';
+        html += '<span class="action-badge badge-' + a.category + '">' + a.category + '</span>';
+        if (a.symbol) html += '<span class="action-symbol">' + a.symbol + '</span>';
+        html += '<span class="action-details">' + a.action;
+        if (a.details) html += ' \u2014 ' + (a.details || '').substring(0, 80);
+        if (a.result) html += ' <span class="green">[' + a.result + ']</span>';
+        html += '</span></div>';
+    });
+    body.innerHTML = html;
+    _actionOffset = actions.length;
+}
+
+// ---- AJAX auto-refresh (10s) ----
 (function() {
-    const REFRESH_INTERVAL = 30000;
-    let countdown = 30;
+    const REFRESH_INTERVAL = 10;
+    let countdown = REFRESH_INTERVAL;
+    let _heavyRefreshCounter = 0;
+
     function updateStatus() {
         const el = document.getElementById('refresh-status-header');
         if (el) el.textContent = 'Refreshing in ' + countdown + 's';
         countdown--;
-        if (countdown < 0) { countdown = 30; fetchUpdate(); }
+        if (countdown < 0) { countdown = REFRESH_INTERVAL; fetchUpdate(); }
     }
     function fetchUpdate() {
+        // Lightweight status every 10s
         fetch('/api/status').then(r => r.json()).then(data => {
             // Update hero strip
             const heroVal = document.querySelector('.hero-value');
@@ -2725,6 +3131,11 @@ loadAgentActivity();
                 }
             }
 
+            // Live-update positions table
+            if (data.positions) {
+                renderPositionsLive(data.positions, data.account ? data.account.portfolio_value : 0);
+            }
+
             // Update header time
             const timeEl = document.getElementById('headerTime');
             if (timeEl && data.timestamp) {
@@ -2741,15 +3152,44 @@ loadAgentActivity();
                 }
             }
 
-            loadStrategyPerformance();
-            loadMarketIntelligence();
-            loadAgentActivity();
+            // Error banner
+            if (data.summary) {
+                updateAlertBanner(data.summary);
+            }
+
+            // Toast for new trades
+            if (data.summary) {
+                const newTrades = (data.summary.trades_today || 0);
+                const newErrors = (data.summary.errors_today || 0);
+                if (newTrades > _lastTradeCount) {
+                    showToast('New trade executed! (' + newTrades + ' today)', 'trade');
+                }
+                if (newErrors > _lastErrorCount) {
+                    showToast('New error detected (' + newErrors + ' today)', 'error');
+                }
+                _lastTradeCount = newTrades;
+                _lastErrorCount = newErrors;
+            }
+
+            // Heavy refresh: trades, actions, strategies (every 30s = every 3rd cycle)
+            _heavyRefreshCounter++;
+            if (_heavyRefreshCounter >= 3) {
+                _heavyRefreshCounter = 0;
+                fetch('/api/trades').then(r => r.json()).then(renderTradesLive).catch(() => {});
+                fetch('/api/actions').then(r => r.json()).then(renderActionsLive).catch(() => {});
+                loadStrategyPerformance();
+                loadMarketIntelligence();
+                loadAgentActivity();
+            }
         }).catch(err => {
             const el = document.getElementById('refresh-status-header');
             if (el) el.textContent = 'Refresh failed';
         });
     }
     setInterval(updateStatus, 1000);
+
+    // Initial alert banner check
+    updateAlertBanner({{ summary|tojson }});
 })();
 
 // ---- Keyboard Shortcuts ----

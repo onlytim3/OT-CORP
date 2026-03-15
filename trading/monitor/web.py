@@ -63,6 +63,42 @@ def _safe_positions():
         return []
 
 
+def _add_position_ages(positions: list) -> list:
+    """Add human-readable age to each position based on earliest trade."""
+    if not positions:
+        return positions
+    try:
+        now = datetime.now(timezone.utc)
+        with get_db() as conn:
+            for p in positions:
+                sym = p["symbol"]
+                sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
+                sym_flat = sym.replace("/", "")
+                placeholders = ",".join("?" for _ in {sym, sym_slash, sym_flat})
+                row = conn.execute(
+                    f"SELECT MIN(timestamp) as opened FROM trades WHERE symbol IN ({placeholders}) AND side='buy' AND status != 'closed'",
+                    list({sym, sym_slash, sym_flat}),
+                ).fetchone()
+                if row and row["opened"]:
+                    opened = datetime.fromisoformat(row["opened"].replace("Z", "+00:00"))
+                    if opened.tzinfo is None:
+                        from datetime import timezone as _tz
+                        opened = opened.replace(tzinfo=_tz.utc)
+                    delta = now - opened
+                    mins = int(delta.total_seconds() / 60)
+                    if mins < 60:
+                        p["age"] = f"{mins}m"
+                    elif mins < 1440:
+                        p["age"] = f"{mins // 60}h"
+                    else:
+                        p["age"] = f"{mins // 1440}d"
+                else:
+                    p["age"] = ""
+    except Exception:
+        log.debug("Could not compute position ages", exc_info=True)
+    return positions
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -70,7 +106,7 @@ def _safe_positions():
 @app.route("/")
 def dashboard():
     account = _safe_account()
-    positions = sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True)
+    positions = _add_position_ages(sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
     summary = get_action_log_summary()
     actions = get_action_log(limit=30)
     trades = get_trades(limit=15)
@@ -124,7 +160,7 @@ def dashboard():
 def api_status():
     """JSON endpoint for programmatic access / auto-refresh."""
     account = _safe_account()
-    positions = sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True)
+    positions = _add_position_ages(sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
     summary = get_action_log_summary()
     return jsonify({
         "account": account,
@@ -137,8 +173,10 @@ def api_status():
 
 @app.route("/api/actions")
 def api_actions():
-    actions = get_action_log(limit=50)
-    return jsonify(actions)
+    limit = int(request.args.get("limit", 30))
+    offset = int(request.args.get("offset", 0))
+    actions = get_action_log(limit=limit + offset)
+    return jsonify(actions[offset:])
 
 
 @app.route("/api/trades")
