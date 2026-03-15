@@ -3,7 +3,7 @@ databases: []
 services:
   # ── Web Dashboard + Trading Daemon (single service) ──────────────
   - type: web
-    name: the-agency
+    name: ot-corp
     runtime: python
     region: ohio
     plan: starter

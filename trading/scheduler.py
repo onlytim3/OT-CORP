@@ -677,7 +677,7 @@ def start_daemon(interval_hours=4, paper=False):
 
     mode = "PAPER" if TRADING_MODE == "paper" or paper else "LIVE"
     console.print(f"\n[bold green]{'='*60}[/]")
-    console.print(f"[bold green]  AUTONOMOUS TRADER v5.0 -- {mode} MODE[/bold green]")
+    console.print(f"[bold green]  OT-CORP. AUTONOMOUS TRADER v5.0 -- {mode} MODE[/bold green]")
     console.print(f"[bold green]  Self-Evolving Trading System[/bold green]")
     console.print(f"[bold green]  Execution: AsterDex Perpetual Futures[/bold green]")
     console.print(f"[bold green]{'='*60}[/]")
