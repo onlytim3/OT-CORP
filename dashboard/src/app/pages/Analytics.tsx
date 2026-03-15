@@ -57,8 +57,9 @@ export function Analytics() {
   // Portfolio stats
   const totalPnl = (strategies || []).reduce((s, st) => s + st.total_pnl, 0);
   const totalTrades = (strategies || []).reduce((s, st) => s + st.trades, 0);
-  const avgWinRate = strategies?.length
-    ? (strategies.filter(s => s.win_rate !== null).reduce((s, st) => s + (st.win_rate || 0), 0) / strategies.filter(s => s.win_rate !== null).length)
+  const withWinRate = (strategies || []).filter(s => s.win_rate !== null && s.win_rate !== undefined);
+  const avgWinRate = withWinRate.length > 0
+    ? withWinRate.reduce((s, st) => s + (st.win_rate || 0), 0) / withWinRate.length
     : 0;
 
   // P&L chart data
