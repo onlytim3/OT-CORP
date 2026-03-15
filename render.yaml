@@ -56,6 +56,10 @@ services:
       - key: DATA_DIR
         value: /data
 
+      # ── Paper Trading ──
+      - key: PAPER_BALANCE
+        value: "1000"
+
       # ── Tuning ──
       - key: LEVERAGE_PROFILE
         value: conservative
