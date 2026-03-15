@@ -149,25 +149,43 @@ def _score_signal(
     rate_zscore: float,
     accel_zscore: float,
 ) -> tuple[str, float, str]:
-    """Determine action, strength, and reason from funding metrics."""
-    if funding_rate > EXTREME_FUNDING:
+    """Determine action, strength, and reason from funding metrics.
+
+    Z-score of funding rate is the primary gate. Absolute funding thresholds
+    serve as a fallback only for extreme values when z-score is below threshold.
+    """
+    reason_parts: list[str] = []
+
+    # Primary gate: z-score of funding rate
+    if abs(rate_zscore) < ZSCORE_STRONG:
+        # Allow absolute thresholds as fallback only for extreme values
+        if abs(funding_rate) < EXTREME_FUNDING:
+            return "hold", 0.0, f"funding z={rate_zscore:.1f} below threshold, rate={funding_rate:.4%}"
+
+    # Direction from funding rate sign
+    if funding_rate > 0 or rate_zscore > 0:
         action = "sell"
-        base_strength = 0.6
-        reason_parts = [f"extreme positive funding {funding_rate:.4%}"]
-    elif funding_rate > HIGH_FUNDING_THRESHOLD:
-        action = "sell"
-        base_strength = 0.3
-        reason_parts = [f"high positive funding {funding_rate:.4%}"]
-    elif funding_rate < -EXTREME_FUNDING:
-        action = "buy"
-        base_strength = 0.6
-        reason_parts = [f"extreme negative funding {funding_rate:.4%}"]
-    elif funding_rate < LOW_FUNDING_THRESHOLD:
-        action = "buy"
-        base_strength = 0.3
-        reason_parts = [f"high negative funding {funding_rate:.4%}"]
     else:
-        return "hold", 0.0, f"neutral funding {funding_rate:.4%} — no edge"
+        action = "buy"
+
+    # Base strength from z-score magnitude
+    if abs(rate_zscore) >= ZSCORE_EXTREME:
+        base_strength = 0.6
+        reason_parts.append(f"extreme funding z={rate_zscore:.1f} (rate={funding_rate:.4%})")
+    elif abs(rate_zscore) >= ZSCORE_STRONG:
+        base_strength = 0.4
+        reason_parts.append(f"strong funding z={rate_zscore:.1f} (rate={funding_rate:.4%})")
+    else:
+        base_strength = 0.3  # fallback for extreme absolute funding
+        reason_parts.append(f"extreme absolute funding {funding_rate:.4%} (z={rate_zscore:.1f})")
+
+    # Amplifier: absolute funding threshold confirmation
+    if abs(funding_rate) > EXTREME_FUNDING:
+        base_strength = min(base_strength + 0.15, 0.95)
+        reason_parts.append(f"extreme rate confirms ({funding_rate:.4%})")
+    elif abs(funding_rate) > HIGH_FUNDING_THRESHOLD:
+        base_strength = min(base_strength + 0.10, 0.95)
+        reason_parts.append(f"high rate confirms ({funding_rate:.4%})")
 
     # Basis spread confirmation
     if action == "sell" and basis_spread > BASIS_CONFIRM_THRESHOLD:

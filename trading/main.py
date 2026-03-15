@@ -20,10 +20,11 @@ def get_positions_list():
     return get_positions_from_aster()
 
 
-def execute_order(symbol, side, notional=None, qty=None):
+def execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None):
     """Execute order via AsterDex perpetual futures."""
     from trading.execution.router import submit_order
-    return submit_order(symbol, side, notional=notional, qty=qty)
+    return submit_order(symbol, side, notional=notional, qty=qty,
+                        stop_loss_price=stop_loss_price)
 
 
 def cmd_run(paper: bool = False):
@@ -79,13 +80,17 @@ def cmd_run(paper: bool = False):
                 if not signal.is_actionable:
                     continue
 
-                # Skip sells for symbols we don't hold (avoid accidental shorts)
+                # Skip sells for symbols we don't hold (unless short-selling is allowed)
                 if signal.action == "sell":
                     # Normalize: Alpaca positions use e.g. "BTCUSD" not "BTC/USD"
                     norm = signal.symbol.replace("/", "")
                     if norm not in held_symbols and signal.symbol not in held_symbols:
-                        console.print(f"  [dim]Skipping SELL {signal.symbol} — no position held[/dim]")
-                        continue
+                        from trading.config import ALLOW_SHORT_SELLING, SHORT_ALLOWED_STRATEGIES
+                        if not ALLOW_SHORT_SELLING or signal.strategy not in SHORT_ALLOWED_STRATEGIES:
+                            # Skip sell for non-short-allowed strategies
+                            console.print(f"  [dim]Skipping SELL {signal.symbol} — no position held[/dim]")
+                            continue
+                        # Allow short for permitted strategies
 
                 # Calculate order size
                 buy_signals_count = sum(1 for s in signals if s.action == "buy")
@@ -127,7 +132,8 @@ def cmd_run(paper: bool = False):
                               f"TP: ${targets.take_profit_price:,.2f} (+{targets.max_gain_pct:.1f}%) | "
                               f"R:R {targets.risk_reward_ratio:.1f}:1[/dim]")
 
-                order = execute_order(signal.symbol, signal.action, notional=order_value)
+                order = execute_order(signal.symbol, signal.action, notional=order_value,
+                                     stop_loss_price=targets.stop_loss_price)
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
                     filled_price = float(order.get("filled_avg_price") or 0)

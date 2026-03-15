@@ -1,7 +1,7 @@
-"""Liquidation Cascade Strategy — order flow + volume imbalance from AsterDex microstructure.
+"""Microstructure Composite Strategy — order flow + volume imbalance from AsterDex microstructure.
 
-Combines three microstructure signals to detect aggressive positioning
-that precedes liquidation cascades and directional moves:
+Combines three microstructure signals into a single composite score to
+detect aggressive directional positioning:
 
 1. Taker Volume Imbalance: ratio of taker buys vs total volume over recent hours
 2. Order Book Pressure: bid/ask volume imbalance from top-of-book depth
@@ -9,6 +9,10 @@ that precedes liquidation cascades and directional moves:
 
 Composite score is weighted across all three signals. Only emits actionable
 signals when the composite exceeds a minimum threshold, reducing noise.
+
+NOTE: Despite the original file name ("liquidation_cascade"), this strategy
+does NOT detect actual liquidation events. It is a microstructure composite
+that uses order-flow and funding data as directional indicators.
 """
 
 import logging
@@ -124,10 +128,10 @@ def _basis_funding_signal(basis: float | None, funding: float | None) -> float:
 # ---------------------------------------------------------------------------
 
 @register
-class LiquidationCascadeStrategy(Strategy):
+class MicrostructureCompositeStrategy(Strategy):
     """Trade based on AsterDex order flow imbalance and microstructure signals."""
 
-    name = "liquidation_cascade"
+    name = "microstructure_composite"
 
     def __init__(self):
         self.coins = COINS
@@ -146,7 +150,7 @@ class LiquidationCascadeStrategy(Strategy):
                 get_funding_rates,
             )
         except ImportError:
-            log.warning("trading.data.aster not available — liquidation_cascade disabled")
+            log.warning("trading.data.aster not available — microstructure_composite disabled")
             self._last_context = {}
             return signals
 
@@ -168,7 +172,7 @@ class LiquidationCascadeStrategy(Strategy):
                 signals.append(signal)
 
             except Exception as exc:
-                log.error("liquidation_cascade error for %s: %s", coin_id, exc)
+                log.error("microstructure_composite error for %s: %s", coin_id, exc)
                 signals.append(Signal(
                     strategy=self.name,
                     symbol=alpaca_sym,

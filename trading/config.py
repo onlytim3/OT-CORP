@@ -29,6 +29,11 @@ FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 # --- Trading Mode ---
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
 
+# --- Initial Capital ---
+# In paper mode, default to PAPER_BALANCE; in live mode, use funded amount
+PAPER_BALANCE = float(os.getenv("PAPER_BALANCE", "1000"))
+INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", str(PAPER_BALANCE) if TRADING_MODE == "paper" else "1000"))
+
 # --- Paths ---
 # Use /data on Render (persistent disk) or local path for development
 _DATA_DIR = Path(os.getenv("DATA_DIR", ""))
@@ -56,6 +61,10 @@ RISK = {
     "min_cash_reserve_pct": 0.15,   # Keep 15% in cash (more strategies need buffer)
     "max_trades_per_day": 25,       # 20+ active strategies
 }
+
+# --- Short Selling ---
+ALLOW_SHORT_SELLING = os.getenv("ALLOW_SHORT_SELLING", "true").lower() == "true"
+SHORT_ALLOWED_STRATEGIES = {"cross_basis_rv", "multi_factor_rank", "pairs_trading"}
 
 # --- Default Coins (used by data layer for multi-coin fetches) ---
 # Top assets by liquidity — strategies can use wider subsets from ASTER_SYMBOLS
@@ -100,7 +109,7 @@ STRATEGY_ENABLED = {
     "factor_crypto": True,
     # Perps-specific strategies (AsterDex alpha)
     "funding_arb": True,
-    "liquidation_cascade": True,
+    "microstructure_composite": True,
     "basis_zscore": True,
     "funding_term_structure": True,
     "taker_divergence": True,
@@ -498,6 +507,9 @@ LEARNING = {
     "auto_apply": True,                  # Autonomous agents auto-apply safe actions
     "review_frequency": "weekly",
 }
+
+# --- Startup Validation ---
+RUN_STARTUP_BACKTEST = os.getenv("RUN_STARTUP_BACKTEST", "false").lower() == "true"
 
 # --- Autonomous Improvement ---
 # The system continuously self-evaluates and improves through agent conversations.

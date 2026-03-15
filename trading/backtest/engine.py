@@ -971,7 +971,7 @@ class Backtester:
 
         # All strategy modules that import from trading.data.aster or aster_client
         _aster_strategies = [
-            "funding_arb", "liquidation_cascade", "basis_zscore",
+            "funding_arb", "microstructure_composite", "basis_zscore",
             "funding_term_structure", "taker_divergence", "cross_basis_rv",
             "oi_price_divergence", "whale_flow", "cross_asset_momentum",
             "multi_factor_rank", "meme_momentum", "volatility_regime",

@@ -107,6 +107,23 @@ def _analyze_pair(coin_y: str, coin_x: str, config: dict) -> dict:
     spread_z = z_score(spread, window)
     current_z = float(spread_z.iloc[-1]) if not pd.isna(spread_z.iloc[-1]) else 0.0
 
+    # Rolling cointegration validation: check recent 60-day window
+    recent_window = 60
+    if len(close_y) > recent_window + 10:
+        recent_y = close_y.iloc[-recent_window:]
+        recent_x = close_x.iloc[-recent_window:]
+        recent_log_y = np.log(recent_y)
+        recent_log_x = np.log(recent_x)
+        recent_beta, recent_alpha = np.polyfit(recent_log_x.values, recent_log_y.values, 1)
+        recent_spread = recent_log_y - (recent_beta * recent_log_x + recent_alpha)
+        recent_half_life = _compute_half_life(recent_spread)
+
+        # If recent cointegration is breaking down, flag it
+        cointegration_stable = (config["min_half_life"] <= recent_half_life <= config["max_half_life"])
+    else:
+        cointegration_stable = True
+        recent_half_life = half_life
+
     return {
         "coin_y": coin_y,
         "coin_x": coin_x,
@@ -117,6 +134,8 @@ def _analyze_pair(coin_y: str, coin_x: str, config: dict) -> dict:
         "spread_std": round(float(spread.std()), 4),
         "price_y": round(float(close_y.iloc[-1]), 2),
         "price_x": round(float(close_x.iloc[-1]), 2),
+        "recent_half_life": round(recent_half_life, 1),
+        "cointegration_stable": cointegration_stable,
     }
 
 
@@ -178,6 +197,13 @@ class PairsTradingStrategy(Strategy):
 
                 strength = min(abs_z / 4.0, 1.0)
 
+                # Halve signal strength when recent cointegration is degrading
+                if not analysis.get("cointegration_stable", True):
+                    strength *= 0.5
+                    reason_suffix = f" [cointegration weakening: recent HL={analysis['recent_half_life']:.0f}d]"
+                else:
+                    reason_suffix = ""
+
                 if abs_z > self.config["z_stop"]:
                     # Cointegration breakdown — do not trade
                     reason = f"{pair_label} z={current_z:.2f} exceeds stop ({self.config['z_stop']}) — cointegration breakdown"
@@ -197,13 +223,13 @@ class PairsTradingStrategy(Strategy):
                     signals.append(Signal(
                         strategy=self.name, symbol=sym_y, action="sell",
                         strength=strength,
-                        reason=f"{pair_label} z={current_z:.2f} > {self.config['z_entry']} — short spread (sell {coin_y})",
+                        reason=f"{pair_label} z={current_z:.2f} > {self.config['z_entry']} — short spread (sell {coin_y}){reason_suffix}",
                         data={"pair": pair_label, "z_score": current_z, "side": "short_spread", "half_life": half_life},
                     ))
                     signals.append(Signal(
                         strategy=self.name, symbol=sym_x, action="buy",
                         strength=strength,
-                        reason=f"{pair_label} z={current_z:.2f} > {self.config['z_entry']} — short spread (buy {coin_x})",
+                        reason=f"{pair_label} z={current_z:.2f} > {self.config['z_entry']} — short spread (buy {coin_x}){reason_suffix}",
                         data={"pair": pair_label, "z_score": current_z, "side": "short_spread", "half_life": half_life},
                     ))
 
@@ -212,13 +238,13 @@ class PairsTradingStrategy(Strategy):
                     signals.append(Signal(
                         strategy=self.name, symbol=sym_y, action="buy",
                         strength=strength,
-                        reason=f"{pair_label} z={current_z:.2f} < -{self.config['z_entry']} — long spread (buy {coin_y})",
+                        reason=f"{pair_label} z={current_z:.2f} < -{self.config['z_entry']} — long spread (buy {coin_y}){reason_suffix}",
                         data={"pair": pair_label, "z_score": current_z, "side": "long_spread", "half_life": half_life},
                     ))
                     signals.append(Signal(
                         strategy=self.name, symbol=sym_x, action="sell",
                         strength=strength,
-                        reason=f"{pair_label} z={current_z:.2f} < -{self.config['z_entry']} — long spread (sell {coin_x})",
+                        reason=f"{pair_label} z={current_z:.2f} < -{self.config['z_entry']} — long spread (sell {coin_x}){reason_suffix}",
                         data={"pair": pair_label, "z_score": current_z, "side": "long_spread", "half_life": half_life},
                     ))
 

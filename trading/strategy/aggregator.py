@@ -48,7 +48,99 @@ _CONFLICT_MARGIN_THRESHOLD: float = 0.15
 required to declare a winner when signals conflict. Below this the
 aggregator emits a 'hold' signal for the symbol."""
 
+# Strategy correlation groups — strategies measuring the same underlying signal.
+# Each group counts as at most 1 vote in confluence scoring.
+# The strongest signal from the group represents the group.
+STRATEGY_CORRELATION_GROUPS = {
+    "funding": {"funding_arb", "funding_term_structure"},
+    "basis": {"basis_zscore", "cross_basis_rv"},
+    "microstructure": {"taker_divergence", "microstructure_composite", "whale_flow"},
+}
+
+# Reverse lookup: strategy_name -> group_name
+_STRATEGY_TO_GROUP = {}
+for _group_name, _members in STRATEGY_CORRELATION_GROUPS.items():
+    for _member in _members:
+        _STRATEGY_TO_GROUP[_member] = _group_name
+
 _console = Console()
+
+
+# ---------------------------------------------------------------------------
+# Correlation deduplication
+# ---------------------------------------------------------------------------
+
+def _deduplicate_correlated(signals: list) -> list:
+    """Deduplicate signals from correlated strategy groups.
+
+    For each symbol, if multiple strategies from the same correlation group
+    emit signals, keep only the strongest one. This prevents correlated
+    strategies from inflating confluence scores.
+    """
+    # Group signals by (symbol, correlation_group)
+    group_signals = defaultdict(list)  # (symbol, group) -> [signals]
+    ungrouped = []
+
+    for sig in signals:
+        group = _STRATEGY_TO_GROUP.get(sig.strategy)
+        if group:
+            group_signals[(sig.symbol, group)].append(sig)
+        else:
+            ungrouped.append(sig)
+
+    # From each group, keep only the strongest signal
+    deduplicated = list(ungrouped)
+    for (symbol, group), group_sigs in group_signals.items():
+        # Sort by strength descending, take the strongest
+        group_sigs.sort(key=lambda s: s.strength, reverse=True)
+        best = group_sigs[0]
+        if len(group_sigs) > 1:
+            # Annotate that this signal represents a group
+            original_reason = best.reason
+            best = Signal(
+                strategy=best.strategy,
+                symbol=best.symbol,
+                action=best.action,
+                strength=best.strength,
+                reason=f"{original_reason} [representing {group} group: {len(group_sigs)} strategies]",
+                data={**(best.data or {}), "correlation_group": group, "group_count": len(group_sigs)},
+            )
+        deduplicated.append(best)
+
+    return deduplicated
+
+
+# ---------------------------------------------------------------------------
+# Strategy weighting
+# ---------------------------------------------------------------------------
+
+def _get_strategy_weight(strategy_name: str) -> float:
+    """Get performance-based weight for a strategy.
+
+    Returns a multiplier (0.6 - 1.3) based on historical win rate.
+    """
+    try:
+        from trading.db.store import get_db
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT COUNT(*) as total, "
+                "SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins "
+                "FROM trades WHERE strategy = ? AND status = 'closed' "
+                "ORDER BY timestamp DESC LIMIT 30",
+                (strategy_name,),
+            ).fetchone()
+            if rows and rows["total"] >= 5:
+                win_rate = rows["wins"] / rows["total"]
+                if win_rate > 0.6:
+                    return 1.3
+                elif win_rate < 0.3:
+                    return 0.6
+                else:
+                    # Linear interpolation between 0.6x and 1.3x
+                    return 0.6 + (win_rate - 0.3) / 0.3 * 0.7
+    except Exception:
+        pass
+    return 1.0  # Default: no adjustment
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +175,9 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
             result="empty",
         )
         return []
+
+    # Deduplicate correlated strategies before grouping
+    actionable = _deduplicate_correlated(actionable)
 
     # Group by symbol
     by_symbol: dict[str, list[Signal]] = defaultdict(list)
@@ -135,8 +230,12 @@ def _resolve_conflict(
     """
     symbol = buy_signals[0].symbol
 
-    total_buy_strength = sum(s.strength for s in buy_signals)
-    total_sell_strength = sum(s.strength for s in sell_signals)
+    total_buy_strength = sum(
+        s.strength * _get_strategy_weight(s.strategy) for s in buy_signals
+    )
+    total_sell_strength = sum(
+        s.strength * _get_strategy_weight(s.strategy) for s in sell_signals
+    )
 
     margin = abs(total_buy_strength - total_sell_strength)
 
@@ -229,7 +328,11 @@ def _merge_agreement(signals: list[Signal]) -> Signal:
 
     # Cap how many strategies can contribute to the average
     capped = signals[:MAX_SINGLE_ASSET_SIGNALS]
-    avg_strength = sum(s.strength for s in capped) / len(capped)
+    weights = [_get_strategy_weight(s.strategy) for s in capped]
+    total_weight = sum(weights)
+    avg_strength = sum(
+        s.strength * w for s, w in zip(capped, weights)
+    ) / total_weight if total_weight else 0.0
     avg_strength = min(avg_strength, 1.0)
 
     strategy_names = [s.strategy for s in capped]

@@ -87,6 +87,31 @@ def _regime_to_action(regime: str) -> str:
     return "hold"
 
 
+def _get_directional_confirmation(coin_id: str) -> str | None:
+    """Get directional bias from other strategy signals if available."""
+    try:
+        from trading.db.store import get_setting
+        import json
+        # Check HMM regime state
+        hmm_params = get_setting("hmm_model_params")
+        if hmm_params:
+            data = json.loads(hmm_params)
+            regime = data.get("last_regime", "")
+            if regime == "bull":
+                return "buy"
+            elif regime == "bear":
+                return "sell"
+        # Check Kalman slope
+        kalman_positions = get_setting("kalman_positions")
+        if kalman_positions:
+            positions = json.loads(kalman_positions)
+            if coin_id in positions:
+                return "buy" if positions[coin_id].get("direction") == "long" else "sell"
+    except Exception:
+        pass
+    return None
+
+
 def _regime_strength(vol_ratio: float, regime: str,
                      compression: float, expansion: float) -> float:
     """Compute signal strength (0.0 – 1.0) based on how extreme the ratio is.
@@ -226,6 +251,15 @@ class VolatilityRegimeStrategy(Strategy):
                     f"ratio={vol_ratio:.2f} "
                     f"(compression<{comp_ratio}, expansion>{exp_ratio})"
                 )
+
+                # Check directional confirmation
+                directional_action = _get_directional_confirmation(coin)
+                if action != "hold" and directional_action is not None:
+                    if action != directional_action:
+                        # Vol signal and direction disagree — hold
+                        reason += f" [HELD: vol says {action} but direction says {directional_action}]"
+                        action = "hold"
+                        strength = 0.0
 
                 signals.append(Signal(
                     strategy=self.name,

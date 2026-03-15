@@ -9,6 +9,11 @@ Signal logic:
 
 Meme coins are high beta — require stronger confirmation signals than majors.
 Uses 12h momentum for faster reaction alongside 24h lookback for volume baseline.
+
+RISK NOTE: Meme coins have thin liquidity and extreme volatility.
+The 2% base budget allocation caps exposure. A 5% move with 2x volume
+in meme coins is often noise, not signal. This strategy is kept at
+minimal allocation for diversification but should not be scaled up.
 """
 
 import logging

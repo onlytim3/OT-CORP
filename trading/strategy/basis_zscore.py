@@ -15,12 +15,14 @@ capped at 1.0.
 Data source: AsterDex API (perpetual futures public endpoints, no auth).
 """
 
+import json
 import logging
 import statistics
 from typing import Any
 
 import pandas as pd
 
+from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -183,6 +185,7 @@ class BasisZScoreStrategy(Strategy):
     def generate_signals(self) -> list[Signal]:
         signals: list[Signal] = []
         context_data: dict[str, Any] = {}
+        active_positions: dict[str, dict] = json.loads(get_setting("basis_positions", "{}"))
 
         for coin_id in BASIS_COINS:
             alpaca_symbol = ALPACA_SYMBOL_MAP.get(coin_id)
@@ -227,7 +230,6 @@ class BasisZScoreStrategy(Strategy):
 
                 # Compute z-score
                 z = _compute_zscore(history, current_basis_pct)
-                action, strength, reason = _score_signal(z)
 
                 signal_data = {
                     "coin": coin_id,
@@ -239,6 +241,45 @@ class BasisZScoreStrategy(Strategy):
                     "history_length": len(history),
                 }
                 context_data[coin_id] = signal_data
+
+                existing_pos = active_positions.get(coin_id)
+
+                # Exit logic: z-score crosses back through Z_EXIT toward zero
+                if existing_pos and abs(z) < Z_EXIT:
+                    close_action = "buy" if existing_pos["action"] == "sell" else "sell"
+                    signals.append(Signal(
+                        strategy=self.name,
+                        symbol=alpaca_symbol,
+                        action=close_action,
+                        strength=0.3,
+                        reason=f"{coin_id} closing {existing_pos['action']}: z={z:.2f} returned to neutral",
+                        data=signal_data,
+                    ))
+                    active_positions.pop(coin_id, None)
+                    continue
+
+                # Score the raw signal
+                action, strength, reason = _score_signal(z)
+
+                # Position-aware: suppress duplicate signals
+                if existing_pos and action == existing_pos["action"]:
+                    z_at_entry = existing_pos.get("z_at_entry", 0.0)
+                    z_moved_further = abs(z) - abs(z_at_entry)
+                    if z_moved_further <= 0.5:
+                        # Z-score hasn't moved significantly further from entry — hold
+                        signals.append(Signal(
+                            strategy=self.name,
+                            symbol=alpaca_symbol,
+                            action="hold",
+                            strength=0.0,
+                            reason=f"{coin_id} already positioned {action}, z={z:.2f} (entry z={z_at_entry:.2f})",
+                            data=signal_data,
+                        ))
+                        continue
+
+                # New entry or significantly extended signal
+                if action in ("buy", "sell"):
+                    active_positions[coin_id] = {"action": action, "z_at_entry": round(z, 4)}
 
                 signals.append(Signal(
                     strategy=self.name,
@@ -260,6 +301,7 @@ class BasisZScoreStrategy(Strategy):
                 ))
 
         self._last_context = context_data
+        set_setting("basis_positions", json.dumps(active_positions))
         return signals
 
     def get_market_context(self) -> dict:

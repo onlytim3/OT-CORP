@@ -59,6 +59,8 @@ services:
       # ── Paper Trading ──
       - key: PAPER_BALANCE
         value: "1000"
+      - key: INITIAL_CAPITAL
+        value: "1000"
 
       # ── Tuning ──
       - key: LEVERAGE_PROFILE

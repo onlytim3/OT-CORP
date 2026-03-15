@@ -157,7 +157,7 @@ def verify_fills() -> int:
                 )
                 continue
 
-            order_info = get_order_status(alpaca_order_id)
+            order_info = get_order_status(alpaca_order_id, symbol=symbol)
             broker_status = order_info.get("status", "").lower()
 
             if broker_status == "filled":

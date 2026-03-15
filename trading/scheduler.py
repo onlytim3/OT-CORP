@@ -28,10 +28,11 @@ from datetime import datetime, timezone
 import schedule
 from rich.console import Console
 
-from trading.config import TRADING_MODE, RISK
+from trading.config import TRADING_MODE, RISK, INITIAL_CAPITAL
 from trading.db.store import (
     init_db, insert_trade, insert_signal, log_action,
     record_daily_pnl, get_action_log, get_daily_pnl,
+    get_setting, set_setting,
 )
 
 log = logging.getLogger(__name__)
@@ -71,10 +72,11 @@ def _get_positions():
     return get_positions_from_aster()
 
 
-def _execute_order(symbol, side, notional=None, qty=None):
+def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None):
     """Execute order via AsterDex perpetual futures."""
     from trading.execution.router import submit_order
-    return submit_order(symbol, side, notional=notional, qty=qty)
+    return submit_order(symbol, side, notional=notional, qty=qty,
+                        stop_loss_price=stop_loss_price)
 
 
 def _notify_safe(func, *args, **kwargs):
@@ -270,9 +272,23 @@ def run_trading_cycle():
         # Count buy signals for position sizing
         buy_count = sum(1 for s in consolidated if s.action == "buy")
 
+        # Pre-fetch positions to skip sells for symbols we don't hold
+        positions_for_gate = _get_positions()
+        held_symbols = {p["symbol"] for p in positions_for_gate}
+
         for signal in consolidated:
             if not signal.is_actionable:
                 continue
+
+            # Skip sells for symbols we don't hold (unless short-selling is allowed)
+            if signal.action == "sell":
+                norm = signal.symbol.replace("/", "")
+                if norm not in held_symbols and signal.symbol not in held_symbols:
+                    from trading.config import ALLOW_SHORT_SELLING, SHORT_ALLOWED_STRATEGIES
+                    if not ALLOW_SHORT_SELLING or signal.strategy not in SHORT_ALLOWED_STRATEGIES:
+                        console.print(f"  [dim]Skip SELL {signal.symbol} -- no position held[/dim]")
+                        continue
+                    # Allow short for permitted strategies
 
             # Market hours gate -- block ETF orders outside NYSE hours
             can_trade, reason = can_trade_now(signal.symbol)
@@ -330,9 +346,35 @@ def run_trading_cycle():
                 console.print(f"  [red]BLOCKED {signal.symbol}: {risk_check.reason}[/red]")
                 continue
 
+            # Compute trade targets (SL/TP) for server-side stop-loss
+            stop_loss_price = None
+            try:
+                from trading.risk.manager import compute_trade_targets
+                from trading.execution.router import get_crypto_quote
+                entry_price = None
+                if signal.data and signal.data.get("price"):
+                    entry_price = signal.data["price"]
+                if not entry_price:
+                    try:
+                        q = get_crypto_quote(signal.symbol)
+                        entry_price = q.get("mid") or None
+                    except Exception:
+                        pass
+                if entry_price and entry_price > 0:
+                    targets = compute_trade_targets(
+                        symbol=signal.symbol,
+                        entry_price=entry_price,
+                        order_value=order_value,
+                        signal_strength=signal.strength,
+                    )
+                    stop_loss_price = targets.stop_loss_price
+            except Exception as e:
+                log.debug("Could not compute trade targets for %s: %s", signal.symbol, e)
+
             # Execute (with error handling for insufficient funds, etc.)
             try:
-                order = _execute_order(signal.symbol, signal.action, notional=order_value)
+                order = _execute_order(signal.symbol, signal.action, notional=order_value,
+                                       stop_loss_price=stop_loss_price)
             except Exception as exec_err:
                 log_action(
                     "error", "order_failed",
@@ -353,7 +395,7 @@ def run_trading_cycle():
                     for _poll in range(3):
                         time.sleep(1)
                         try:
-                            fill_info = get_order_status(order["id"])
+                            fill_info = get_order_status(order["id"], symbol=signal.symbol)
                             if fill_info.get("filled_qty"):
                                 filled_qty = fill_info["filled_qty"]
                                 filled_price = fill_info.get("filled_avg_price")
@@ -448,7 +490,13 @@ def run_trading_cycle():
                 daily_ret = 0
 
             # Cumulative return from initial capital
-            initial = float(os.environ.get("INITIAL_CAPITAL", 100_000))
+            # Use DB-persisted initial capital, falling back to config
+            initial_str = get_setting("initial_capital")
+            if initial_str:
+                initial = float(initial_str)
+            else:
+                initial = INITIAL_CAPITAL
+                set_setting("initial_capital", str(initial))
             cum_ret = (pv - initial) / initial if initial > 0 else 0
             record_daily_pnl(pv, cash, pos_value, daily_ret, cum_ret)
         except Exception as e:
@@ -730,6 +778,66 @@ def process_pending_approvals():
 
 
 # ---------------------------------------------------------------------------
+# Startup validation — quick sanity backtest
+# ---------------------------------------------------------------------------
+
+def _run_startup_validation():
+    """Run a quick sanity backtest to validate strategies and data sources."""
+    from trading.config import RUN_STARTUP_BACKTEST
+    if not RUN_STARTUP_BACKTEST:
+        log.info("Startup backtest skipped (RUN_STARTUP_BACKTEST=false)")
+        return
+
+    log.info("Running startup validation backtest...")
+    try:
+        from trading.backtest.engine import Backtester, _fetch_historical_data
+        from trading.config import STRATEGY_ENABLED
+        from datetime import timedelta
+
+        # Pick the first 3 enabled strategies for a quick validation
+        enabled = [name for name, on in STRATEGY_ENABLED.items() if on][:3]
+        if not enabled:
+            log.warning("No strategies enabled — skipping startup backtest")
+            return
+
+        coins = ["bitcoin", "ethereum", "solana"]
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=30)
+        start_str = start_date.strftime("%Y-%m-%d")
+        end_str = end_date.strftime("%Y-%m-%d")
+
+        # Fetch historical data once
+        historical_data = _fetch_historical_data(coins, start_str, end_str)
+        if not historical_data:
+            log.warning("STARTUP VALIDATION WARNING: No historical data fetched. "
+                       "Check data sources.")
+            return
+
+        total_signals = 0
+        for strat_name in enabled:
+            try:
+                bt = Backtester(starting_capital=10_000)
+                result = bt.run(strat_name, historical_data, start_str, end_str)
+                strat_signals = len(result.signals) if hasattr(result, 'signals') else 0
+                total_signals += strat_signals
+                log.info("Startup backtest %s: %d signals, Sharpe=%.2f, Win Rate=%.1f%%",
+                        strat_name, strat_signals,
+                        result.metrics.get("sharpe_ratio", 0),
+                        result.metrics.get("win_rate", 0) * 100)
+            except Exception as e:
+                log.warning("Startup backtest for %s failed (non-fatal): %s", strat_name, e)
+
+        if total_signals == 0:
+            log.warning("STARTUP VALIDATION WARNING: Zero signals generated in 30-day backtest. "
+                       "Check data sources and strategy configuration.")
+        else:
+            log.info("Startup validation passed: %d total signals across %d strategies",
+                    total_signals, len(enabled))
+    except Exception as e:
+        log.warning("Startup validation backtest failed (non-fatal): %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Daemon entry point
 # ---------------------------------------------------------------------------
 
@@ -781,6 +889,9 @@ def start_daemon(interval_hours=4, paper=False):
 
     # Note: AsterDex orders are immediate (market orders) — no orphaned order reconciliation needed
     log.info("AsterDex primary venue — skipping Alpaca order reconciliation")
+
+    # Run startup validation backtest (if enabled)
+    _run_startup_validation()
 
     # Run immediately on start
     run_trading_cycle()

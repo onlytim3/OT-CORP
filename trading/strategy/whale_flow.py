@@ -23,6 +23,7 @@ Execution: AsterDex perpetual futures.
 """
 
 import logging
+import time
 from typing import Any
 
 from trading.strategy.base import Signal, Strategy
@@ -266,11 +267,27 @@ class WhaleFlowStrategy(Strategy):
                 bids = book["bids"]
                 asks = book["asks"]
 
-                # Compute top-of-book imbalance (retail/HFT zone)
-                top_imbalance = _compute_level_imbalance(bids, asks, 0, TOP_LEVELS)
+                # Collect multiple snapshots for time-weighted averaging
+                snapshots = []
+                top_imb = _compute_level_imbalance(bids, asks, 0, TOP_LEVELS)
+                deep_imb = _compute_level_imbalance(bids, asks, DEEP_START, DEEP_END)
+                snapshots.append((top_imb, deep_imb))
 
-                # Compute deep-book imbalance (whale zone)
-                deep_imbalance = _compute_level_imbalance(bids, asks, DEEP_START, DEEP_END)
+                # Try to get 2 more snapshots with short delays
+                for _ in range(2):
+                    time.sleep(2)  # 2-second delay between snapshots
+                    book2 = _fetch_deep_orderbook(aster_symbol)
+                    if book2:
+                        bids2 = book2["bids"]
+                        asks2 = book2["asks"]
+                        snapshots.append((
+                            _compute_level_imbalance(bids2, asks2, 0, TOP_LEVELS),
+                            _compute_level_imbalance(bids2, asks2, DEEP_START, DEEP_END),
+                        ))
+
+                # Average across snapshots
+                top_imbalance = sum(s[0] for s in snapshots) / len(snapshots)
+                deep_imbalance = sum(s[1] for s in snapshots) / len(snapshots)
 
                 # Compute spread
                 spread_bps = _compute_spread_bps(bids, asks)
@@ -300,6 +317,7 @@ class WhaleFlowStrategy(Strategy):
                     "divergence_detected": divergence_detected,
                     "bid_levels": len(bids),
                     "ask_levels": len(asks),
+                    "num_snapshots": len(snapshots),
                 }
                 context_data[coin_id] = signal_data
 

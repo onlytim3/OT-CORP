@@ -9,6 +9,7 @@ hysteresis (enter at z>3, exit at z<1), removed vol scaling that was
 suppressing best signals, added minimum holding period of 5 bars.
 """
 
+import json
 import logging
 
 import numpy as np
@@ -16,6 +17,7 @@ import pandas as pd
 
 from trading.config import CRYPTO_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import atr
 from trading.strategy.registry import register
@@ -103,7 +105,7 @@ class KalmanTrendStrategy(Strategy):
         self.min_data_points = cfg["min_data_points"]
         self._last_context: dict = {}
         # Track positions: {coin_id: {"direction": "long"/"short", "bars_held": int}}
-        self._positions: dict[str, dict] = {}
+        self._positions: dict[str, dict] = json.loads(get_setting("kalman_positions", "{}"))
 
     def generate_signals(self) -> list[Signal]:
         signals: list[Signal] = []
@@ -185,6 +187,7 @@ class KalmanTrendStrategy(Strategy):
                 ))
 
         self._last_context = context_data
+        set_setting("kalman_positions", json.dumps(self._positions))
         return signals
 
     def _decide_action(self, coin_id: str, slope_z: float,

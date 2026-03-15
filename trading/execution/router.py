@@ -28,19 +28,43 @@ _ALPACA_TO_ASTER = {v: ASTER_SYMBOLS[k] for k, v in CRYPTO_SYMBOLS.items()
 # AsterDex symbol -> Alpaca symbol (for position reporting)
 _ASTER_TO_ALPACA = {v: k for k, v in _ALPACA_TO_ASTER.items()}
 
+# ---------------------------------------------------------------------------
+# AsterDex symbol validation (populated lazily on first order)
+# ---------------------------------------------------------------------------
+
+_VALID_ASTER_SYMBOLS: set[str] = set()
+
+
+def validate_aster_symbols():
+    """Fetch valid symbols from AsterDex and cache them."""
+    global _VALID_ASTER_SYMBOLS
+    try:
+        from trading.execution.aster_client import get_aster_exchange_info
+        info = get_aster_exchange_info()
+        _VALID_ASTER_SYMBOLS = {s["symbol"] for s in info.get("symbols", [])}
+        log.info("Validated %d AsterDex symbols", len(_VALID_ASTER_SYMBOLS))
+    except Exception as e:
+        log.warning("Could not validate AsterDex symbols: %s", e)
+
 
 def _to_aster(symbol: str) -> str:
     """Convert any symbol format to AsterDex format."""
     # Already AsterDex format
     if symbol.endswith("USDT"):
-        return symbol
-    # Alpaca format (BTC/USD)
-    aster = _ALPACA_TO_ASTER.get(symbol) or alpaca_to_aster(symbol)
-    if aster:
-        return aster
-    # Try stripping / and appending USDT
-    base = symbol.replace("/USD", "").replace("/", "")
-    return f"{base}USDT"
+        aster = symbol
+    else:
+        # Alpaca format (BTC/USD)
+        aster = _ALPACA_TO_ASTER.get(symbol) or alpaca_to_aster(symbol)
+        if not aster:
+            # Try stripping / and appending USDT
+            base = symbol.replace("/USD", "").replace("/", "")
+            aster = f"{base}USDT"
+
+    # Warn if converted symbol is not in the validated set
+    if _VALID_ASTER_SYMBOLS and aster not in _VALID_ASTER_SYMBOLS:
+        log.warning("Symbol %s (from %s) not found in AsterDex exchange info", aster, symbol)
+
+    return aster
 
 
 def _to_alpaca(symbol: str) -> str:
@@ -172,6 +196,7 @@ def submit_order(
     qty: Optional[float] = None,
     order_type: str = "MARKET",
     leverage: int = 1,
+    stop_loss_price: Optional[float] = None,
 ) -> dict:
     """Submit an order to AsterDex, returning Alpaca-compatible response.
 
@@ -189,9 +214,14 @@ def submit_order(
     from trading.execution.aster_client import (
         aster_submit_order,
         get_aster_mark_prices,
+        get_aster_book_ticker,
         aster_set_leverage,
         is_aster_configured,
     )
+
+    # Lazy symbol validation: fetch exchange info once on first order
+    if not _VALID_ASTER_SYMBOLS:
+        validate_aster_symbols()
 
     aster_sym = _to_aster(symbol)
     side_upper = side.upper()
@@ -234,6 +264,33 @@ def submit_order(
     # Round qty based on symbol (BTC needs more precision than AVAX)
     qty = _round_qty(aster_sym, qty)
 
+    # -----------------------------------------------------------------------
+    # Slippage estimation (advisory — does not block the order)
+    # -----------------------------------------------------------------------
+    try:
+        book = get_aster_book_ticker(aster_sym)
+        bid = float(book.get("bidPrice", 0))
+        ask = float(book.get("askPrice", 0))
+        if bid > 0 and ask > 0:
+            mid = (bid + ask) / 2.0
+            spread_pct = (ask - bid) / mid * 100.0
+            best_qty = float(book.get("bidQty", 0)) if side_upper == "SELL" else float(book.get("askQty", 0))
+            order_notional = (notional or 0) if notional else (qty * mid)
+
+            if spread_pct > 0.5:
+                log.warning(
+                    "SLIPPAGE ADVISORY: %s spread=%.3f%% (bid=%.4f ask=%.4f) — wide spread",
+                    aster_sym, spread_pct, bid, ask,
+                )
+            if best_qty > 0 and order_notional > mid * best_qty * 0.5:
+                log.warning(
+                    "SLIPPAGE ADVISORY: %s order notional $%.2f exceeds 50%% of best "
+                    "book depth ($%.2f) — potential market impact",
+                    aster_sym, order_notional, mid * best_qty,
+                )
+    except Exception as e:
+        log.debug("Slippage check skipped for %s: %s", aster_sym, e)
+
     log.info("Routing to AsterDex: %s %s %.6f %s (notional=$%.2f)",
              side_upper, aster_sym, qty, order_type, notional or 0)
 
@@ -258,7 +315,7 @@ def submit_order(
         }
         alpaca_status = status_map.get(status, status)
 
-        return {
+        order_result = {
             "id": str(result.get("orderId", uuid.uuid4())),
             "status": alpaca_status,
             "symbol": symbol,
@@ -270,6 +327,27 @@ def submit_order(
             "aster_order_id": result.get("orderId"),
             "aster_symbol": aster_sym,
         }
+
+        # Submit server-side stop-loss if provided
+        if stop_loss_price and stop_loss_price > 0:
+            try:
+                stop_side = "SELL" if side_upper == "BUY" else "BUY"
+                from trading.execution.aster_client import aster_submit_order as _aster_order
+                stop_order = _aster_order(
+                    symbol=aster_sym,
+                    side=stop_side,
+                    order_type="STOP_MARKET",
+                    quantity=qty,
+                    stop_price=stop_loss_price,
+                )
+                log.info("Server-side stop-loss placed: %s %s @ $%.2f (order %s)",
+                         stop_side, aster_sym, stop_loss_price,
+                         stop_order.get("orderId", "unknown"))
+                order_result["stop_order_id"] = stop_order.get("orderId")
+            except Exception as e:
+                log.warning("Failed to place server-side stop-loss for %s: %s", aster_sym, e)
+
+        return order_result
 
     except Exception as e:
         log.error("AsterDex order failed: %s %s qty=%.6f: %s",
@@ -286,11 +364,73 @@ def submit_order(
         }
 
 
-def get_order_status(order_id: str) -> dict:
-    """Check order status on AsterDex."""
-    # order_id from our system is the AsterDex orderId
-    # We'd need the symbol too — for now return a basic status
-    return {"id": order_id, "status": "unknown"}
+def get_order_status(order_id: str, symbol: str = None) -> dict:
+    """Check order status on AsterDex.
+
+    Args:
+        order_id: AsterDex orderId (numeric, stored as string).
+        symbol: AsterDex or Alpaca symbol. If not provided, attempts
+                to look it up from the local DB trades table.
+
+    Returns:
+        Alpaca-compatible order status dict with id, status,
+        filled_qty, filled_avg_price, etc.
+    """
+    from trading.execution.aster_client import aster_get_order, is_aster_configured
+
+    if not is_aster_configured():
+        return {"id": order_id, "status": "unknown", "reason": "AsterDex not configured"}
+
+    # Resolve symbol if not provided — look up from DB trades table
+    if not symbol:
+        try:
+            from trading.db.store import get_db
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT symbol FROM trades WHERE alpaca_order_id = ? LIMIT 1",
+                    (str(order_id),),
+                ).fetchone()
+                if row:
+                    symbol = row["symbol"]
+        except Exception as e:
+            log.warning("Could not look up symbol for order %s from DB: %s", order_id, e)
+
+    if not symbol:
+        log.warning("get_order_status: no symbol for order %s, cannot query AsterDex", order_id)
+        return {"id": order_id, "status": "unknown", "reason": "symbol not available"}
+
+    aster_sym = _to_aster(symbol)
+
+    try:
+        result = aster_get_order(aster_sym, order_id=int(order_id))
+
+        # Translate AsterDex status to Alpaca-compatible format
+        raw_status = result.get("status", "UNKNOWN").lower()
+        status_map = {
+            "new": "accepted",
+            "partially_filled": "partially_filled",
+            "filled": "filled",
+            "canceled": "canceled",
+            "rejected": "rejected",
+            "expired": "expired",
+        }
+        alpaca_status = status_map.get(raw_status, raw_status)
+
+        return {
+            "id": str(order_id),
+            "status": alpaca_status,
+            "symbol": symbol,
+            "filled_qty": float(result.get("executedQty", 0)),
+            "filled_avg_price": float(result.get("avgPrice", 0)),
+            "qty": float(result.get("origQty", 0)),
+            "side": result.get("side", "").lower(),
+            "order_type": result.get("type", ""),
+            "aster_order_id": result.get("orderId"),
+        }
+
+    except Exception as e:
+        log.error("Failed to get order status for %s (symbol=%s): %s", order_id, aster_sym, e)
+        return {"id": order_id, "status": "unknown", "reason": str(e)}
 
 
 def close_position(symbol: str) -> dict:

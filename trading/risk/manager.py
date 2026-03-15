@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 MAX_CRYPTO_EXPOSURE_PCT: float = 0.70  # Max 70% of portfolio in crypto
 MAX_CORRELATED_EXPOSURE_PCT: float = 0.50  # Max 50% in a single correlated group
+MAX_NET_LONG_EXPOSURE_PCT = 0.80  # Max 80% net long
+MAX_NET_SHORT_EXPOSURE_PCT = 0.30  # Max 30% net short
 
 # Correlation groups — assets that tend to move together
 CORRELATION_GROUPS = {
@@ -74,6 +76,7 @@ class RiskManager:
             self._check_position_size(signal, order_value, positions),
             self._check_crypto_exposure(signal, order_value, positions),
             self._check_correlation_group(signal, order_value, positions),
+            self._check_directional_exposure(signal, order_value, positions),
             self._check_daily_loss(),
             self._check_max_drawdown(),
             self._check_cash_reserve(order_value, positions),
@@ -189,6 +192,41 @@ class RiskManager:
                 signal=signal,
             )
         return RiskCheck(allowed=True, reason=f"Group '{group}' exposure OK", signal=signal)
+
+    def _check_directional_exposure(self, signal: Signal, order_value: float,
+                                     positions: list[dict]) -> RiskCheck:
+        """Check aggregate net directional exposure doesn't exceed limits."""
+        long_value = sum(
+            p.get("market_value", 0) for p in positions
+            if p.get("side", "long") == "long"
+        )
+        short_value = sum(
+            abs(p.get("market_value", 0)) for p in positions
+            if p.get("side") == "short"
+        )
+
+        if signal.action == "buy":
+            long_value += order_value
+        elif signal.action == "sell":
+            short_value += order_value
+
+        net_exposure = long_value - short_value
+        net_pct = net_exposure / self.portfolio_value if self.portfolio_value > 0 else 0
+
+        if net_pct > MAX_NET_LONG_EXPOSURE_PCT:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Net long exposure {net_pct:.0%} exceeds {MAX_NET_LONG_EXPOSURE_PCT:.0%} cap",
+                signal=signal,
+            )
+        if net_pct < -MAX_NET_SHORT_EXPOSURE_PCT:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Net short exposure {abs(net_pct):.0%} exceeds {MAX_NET_SHORT_EXPOSURE_PCT:.0%} cap",
+                signal=signal,
+            )
+
+        return RiskCheck(allowed=True, reason="Directional exposure OK", signal=signal)
 
     # ------------------------------------------------------------------
     # Portfolio-level checks

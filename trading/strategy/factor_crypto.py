@@ -9,6 +9,7 @@ change threshold to avoid churning, and momentum confirmation (only buy
 if 7-day momentum is positive).
 """
 
+import json
 import logging
 
 import numpy as np
@@ -16,6 +17,7 @@ import pandas as pd
 
 from trading.config import CRYPTO_SYMBOLS
 from trading.data.crypto import get_historical_prices, get_ohlc
+from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -72,9 +74,9 @@ class FactorCryptoStrategy(Strategy):
         self.rebalance_cooldown = cfg["rebalance_cooldown"]
         self.min_score_change = cfg["min_score_change"]
         self._last_context: dict = {}
-        self._held_coins: set[str] = set()
-        self._last_scores: dict[str, float] = {}  # v3: track previous scores
-        self._bars_since_rebalance: int = 0        # v3: cooldown counter
+        self._held_coins: set[str] = set(json.loads(get_setting("factor_held_coins", "[]")))
+        self._last_scores: dict[str, float] = json.loads(get_setting("factor_last_scores", "{}"))
+        self._bars_since_rebalance: int = int(get_setting("factor_bars_since_rebalance", "0"))
 
     # ------------------------------------------------------------------
     # Factor computations
@@ -294,6 +296,9 @@ class FactorCryptoStrategy(Strategy):
             self._held_coins = top_coins.copy()
         self._last_scores = composite.copy()
         self._last_context = context_data
+        set_setting("factor_held_coins", json.dumps(list(self._held_coins)))
+        set_setting("factor_last_scores", json.dumps(self._last_scores))
+        set_setting("factor_bars_since_rebalance", str(self._bars_since_rebalance))
         return signals
 
     def get_market_context(self) -> dict:

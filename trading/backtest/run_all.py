@@ -40,7 +40,7 @@ ALL_STRATEGIES = [
     "factor_crypto",
     # Perps-specific (AsterDex)
     "funding_arb",
-    "liquidation_cascade",
+    "microstructure_composite",
     "basis_zscore",
     "funding_term_structure",
     "taker_divergence",

@@ -1,11 +1,14 @@
 """HMM Regime Strategy — detect bull/bear/sideways regimes via Hidden Markov Models."""
 
+import json
 import logging
+from datetime import datetime, timezone
 
 import numpy as np
 
 from trading.config import CRYPTO_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -50,11 +53,79 @@ def _build_features(close: "pd.Series") -> np.ndarray | None:
     return features
 
 
+def _try_cached_model(features: np.ndarray):
+    """Try to use a cached HMM model if it's recent and data size is similar.
+
+    Returns (model, regime_label, regime_prob) if cache is valid, else (None, None, None).
+    """
+    try:
+        from hmmlearn.hmm import GaussianHMM
+    except ImportError:
+        return None, None, None
+
+    cached = get_setting("hmm_model_params")
+    if not cached:
+        return None, None, None
+
+    try:
+        cached_data = json.loads(cached)
+        fitted_at = datetime.fromisoformat(cached_data["fitted_at"])
+        hours_since = (datetime.now(timezone.utc) - fitted_at).total_seconds() / 3600
+        if hours_since >= 24:
+            return None, None, None
+        if cached_data["n_samples"] == 0:
+            return None, None, None
+        if abs(len(features) - cached_data["n_samples"]) / cached_data["n_samples"] >= 0.1:
+            return None, None, None
+
+        # Restore model from cached parameters
+        n_components = len(cached_data["means"])
+        model = GaussianHMM(
+            n_components=n_components,
+            covariance_type="full",
+            n_iter=100,
+            random_state=42,
+        )
+        # Fit briefly then override with cached params
+        model.fit(features)
+        model.means_ = np.array(cached_data["means"])
+        model.covars_ = np.array(cached_data["covars"])
+        model.transmat_ = np.array(cached_data["transmat"])
+
+        # Predict using restored model
+        states = model.predict(features)
+        posteriors = model.predict_proba(features)
+
+        current_state = states[-1]
+        current_probs = posteriors[-1]
+
+        mean_returns = model.means_[:, 0]
+        sorted_indices = np.argsort(mean_returns)
+        rank = {state: rank for rank, state in enumerate(sorted_indices)}
+
+        regime_rank = rank[current_state]
+        regime_label = _REGIME_LABELS[regime_rank]
+        regime_prob = float(current_probs[current_state])
+
+        log.info("HMM using cached model (fitted %.1f hours ago)", hours_since)
+        return model, regime_label, regime_prob
+
+    except Exception as exc:
+        log.debug("Failed to restore cached HMM model: %s", exc)
+        return None, None, None
+
+
 def _fit_hmm(features: np.ndarray):
     """Fit a GaussianHMM and return (model, regime_label, regime_probability).
 
     Returns (None, None, None) on failure.
+    Uses cached model if available and recent (< 24h) with similar data size.
     """
+    # Try cached model first
+    model, regime_label, regime_prob = _try_cached_model(features)
+    if model is not None:
+        return model, regime_label, regime_prob
+
     try:
         from hmmlearn.hmm import GaussianHMM
     except ImportError:
@@ -86,6 +157,16 @@ def _fit_hmm(features: np.ndarray):
         regime_rank = rank[current_state]
         regime_label = _REGIME_LABELS[regime_rank]
         regime_prob = float(current_probs[current_state])
+
+        # Persist fitted model parameters for caching
+        model_data = {
+            "means": model.means_.tolist(),
+            "covars": model.covars_.tolist(),
+            "transmat": model.transmat_.tolist(),
+            "n_samples": len(features),
+            "fitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        set_setting("hmm_model_params", json.dumps(model_data))
 
         return model, regime_label, regime_prob
 

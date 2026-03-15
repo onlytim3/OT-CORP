@@ -634,10 +634,41 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 result = f"Agent intelligence logged: {action}"
                 log.info("AGENT INTELLIGENCE: [%s] %s — %s", rec["from_agent"], action, rec["reasoning"][:100])
 
+            elif action == "implement_strategy":
+                # Research agent wants a new strategy built — log to knowledge base as deferred
+                insert_knowledge(
+                    title=f"Strategy Implementation Request: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=f"agent_{rec.get('from_agent', 'unknown')}",
+                    category="deferred_implementation",
+                    content=rec["reasoning"],
+                    key_rules=json.dumps(data),
+                )
+                result = f"Strategy implementation '{target}' logged to knowledge base (deferred)"
+                log.info("DEFERRED IMPLEMENTATION: %s — %s", target, rec["reasoning"][:100])
+
+            elif action == "coverage_gap":
+                # Research agent identified a category with zero coverage — acknowledge
+                insert_knowledge(
+                    title=f"Coverage Gap Acknowledged: {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=f"agent_{rec.get('from_agent', 'unknown')}",
+                    category="coverage_gap",
+                    content=rec["reasoning"],
+                    key_rules=json.dumps(data),
+                )
+                result = f"Coverage gap '{target}' acknowledged and logged to knowledge base"
+                log.info("COVERAGE GAP: %s — %s", target, rec["reasoning"][:100])
+
             else:
-                # Unknown action — log for transparency
-                result = f"Action '{action}' logged (no handler)"
-                log.info("UNHANDLED ACTION: %s — %s", action, rec["reasoning"][:100])
+                # Unknown action — log to knowledge base for transparency
+                insert_knowledge(
+                    title=f"Agent Action: {action} on {target} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=f"agent_{rec.get('from_agent', 'unknown')}",
+                    category="agent_action",
+                    content=rec["reasoning"],
+                    key_rules=json.dumps(data),
+                )
+                result = f"Action '{action}' acknowledged and logged to knowledge base"
+                log.info("AGENT ACTION LOGGED: %s — %s", action, rec["reasoning"][:100])
 
         except Exception as e:
             result = f"Execution failed: {e}"

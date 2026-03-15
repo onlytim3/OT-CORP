@@ -24,6 +24,25 @@ log = logging.getLogger(__name__)
 # Reverse maps for symbol translation
 _ASTER_TO_COIN = {v: k for k, v in ASTER_SYMBOLS.items()}
 
+# Asset categories for within-group z-scoring
+ASSET_CATEGORIES = {
+    # Major L1
+    "l1": {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "AVAXUSDT", "DOTUSDT", "ADAUSDT", "TONUSDT", "NEARUSDT", "SUIUSDT", "APTUSDT"},
+    # DeFi
+    "defi": {"LINKUSDT", "UNIUSDT", "AAVEUSDT", "MKRUSDT", "CRVUSDT", "SNXUSDT", "DYDXUSDT"},
+    # Meme
+    "meme": {"DOGEUSDT", "1000SHIBUSDT", "1000PEPEUSDT", "1000BONKUSDT", "TRUMPUSDT", "FARTCOINUSDT"},
+}
+
+
+def _get_asset_category(aster_symbol: str) -> str:
+    """Get the category for an AsterDex symbol."""
+    for category, symbols in ASSET_CATEGORIES.items():
+        if aster_symbol in symbols:
+            return category
+    return "other"
+
+
 CROSS_BASIS_RV = {
     "min_spread_pct": 0.05,   # Minimum spread between richest and cheapest basis
     "top_n": 2,               # Number of cheapest/richest assets to trade
@@ -145,17 +164,35 @@ class CrossBasisRVStrategy(Strategy):
                 ),
             )]
 
-        # Compute cross-sectional statistics
+        # Group assets by category for within-group z-scoring
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for asset in valid:
+            category = _get_asset_category(asset["aster_symbol"])
+            groups[category].append(asset)
+
+        # Compute z-scores within each group
+        for category, group_assets in groups.items():
+            if len(group_assets) < 2:
+                # Single asset in group -- use full cross-section as fallback
+                basis_values = [a["basis_pct"] for a in valid]
+            else:
+                basis_values = [a["basis_pct"] for a in group_assets]
+
+            group_mean = mean(basis_values)
+            group_std = stdev(basis_values) if len(basis_values) > 1 else 0.0
+
+            for asset in group_assets:
+                if group_std > 0:
+                    asset["z_score"] = (asset["basis_pct"] - group_mean) / group_std
+                else:
+                    asset["z_score"] = 0.0
+                asset["category"] = category
+
+        # Update cross_mean and cross_std for context (use overall for reporting)
         basis_values = [a["basis_pct"] for a in valid]
         cross_mean = mean(basis_values)
         cross_std = stdev(basis_values) if len(basis_values) > 1 else 0.0
-
-        # Compute z-scores for each asset
-        for asset in valid:
-            if cross_std > 0:
-                asset["z_score"] = (asset["basis_pct"] - cross_mean) / cross_std
-            else:
-                asset["z_score"] = 0.0
 
         top_n = self._config["top_n"]
         z_threshold = self._config["z_threshold"]

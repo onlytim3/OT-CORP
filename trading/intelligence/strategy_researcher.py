@@ -705,9 +705,9 @@ STRATEGY_UNIVERSE = {
                 "status": "implemented",
                 "notes": "NEVER leverage — loses 93% at 3x",
             },
-            "liquidation_cascade": {
-                "name": "Liquidation Cascade Detection",
-                "description": "Detect cascading liquidations, fade the extreme move",
+            "microstructure_composite": {
+                "name": "Microstructure Composite",
+                "description": "Composite score from taker flow, orderbook imbalance, and basis-funding divergence",
                 "sharpe_range": "0.8-2.0",
                 "regime": "volatile",
                 "data_needed": "liquidation feed (AsterDex)",

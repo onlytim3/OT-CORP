@@ -37,7 +37,7 @@ STRATEGY_BUDGETS: dict[str, float] = {
     "factor_crypto": 0.04,
     # Perps-specific strategies (AsterDex alpha)
     "funding_arb": 0.05,
-    "liquidation_cascade": 0.04,
+    "microstructure_composite": 0.04,
     "basis_zscore": 0.04,
     "funding_term_structure": 0.04,
     "taker_divergence": 0.04,
