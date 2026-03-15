@@ -543,6 +543,12 @@ def run_trading_cycle():
                     "error", "order_rejected",
                     symbol=signal.symbol,
                     details=order.get("reason", order.get("status", "unknown")),
+                    data={
+                        "order_value": order_value,
+                        "action": signal.action,
+                        "strategy": signal.strategy,
+                        "qty": order.get("qty", 0),
+                    },
                 )
 
         # ---------------------------------------------------------------

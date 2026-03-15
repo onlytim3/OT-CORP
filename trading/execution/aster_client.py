@@ -326,13 +326,19 @@ def _auth_request(method: str, path: str, params: Optional[dict] = None) -> Any:
             raise ValueError(f"Unsupported HTTP method: {method}")
 
         if resp.status_code >= 400:
-            # Log the full error body before raising
+            # Parse and include the actual error body in the exception
+            err_msg = ""
             try:
                 err_body = resp.json()
+                err_msg = err_body.get("msg", str(err_body))
                 log.error("AsterDex %d error on %s: %s", resp.status_code, auth_path, err_body)
             except Exception:
-                log.error("AsterDex %d error on %s: %s", resp.status_code, auth_path, resp.text[:500])
-        resp.raise_for_status()
+                err_msg = resp.text[:500]
+                log.error("AsterDex %d error on %s: %s", resp.status_code, auth_path, err_msg)
+            raise requests.HTTPError(
+                f"AsterDex {resp.status_code} on {auth_path}: {err_msg}",
+                response=resp,
+            )
         data = resp.json()
 
         # AsterDex returns {"code": -xxxx, "msg": "..."} on logical errors

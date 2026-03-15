@@ -227,7 +227,8 @@ def submit_order(
     from trading.config import TRADING_MODE
     from trading.db.store import get_setting
     mode = get_setting("trading_mode", TRADING_MODE)
-    if mode == "paper":
+    if mode != "live":
+        log.debug("Paper mode order: %s %s notional=%s", side, symbol, notional)
         return _paper_submit_order(symbol, side, notional=notional, qty=qty,
                                    stop_loss_price=stop_loss_price)
 
