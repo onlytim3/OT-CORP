@@ -493,6 +493,79 @@ def api_action_detail(action_id):
     })
 
 
+@app.route("/api/pnl/history")
+def api_pnl_history():
+    """Daily P&L time series for charts. Returns up to 90 days."""
+    import json as _json
+    from trading.db.store import get_daily_pnl
+
+    days = min(int(request.args.get("days", 90)), 365)
+    daily = get_daily_pnl(limit=days)
+
+    # Reverse to chronological order (oldest first)
+    daily.reverse()
+
+    # Also compute weekly and monthly aggregations
+    weekly = {}
+    monthly = {}
+    for d in daily:
+        date_str = d.get("date", "")
+        portfolio_value = d.get("portfolio_value", 0)
+        daily_return = d.get("daily_return", 0) or 0
+
+        # Week key: ISO year-week
+        try:
+            from datetime import date as dt_date
+            parts = date_str.split("-")
+            dt = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
+            week_key = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}"
+            month_key = date_str[:7]  # YYYY-MM
+        except Exception:
+            continue
+
+        if week_key not in weekly:
+            weekly[week_key] = {"period": week_key, "start_value": portfolio_value, "end_value": portfolio_value, "trades": 0, "return_pct": 0}
+        weekly[week_key]["end_value"] = portfolio_value
+
+        if month_key not in monthly:
+            monthly[month_key] = {"period": month_key, "start_value": portfolio_value, "end_value": portfolio_value, "trades": 0, "return_pct": 0}
+        monthly[month_key]["end_value"] = portfolio_value
+
+    # Compute period returns
+    for w in weekly.values():
+        if w["start_value"] > 0:
+            w["return_pct"] = round((w["end_value"] - w["start_value"]) / w["start_value"] * 100, 2)
+    for m in monthly.values():
+        if m["start_value"] > 0:
+            m["return_pct"] = round((m["end_value"] - m["start_value"]) / m["start_value"] * 100, 2)
+
+    # Add trade counts per period
+    with get_db() as conn:
+        trades = conn.execute(
+            "SELECT timestamp, side FROM trades WHERE timestamp >= ? ORDER BY timestamp",
+            (daily[0]["date"] if daily else "2000-01-01",),
+        ).fetchall()
+        for t in trades:
+            ts = t["timestamp"][:10]
+            try:
+                parts = ts.split("-")
+                dt = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
+                wk = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}"
+                mk = ts[:7]
+                if wk in weekly:
+                    weekly[wk]["trades"] += 1
+                if mk in monthly:
+                    monthly[mk]["trades"] += 1
+            except Exception:
+                continue
+
+    return jsonify({
+        "daily": daily,
+        "weekly": sorted(weekly.values(), key=lambda x: x["period"]),
+        "monthly": sorted(monthly.values(), key=lambda x: x["period"]),
+    })
+
+
 @app.route("/api/pnl/<date>")
 def api_pnl_detail(date):
     """Full detail for a single day's P&L — all trades, signals, actions."""
@@ -649,6 +722,11 @@ def api_intelligence():
                     d["data"] = _json.loads(d["data"])
                 except Exception:
                     pass
+            # Fix: when strength is 0 (hold/sideways), use regime_prob from data
+            if (d.get("strength") or 0) == 0 and isinstance(d.get("data"), dict):
+                prob = d["data"].get("regime_prob") or d["data"].get("probability") or d["data"].get("confidence") or 0
+                if prob:
+                    d["strength"] = float(prob)
             regime_sigs.append(d)
         result["regime_signals"] = regime_sigs
 

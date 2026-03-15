@@ -14,6 +14,7 @@ export const api = {
   strategy: (name: string) => `${API_BASE_URL}/api/strategy/${name}`,
   actions: `${API_BASE_URL}/api/actions`,
   pnl: (date: string) => `${API_BASE_URL}/api/pnl/${date}`,
+  pnlHistory: `${API_BASE_URL}/api/pnl/history`,
   intelligence: `${API_BASE_URL}/api/intelligence`,
   allocation: `${API_BASE_URL}/api/allocation`,
   agents: `${API_BASE_URL}/api/agents`,
@@ -130,6 +131,29 @@ export interface Recommendation {
   reasoning: string;
 }
 
+export interface DailyPnl {
+  date: string;
+  portfolio_value: number;
+  cash: number;
+  positions_value: number;
+  daily_return: number | null;
+  cumulative_return: number | null;
+}
+
+export interface PeriodPnl {
+  period: string;
+  start_value: number;
+  end_value: number;
+  trades: number;
+  return_pct: number;
+}
+
+export interface PnlHistory {
+  daily: DailyPnl[];
+  weekly: PeriodPnl[];
+  monthly: PeriodPnl[];
+}
+
 export interface VolumeAnalysis {
   symbol: string;
   aster_symbol?: string;
@@ -222,8 +246,9 @@ function getMockDataForUrl<T>(url: string): T {
     { name: 'hmm_regime', enabled: true, signals: 18, trades: 5, buys: 3, sells: 2, closed_trades: 2, win_rate: 50.0, total_pnl: 12.30 },
   ] as T;
   if (url.includes('/api/trades')) return [] as T;
+  if (url.includes('/api/pnl/history')) return { daily: [], weekly: [], monthly: [] } as T;
   if (url.includes('/api/intelligence')) return { fear_greed: null, briefings: [], regime_signals: [] } as T;
-  if (url.includes('/api/agents')) return { pending: [], recent: [], activity: [] } as T;
+  if (url.includes('/api/agents')) return { pending: [], recent: [], activity: [], agent_stats: [] } as T;
   if (url.includes('/api/volume')) return [] as T;
   if (url.includes('/api/mode')) return { mode: 'paper' } as T;
   return {} as T;
