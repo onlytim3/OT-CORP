@@ -70,7 +70,7 @@ def _safe_positions():
 @app.route("/")
 def dashboard():
     account = _safe_account()
-    positions = _safe_positions()
+    positions = sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True)
     summary = get_action_log_summary()
     actions = get_action_log(limit=30)
     trades = get_trades(limit=15)
@@ -124,7 +124,7 @@ def dashboard():
 def api_status():
     """JSON endpoint for programmatic access / auto-refresh."""
     account = _safe_account()
-    positions = _safe_positions()
+    positions = sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True)
     summary = get_action_log_summary()
     return jsonify({
         "account": account,
