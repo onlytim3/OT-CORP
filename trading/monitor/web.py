@@ -12,7 +12,7 @@ from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH
 from trading.db.store import (
     init_db, get_db, get_trades, get_positions, get_daily_pnl,
     get_signals, get_action_log, get_action_log_summary,
-    get_journal, get_reviews,
+    get_journal, get_reviews, get_setting,
 )
 from trading.execution.router import get_account, get_positions_from_aster as get_positions_from_alpaca
 
@@ -85,7 +85,7 @@ def dashboard():
         pnl_history=pnl_history,
         total_pnl=total_pnl,
         positions_value=positions_value,
-        mode="PAPER" if TRADING_MODE == "paper" else "LIVE",
+        mode="PAPER" if get_setting("trading_mode", TRADING_MODE) == "paper" else "LIVE",
         risk=RISK,
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
@@ -101,7 +101,7 @@ def api_status():
         "account": account,
         "positions": positions,
         "summary": summary,
-        "mode": TRADING_MODE,
+        "mode": get_setting("trading_mode", TRADING_MODE),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
 
@@ -594,6 +594,143 @@ def api_allocation():
     return jsonify(result)
 
 
+@app.route("/api/strategy/<name>")
+def api_strategy_detail(name):
+    """Detailed breakdown for a single strategy — signals, trades, performance, config."""
+    import json as _json
+    from trading.config import STRATEGY_ENABLED
+
+    result = {
+        "name": name,
+        "enabled": STRATEGY_ENABLED.get(name, False),
+        "signals": [],
+        "trades": [],
+        "recommendations": [],
+        "backtest": None,
+        "config": {},
+    }
+
+    # Recent signals for this strategy
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM signals WHERE strategy = ? ORDER BY timestamp DESC LIMIT 30", (name,)
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            if d.get("data") and isinstance(d["data"], str):
+                try:
+                    d["data"] = _json.loads(d["data"])
+                except Exception:
+                    pass
+            result["signals"].append(d)
+
+        # Trade history for this strategy
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE strategy = ? ORDER BY timestamp DESC LIMIT 20", (name,)
+        ).fetchall()
+        result["trades"] = [dict(r) for r in rows]
+
+        # Agent recommendations about this strategy
+        rows = conn.execute(
+            "SELECT * FROM agent_recommendations WHERE target = ? ORDER BY timestamp DESC LIMIT 10", (name,)
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            if d.get("data") and isinstance(d["data"], str):
+                try:
+                    d["data"] = _json.loads(d["data"])
+                except Exception:
+                    pass
+            result["recommendations"].append(d)
+
+    # Budget allocation
+    try:
+        from trading.risk.portfolio import STRATEGY_BUDGETS, DEFAULT_BUDGET
+        result["config"]["base_budget_pct"] = round(STRATEGY_BUDGETS.get(name, DEFAULT_BUDGET) * 100, 2)
+    except Exception:
+        pass
+
+    # Latest backtest results
+    from pathlib import Path as _Path
+    backtests_dir = _Path(__file__).parent.parent / "knowledge" / "backtests"
+    if backtests_dir.exists():
+        bt_files = sorted(backtests_dir.glob("backtest_*.json"), reverse=True)
+        for bf in bt_files[:5]:
+            try:
+                bt = _json.loads(bf.read_text())
+                strategies = bt.get("strategies", {})
+                if name in strategies:
+                    result["backtest"] = strategies[name]
+                    result["backtest"]["file"] = bf.name
+                    break
+            except Exception:
+                pass
+
+    # Compute stats
+    closed = [t for t in result["trades"] if t.get("closed_at")]
+    wins = [t for t in closed if (t.get("pnl") or 0) > 0]
+    total_pnl = sum(t.get("pnl", 0) or 0 for t in closed)
+    result["stats"] = {
+        "total_trades": len(result["trades"]),
+        "closed_trades": len(closed),
+        "wins": len(wins),
+        "win_rate": round(len(wins) / len(closed), 2) if closed else None,
+        "total_pnl": round(total_pnl, 2),
+        "total_signals": len(result["signals"]),
+        "buy_signals": len([s for s in result["signals"] if s.get("signal") == "buy"]),
+        "sell_signals": len([s for s in result["signals"] if s.get("signal") == "sell"]),
+    }
+
+    return jsonify(result)
+
+
+@app.route("/api/recommendation/<int:rec_id>")
+def api_recommendation_detail(rec_id):
+    """Detailed view of a single agent recommendation."""
+    import json as _json
+
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM agent_recommendations WHERE id = ?", (rec_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "Recommendation not found"}), 404
+
+        rec = dict(row)
+        if rec.get("data") and isinstance(rec["data"], str):
+            try:
+                rec["data"] = _json.loads(rec["data"])
+            except Exception:
+                pass
+
+        # Get other recommendations from same agent around same time
+        related = conn.execute(
+            "SELECT * FROM agent_recommendations WHERE from_agent = ? AND id != ? "
+            "ORDER BY ABS(JULIANDAY(timestamp) - JULIANDAY(?)) LIMIT 5",
+            (rec["from_agent"], rec_id, rec["timestamp"]),
+        ).fetchall()
+        related_recs = []
+        for r in related:
+            d = dict(r)
+            if d.get("data") and isinstance(d["data"], str):
+                try:
+                    d["data"] = _json.loads(d["data"])
+                except Exception:
+                    pass
+            related_recs.append(d)
+
+        # Get actions that resulted from this recommendation
+        actions = conn.execute(
+            "SELECT * FROM action_log WHERE category = 'autonomous' "
+            "AND timestamp >= ? ORDER BY timestamp ASC LIMIT 5",
+            (rec["timestamp"],),
+        ).fetchall()
+
+    return jsonify({
+        "recommendation": rec,
+        "related": related_recs,
+        "resulting_actions": [dict(a) for a in actions],
+    })
+
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     """Chat assistant endpoint — answers questions about the trading system."""
@@ -614,18 +751,21 @@ def api_chat():
 
 @app.route("/api/mode", methods=["GET", "POST"])
 def api_mode():
-    """Get or switch trading mode (paper/live)."""
+    """Get or switch trading mode (paper/live). Persists in DB for all workers."""
     import trading.config as cfg
+    from trading.db.store import get_setting, set_setting, log_action
+
+    # Always read from DB (shared across gunicorn workers + daemon)
+    current = get_setting("trading_mode", cfg.TRADING_MODE)
 
     if request.method == "GET":
-        return jsonify({"mode": cfg.TRADING_MODE})
+        return jsonify({"mode": current})
 
     data = request.get_json(silent=True) or {}
     new_mode = data.get("mode", "").lower()
     if new_mode not in ("paper", "live"):
         return jsonify({"error": "mode must be 'paper' or 'live'"}), 400
 
-    # Safety: require confirmation for live mode
     if new_mode == "live" and not data.get("confirm"):
         return jsonify({
             "error": "Switching to LIVE mode requires confirmation",
@@ -634,22 +774,12 @@ def api_mode():
                        "Send again with {\"mode\": \"live\", \"confirm\": true} to proceed.",
         }), 400
 
-    old_mode = cfg.TRADING_MODE
+    old_mode = current
+    set_setting("trading_mode", new_mode)
     cfg.TRADING_MODE = new_mode
 
-    # Persist to .env if DATA_DIR is set (Render), otherwise just runtime
-    env_path = Path(os.environ.get("DATA_DIR", "")) / ".env.mode"
-    if env_path.parent.exists():
-        env_path.write_text(f"TRADING_MODE={new_mode}\n")
-
-    from trading.db.store import log_action
-    log_action(
-        "system",
-        "mode_switch",
-        details=f"Switched from {old_mode} to {new_mode}",
-    )
-
-    return jsonify({"mode": cfg.TRADING_MODE, "previous": old_mode})
+    log_action("system", "mode_switch", details=f"Switched from {old_mode} to {new_mode}")
+    return jsonify({"mode": new_mode, "previous": old_mode})
 
 
 @app.route("/api/health")

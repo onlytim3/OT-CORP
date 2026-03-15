@@ -1803,6 +1803,165 @@
         return html;
     }
 
+    // ---- Strategy Detail ----
+    function openStrategyDetail(name) {
+        fetchAndRender('/api/strategy/' + name, name, renderStrategyDetail);
+    }
+
+    function renderStrategyDetail(data) {
+        _modalTitle.textContent = data.name;
+        const st = data.stats || {};
+        const enabled = data.enabled;
+
+        let html = '<div class="detail-section"><h3>Strategy Overview</h3><div class="detail-grid">';
+        html += detailItem('Status', enabled ? '<span class="green">ENABLED</span>' : '<span class="red">DISABLED</span>');
+        html += detailItem('Total Signals', st.total_signals || 0);
+        html += detailItem('Buy / Sell', (st.buy_signals || 0) + ' / ' + (st.sell_signals || 0));
+        html += detailItem('Total Trades', st.total_trades || 0);
+        html += detailItem('Closed Trades', st.closed_trades || 0);
+        html += detailItem('Wins', st.wins || 0);
+        html += detailItem('Win Rate', st.win_rate !== null && st.win_rate !== undefined ? '<span class="' + (st.win_rate >= 0.5 ? 'green' : 'red') + '">' + (st.win_rate * 100).toFixed(0) + '%</span>' : '—');
+        html += detailItem('Total P&L', '<span class="' + ((st.total_pnl || 0) >= 0 ? 'green' : 'red') + '">$' + ((st.total_pnl || 0) >= 0 ? '+' : '') + (st.total_pnl || 0).toFixed(2) + '</span>');
+        if (data.config && data.config.base_budget_pct) html += detailItem('Base Budget', data.config.base_budget_pct + '%');
+        html += '</div></div>';
+
+        // Backtest results
+        if (data.backtest) {
+            const bt = data.backtest;
+            html += '<div class="detail-section"><h3>Backtest Results</h3><div class="detail-grid">';
+            if (bt.total_return !== undefined) html += detailItem('Total Return', '<span class="' + (bt.total_return >= 0 ? 'green' : 'red') + '">' + (bt.total_return >= 0 ? '+' : '') + (bt.total_return * 100).toFixed(2) + '%</span>');
+            if (bt.sharpe_ratio !== undefined) html += detailItem('Sharpe Ratio', bt.sharpe_ratio.toFixed(3));
+            if (bt.max_drawdown !== undefined) html += detailItem('Max Drawdown', '<span class="red">' + (bt.max_drawdown * 100).toFixed(1) + '%</span>');
+            if (bt.num_trades !== undefined) html += detailItem('Trades', bt.num_trades);
+            if (bt.win_rate !== undefined) html += detailItem('Win Rate', (bt.win_rate * 100).toFixed(0) + '%');
+            if (bt.file) html += detailItem('Source', '<span class="dim" style="font-size:11px;">' + bt.file + '</span>');
+            html += '</div></div>';
+        }
+
+        // Agent recommendations about this strategy
+        if (data.recommendations && data.recommendations.length > 0) {
+            html += '<div class="detail-section"><h3>Agent Recommendations (' + data.recommendations.length + ')</h3>';
+            data.recommendations.forEach(r => {
+                const statusColor = r.status === 'resolved' ? 'green' : 'orange';
+                html += '<div class="journal-entry clickable" onclick="closeModal();setTimeout(function(){openRecommendationDetail(' + r.id + ')},200);">';
+                html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+                html += '<span class="action-badge badge-signal">' + (r.from_agent || '').replace('_agent', '') + '</span>';
+                html += '<span style="color:var(--color-' + statusColor + ');font-size:11px;">' + (r.status || '') + '</span>';
+                html += '</div>';
+                html += '<div class="je-rationale">' + (r.reasoning || '').substring(0, 200) + '</div>';
+                html += '<div class="je-meta">' + (r.timestamp || '').substring(0, 16).replace('T', ' ') + ' &bull; ' + (r.action || '') + '</div>';
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        // Recent signals
+        if (data.signals && data.signals.length > 0) {
+            html += '<div class="detail-section"><h3>Recent Signals (' + data.signals.length + ')</h3>';
+            data.signals.slice(0, 15).forEach(s => {
+                const sigClass = s.signal === 'buy' ? 'green' : s.signal === 'sell' ? 'red' : 'dim';
+                html += '<div class="trade-list-item clickable" onclick="closeModal();setTimeout(function(){openSignalDetail(' + s.id + ')},200);">';
+                html += '<span class="dim" style="min-width:110px;font-size:12px;">' + (s.timestamp || '').substring(0, 16).replace('T', ' ') + '</span>';
+                html += '<span class="action-symbol" style="min-width:70px;">' + (s.symbol || '') + '</span>';
+                html += '<span class="' + sigClass + '" style="min-width:40px;font-weight:600;">' + (s.signal || '').toUpperCase() + '</span>';
+                html += '<span class="orange" style="font-family:\'SF Mono\',ui-monospace,monospace;">str: ' + (s.strength || 0).toFixed(2) + '</span>';
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        // Recent trades
+        if (data.trades && data.trades.length > 0) {
+            html += '<div class="detail-section"><h3>Trade History (' + data.trades.length + ')</h3>';
+            data.trades.slice(0, 10).forEach(t => {
+                const sideClass = t.side === 'buy' ? 'green' : 'red';
+                html += '<div class="trade-list-item clickable" onclick="closeModal();setTimeout(function(){openTradeDetail(' + t.id + ')},200);">';
+                html += '<span class="dim" style="min-width:110px;font-size:12px;">' + (t.timestamp || '').substring(0, 16).replace('T', ' ') + '</span>';
+                html += '<span class="' + sideClass + '" style="min-width:40px;font-weight:600;">' + (t.side || '').toUpperCase() + '</span>';
+                html += '<span class="action-symbol">' + t.symbol + '</span>';
+                html += '<span style="font-family:\'SF Mono\',ui-monospace,monospace;">$' + (t.total || 0).toFixed(2) + '</span>';
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        return html;
+    }
+
+    // ---- Recommendation Detail ----
+    function openRecommendationDetail(recId) {
+        if (!recId) return;
+        fetchAndRender('/api/recommendation/' + recId, 'Recommendation #' + recId, renderRecommendationDetail);
+    }
+
+    function renderRecommendationDetail(data) {
+        const r = data.recommendation;
+        const statusColor = r.status === 'resolved' ? 'green' : r.status === 'pending' ? 'orange' : 'dim';
+
+        let html = '<div class="detail-section"><h3>Recommendation Overview</h3><div class="detail-grid">';
+        html += detailItem('From Agent', '<span style="color:var(--color-blue);font-weight:600;">' + (r.from_agent || '') + '</span>');
+        html += detailItem('To Agent', r.to_agent || '');
+        html += detailItem('Category', '<span class="action-badge badge-signal">' + (r.category || '') + '</span>');
+        html += detailItem('Action', r.action || '');
+        if (r.target) html += detailItem('Target', '<span class="action-symbol">' + r.target + '</span>');
+        html += detailItem('Status', '<span class="' + statusColor + '">' + (r.status || '').toUpperCase() + '</span>');
+        html += detailItem('Time', (r.timestamp || '').replace('T', ' ').substring(0, 19));
+        if (r.resolved_at) html += detailItem('Resolved At', (r.resolved_at || '').replace('T', ' ').substring(0, 19));
+        if (r.resolution) html += detailItem('Resolution', '<span class="green">' + r.resolution + '</span>');
+        if (r.outcome) html += detailItem('Outcome', r.outcome);
+        html += '</div></div>';
+
+        // Reasoning (full text)
+        html += '<div class="detail-section"><h3>Agent Reasoning</h3>';
+        html += '<div style="background:var(--bg-input);border-radius:12px;padding:14px 16px;font-size:13px;line-height:1.6;">' + (r.reasoning || 'No reasoning provided') + '</div>';
+        html += '</div>';
+
+        // Data payload
+        if (r.data && typeof r.data === 'object' && Object.keys(r.data).length > 0) {
+            html += '<div class="detail-section"><h3>Decision Data</h3><div class="detail-grid">';
+            for (const [k, v] of Object.entries(r.data)) {
+                if (k === 'auto_approve') continue;
+                if (typeof v === 'object' && v !== null) {
+                    html += detailItem(k, '<code style="font-size:11px;word-break:break-all;">' + JSON.stringify(v) + '</code>');
+                } else {
+                    const val = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v);
+                    html += detailItem(k, val);
+                }
+            }
+            html += '</div></div>';
+        }
+
+        // Related recommendations from same agent
+        if (data.related && data.related.length > 0) {
+            html += '<div class="detail-section"><h3>Related Recommendations</h3>';
+            data.related.forEach(rel => {
+                const relColor = rel.status === 'resolved' ? 'green' : 'orange';
+                html += '<div class="trade-list-item clickable" onclick="closeModal();setTimeout(function(){openRecommendationDetail(' + rel.id + ')},200);">';
+                html += '<span class="dim" style="min-width:110px;font-size:12px;">' + (rel.timestamp || '').substring(0, 16).replace('T', ' ') + '</span>';
+                html += '<span class="' + relColor + '" style="min-width:60px;">' + (rel.status || '') + '</span>';
+                html += '<span style="font-size:12px;">' + (rel.action || '') + '</span>';
+                if (rel.target) html += '<span class="action-symbol" style="font-size:11px;">' + rel.target + '</span>';
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        // Resulting actions
+        if (data.resulting_actions && data.resulting_actions.length > 0) {
+            html += '<div class="detail-section"><h3>Resulting Actions</h3>';
+            data.resulting_actions.forEach(a => {
+                html += '<div class="action-item clickable" onclick="closeModal();setTimeout(function(){openActionDetail(' + a.id + ')},200);">';
+                html += '<span class="action-time">' + (a.timestamp || '').substring(11, 19) + '</span>';
+                html += '<span class="action-badge badge-' + a.category + '">' + a.category + '</span>';
+                html += '<span class="action-details">' + (a.action || '') + '</span>';
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        return html;
+    }
+
     // ---- Chat Assistant ----
     const chatPanel = document.getElementById('chatPanel');
     const chatToggle = document.getElementById('chatToggle');
@@ -1949,7 +2108,7 @@
                     const pnl = s.total_pnl || 0;
                     const pnlClass = pnl >= 0 ? 'green' : 'red';
                     const pnlSign = pnl >= 0 ? '+' : '';
-                    html += '<tr>';
+                    html += '<tr class="clickable" onclick="openStrategyDetail(\'' + s.name + '\')">';
                     html += '<td class="action-symbol">' + s.name + '</td>';
                     html += '<td class="text-right blue">' + s.signals + '</td>';
                     html += '<td class="text-right">' + s.trades + '</td>';
@@ -1991,7 +2150,7 @@
                     html += '<div style="padding:4px 0;"><strong style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.3px;">Regime Signals</strong></div>';
                     data.regime_signals.forEach(s => {
                         const sigClass = s.signal === 'buy' ? 'green' : s.signal === 'sell' ? 'red' : 'dim';
-                        html += '<div class="action-item">';
+                        html += '<div class="action-item clickable" onclick="openSignalDetail(' + (s.id || 0) + ')">';
                         html += '<span class="action-time">' + (s.timestamp || '').substring(11, 19) + '</span>';
                         html += '<span class="action-badge badge-signal">' + s.strategy.replace(/_/g, ' ') + '</span>';
                         html += '<span class="' + sigClass + '" style="font-weight:600;">' + (s.signal || '').toUpperCase() + '</span>';
@@ -2010,7 +2169,7 @@
                 if (data.briefings && data.briefings.length > 0) {
                     html += '<div style="padding:8px 0 4px;"><strong style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.3px;">Briefings</strong></div>';
                     data.briefings.forEach(b => {
-                        html += '<div class="action-item">';
+                        html += '<div class="action-item clickable" onclick="openActionDetail(' + (b.id || 0) + ')">';
                         html += '<span class="action-time">' + (b.timestamp || '').substring(11, 19) + '</span>';
                         html += '<span class="action-details dim" style="font-size:12px;">' + (b.details || b.action || '').substring(0, 100) + '</span>';
                         html += '</div>';
@@ -2037,9 +2196,10 @@
                 if (data.pending && data.pending.length > 0) {
                     html += '<div style="padding:4px 0;"><strong style="font-size:12px;color:var(--color-orange);text-transform:uppercase;letter-spacing:0.3px;">Pending (' + data.pending.length + ')</strong></div>';
                     data.pending.slice(0, 5).forEach(r => {
-                        html += '<div class="action-item">';
+                        html += '<div class="action-item clickable" onclick="openRecommendationDetail(' + (r.id || 0) + ')">';
                         html += '<span class="action-badge badge-signal">' + (r.from_agent || '').replace('_agent', '') + '</span>';
-                        html += '<span class="action-details" style="font-size:12px;">' + (r.recommendation || '').substring(0, 80) + '</span>';
+                        html += '<span class="action-details" style="font-size:12px;">' + (r.action || r.recommendation || '').substring(0, 80) + '</span>';
+                        if (r.target) html += '<span class="action-symbol" style="font-size:11px;">' + r.target + '</span>';
                         html += '</div>';
                     });
                 }
@@ -2049,9 +2209,10 @@
                     html += '<div style="padding:8px 0 4px;"><strong style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.3px;">Resolved</strong></div>';
                     data.recent.slice(0, 5).forEach(r => {
                         const statusColor = r.status === 'applied' ? 'green' : r.status === 'rejected' ? 'red' : 'orange';
-                        html += '<div class="action-item">';
+                        html += '<div class="action-item clickable" onclick="openRecommendationDetail(' + (r.id || 0) + ')">';
                         html += '<span class="action-badge" style="background:var(--bg-input);color:var(--color-' + statusColor + ');">' + (r.status || '') + '</span>';
-                        html += '<span class="action-details dim" style="font-size:12px;">' + (r.recommendation || '').substring(0, 70) + '</span>';
+                        html += '<span class="action-details dim" style="font-size:12px;">' + (r.action || r.recommendation || '').substring(0, 70) + '</span>';
+                        if (r.target) html += '<span class="action-symbol" style="font-size:11px;">' + r.target + '</span>';
                         html += '</div>';
                     });
                 }

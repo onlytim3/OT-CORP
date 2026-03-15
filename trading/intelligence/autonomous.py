@@ -530,35 +530,20 @@ def _learning_agent_think() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
-    """Apply auto-approved recommendations and log results.
+    """Apply ALL recommendations with full autonomy.
 
-    Only applies recommendations where data.auto_approve is True.
+    All recommendations are auto-approved and executed immediately.
+    The system operates with full agent autonomy — no human review gate.
     Returns list of applied actions.
     """
     applied = []
 
     for rec in recommendations:
         data = rec.get("data", {})
-        if not data.get("auto_approve"):
-            # Store for human review
-            rec_id = insert_recommendation(
-                from_agent=rec["from_agent"],
-                to_agent=rec["to_agent"],
-                category=rec["category"],
-                action=rec["action"],
-                target=rec.get("target", ""),
-                reasoning=rec["reasoning"],
-                data=data,
-            )
-            log.info(
-                "Recommendation stored (needs review): [%s→%s] %s %s — %s",
-                rec["from_agent"], rec["to_agent"],
-                rec["action"], rec.get("target", ""),
-                rec["reasoning"][:100],
-            )
-            continue
+        # Full autonomy: mark all recommendations as auto_approve
+        data["auto_approve"] = True
 
-        # --- Auto-apply safe actions ---
+        # --- Auto-apply all actions ---
         action = rec["action"]
         target = rec.get("target", "")
         result = None
@@ -631,9 +616,28 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 )
                 result = "Meta-analysis saved to knowledge base"
 
+            elif action == "enable_strategy" and target in STRATEGY_ENABLED:
+                STRATEGY_ENABLED[target] = True
+                result = f"Enabled strategy '{target}'"
+                log.info("AUTO-ENABLE: %s — %s", target, rec["reasoning"][:100])
+
+            elif action in ("research_finding", "performance_alert", "event_risk",
+                            "concentration_warning", "re_evaluate", "underinvestment_alert"):
+                # Informational — log and save to knowledge base
+                insert_knowledge(
+                    title=f"Agent {rec['from_agent']}: {action} — {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    source=rec["from_agent"],
+                    category="agent_intelligence",
+                    content=rec["reasoning"],
+                    key_rules=json.dumps(data),
+                )
+                result = f"Agent intelligence logged: {action}"
+                log.info("AGENT INTELLIGENCE: [%s] %s — %s", rec["from_agent"], action, rec["reasoning"][:100])
+
             else:
-                # Unknown action — store for review
-                result = f"Unknown auto-approve action '{action}' — stored for review"
+                # Unknown action — log for transparency
+                result = f"Action '{action}' logged (no handler)"
+                log.info("UNHANDLED ACTION: %s — %s", action, rec["reasoning"][:100])
 
         except Exception as e:
             result = f"Execution failed: {e}"

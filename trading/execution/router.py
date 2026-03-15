@@ -63,6 +63,7 @@ def get_account() -> dict:
     """Get account info from AsterDex, formatted like Alpaca's response."""
     import os
     from trading.config import TRADING_MODE
+    from trading.db.store import get_setting
     from trading.execution.aster_client import aster_get_account, is_aster_configured
 
     if not is_aster_configured():
@@ -86,7 +87,7 @@ def get_account() -> dict:
 
         # Paper mode: use simulated balance (PAPER_BALANCE env or $1000 default)
         # so the system can generate realistic signals and position sizing
-        is_paper = TRADING_MODE == "paper"
+        is_paper = get_setting("trading_mode", TRADING_MODE) == "paper"
         if is_paper:
             paper_balance = float(os.getenv("PAPER_BALANCE", "1000"))
             equity = max(equity, paper_balance)

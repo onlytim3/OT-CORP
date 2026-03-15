@@ -104,7 +104,16 @@ def run_trading_cycle():
 
     clear_cache()  # Fresh data each cycle
     clear_allocation_cache()  # Reset dynamic sizing caches (confluence, regime, perf)
-    log_action("strategy_run", "cycle_start", details=f"Mode: {TRADING_MODE}")
+
+    # Sync trading mode from DB (may have been changed via dashboard toggle)
+    from trading.db.store import get_setting
+    import trading.config as _cfg
+    db_mode = get_setting("trading_mode")
+    if db_mode and db_mode != _cfg.TRADING_MODE:
+        log.info("Trading mode synced from DB: %s → %s", _cfg.TRADING_MODE, db_mode)
+        _cfg.TRADING_MODE = db_mode
+
+    log_action("strategy_run", "cycle_start", details=f"Mode: {_cfg.TRADING_MODE}")
     log.info("Trading cycle started")
     console.print(f"\n[bold cyan]{'='*60}[/]")
     console.print(f"[bold]Trading cycle started -- {_now_str()}[/bold]")
@@ -657,6 +666,70 @@ def run_weekly_review():
 
 
 # ---------------------------------------------------------------------------
+# Autonomous approval cycle — process all pending recommendations
+# ---------------------------------------------------------------------------
+
+def process_pending_approvals():
+    """Process any pending agent recommendations with full autonomy.
+
+    Runs every 30 minutes. Picks up any recommendations that were
+    stored as 'pending' (from before full autonomy was enabled, or
+    from edge cases) and auto-applies them.
+    """
+    try:
+        from trading.db.store import get_pending_recommendations, resolve_recommendation
+        from trading.intelligence.autonomous import _execute_safe_recommendations
+
+        pending = get_pending_recommendations()
+        if not pending:
+            return
+
+        log.info("Processing %d pending recommendations", len(pending))
+        console.print(f"[magenta]Processing {len(pending)} pending approvals...[/magenta]")
+
+        # Convert DB rows to recommendation dicts for the executor
+        recs = []
+        for p in pending:
+            data = p.get("data", {})
+            if isinstance(data, str):
+                import json as _json
+                try:
+                    data = _json.loads(data)
+                except Exception:
+                    data = {}
+            data["auto_approve"] = True  # Force auto-approve
+
+            recs.append({
+                "from_agent": p["from_agent"],
+                "to_agent": p["to_agent"],
+                "category": p["category"],
+                "action": p["action"],
+                "target": p.get("target", ""),
+                "reasoning": p["reasoning"],
+                "data": data,
+                "_pending_id": p["id"],
+            })
+
+        # Execute all pending recommendations
+        applied = _execute_safe_recommendations(recs)
+
+        # Resolve the original pending entries
+        for p in pending:
+            resolve_recommendation(p["id"], "auto_approved", "Processed by autonomous approval cycle")
+
+        if applied:
+            log_action(
+                "autonomous", "pending_approvals_processed",
+                details=f"Auto-approved {len(applied)} pending recommendations",
+            )
+            for a in applied:
+                console.print(f"  [magenta]→ {a['action']}: {a['target']} — {a['result']}[/magenta]")
+
+    except Exception as e:
+        log.warning("Pending approvals processing failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Daemon entry point
 # ---------------------------------------------------------------------------
 
@@ -715,6 +788,7 @@ def start_daemon(interval_hours=4, paper=False):
     # Schedule recurring tasks
     schedule.every(interval_hours).hours.do(run_trading_cycle)
     schedule.every(15).minutes.do(check_stop_losses)
+    schedule.every(30).minutes.do(process_pending_approvals)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
 
     # Graceful shutdown via SIGTERM/SIGINT

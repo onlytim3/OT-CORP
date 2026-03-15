@@ -172,6 +172,12 @@ def init_db():
                 outcome TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -232,6 +238,25 @@ def init_db():
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+# --- Settings (persistent key-value store) ---
+
+def get_setting(key: str, default: str = None) -> str:
+    """Get a persistent setting from the database."""
+    with get_db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    """Set a persistent setting in the database."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, value, _now()),
+        )
 
 
 # --- Trade Operations ---
