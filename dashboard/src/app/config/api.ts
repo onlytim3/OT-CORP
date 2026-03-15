@@ -102,10 +102,21 @@ export interface Intelligence {
   regime_signals: { id: number; timestamp: string; strategy: string; signal: string; strength: number; data: Record<string, unknown> | null }[];
 }
 
+export interface AgentStats {
+  name: string;
+  total: number;
+  applied: number;
+  rejected: number;
+  pending: number;
+  last_active: string | null;
+  categories: Record<string, number>;
+}
+
 export interface AgentsResponse {
   pending: Recommendation[];
   recent: Recommendation[];
   activity: ActionItem[];
+  agent_stats: AgentStats[];
 }
 
 export interface Recommendation {

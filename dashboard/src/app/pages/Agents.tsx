@@ -1,9 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Bot, CheckCircle2, Clock, XCircle, MessageSquare } from "lucide-react";
+import { Bot, CheckCircle2, Clock, XCircle, MessageSquare, Activity, Shield, TrendingUp, Brain, Search, BarChart3 } from "lucide-react";
 import { useState } from "react";
-import { api, usePolling, type AgentsResponse, type Recommendation } from "../config/api";
+import { api, usePolling, type AgentsResponse, type Recommendation, type AgentStats } from "../config/api";
 
 export function Agents() {
   const { data: agents } = usePolling<AgentsResponse>(api.agents, 15000);
@@ -12,6 +12,16 @@ export function Agents() {
   const pending = agents?.pending || [];
   const recent = agents?.recent || [];
   const activity = agents?.activity || [];
+  const agentStats = agents?.agent_stats || [];
+
+  const agentMeta: Record<string, { icon: typeof Bot; color: string; label: string }> = {
+    performance_agent: { icon: TrendingUp, color: '#00d4aa', label: 'Performance' },
+    research_agent: { icon: Search, color: '#4a9eff', label: 'Research' },
+    risk_agent: { icon: Shield, color: '#ff4466', label: 'Risk' },
+    regime_agent: { icon: Activity, color: '#ffa500', label: 'Regime' },
+    learning_agent: { icon: Brain, color: '#c084fc', label: 'Learning' },
+    backtest_agent: { icon: BarChart3, color: '#56d4dd', label: 'Backtest' },
+  };
 
   return (
     <div className="p-6 space-y-6">
@@ -20,13 +30,46 @@ export function Agents() {
         <p className="text-[#888888] mt-1">Monitor AI agent recommendations and autonomous actions</p>
       </div>
 
-      {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      {/* Agent Performance Tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+        {agentStats.map((agent) => {
+          const meta = agentMeta[agent.name] || { icon: Bot, color: '#888888', label: agent.name.replace('_agent', '') };
+          const Icon = meta.icon;
+          const successRate = agent.total > 0 ? Math.round((agent.applied / agent.total) * 100) : 0;
+          return (
+            <Card key={agent.name} className="hover:shadow-lg transition-shadow">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="p-1.5 rounded-md" style={{ backgroundColor: `${meta.color}15`, border: `1px solid ${meta.color}30` }}>
+                    <Icon className="size-4" style={{ color: meta.color }} />
+                  </div>
+                  <p className="text-xs font-medium text-[#e8e8e8] uppercase tracking-wider truncate">{meta.label}</p>
+                </div>
+                <p className="text-2xl font-bold text-[#e8e8e8] tabular-nums">{agent.total}</p>
+                <p className="text-xs text-[#888888] mb-2">recommendations</p>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-[#00d4aa]">{agent.applied} applied</span>
+                  <span className="text-[#888888]">·</span>
+                  <span className="text-[#888888]">{successRate}%</span>
+                </div>
+                {agent.last_active && (
+                  <p className="text-[10px] text-[#666666] mt-2 truncate">
+                    Last: {new Date(agent.last_active).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Summary Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center gap-4">
               <div className="p-3 rounded-lg bg-[#ffa500]/10 border border-[#ffa500]/30">
-                <Clock className="size-6 text-[#ffa500]" />
+                <Clock className="size-5 sm:size-6 text-[#ffa500]" />
               </div>
               <div>
                 <p className="text-sm text-[#888888]">Pending Review</p>
@@ -36,10 +79,10 @@ export function Agents() {
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center gap-4">
               <div className="p-3 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/30">
-                <CheckCircle2 className="size-6 text-[#00d4aa]" />
+                <CheckCircle2 className="size-5 sm:size-6 text-[#00d4aa]" />
               </div>
               <div>
                 <p className="text-sm text-[#888888]">Recent Actions</p>
@@ -49,10 +92,10 @@ export function Agents() {
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center gap-4">
               <div className="p-3 rounded-lg bg-[#4a9eff]/10 border border-[#4a9eff]/30">
-                <MessageSquare className="size-6 text-[#4a9eff]" />
+                <MessageSquare className="size-5 sm:size-6 text-[#4a9eff]" />
               </div>
               <div>
                 <p className="text-sm text-[#888888]">Activity Log</p>

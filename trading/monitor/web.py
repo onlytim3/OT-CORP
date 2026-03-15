@@ -650,12 +650,58 @@ def api_agents():
     """Autonomous agent recommendations and activity."""
     from trading.db.store import get_recommendation_history, get_pending_recommendations
 
-    result = {"pending": [], "recent": [], "activity": []}
+    result = {"pending": [], "recent": [], "activity": [], "agent_stats": []}
 
     try:
-        recs = get_recommendation_history(limit=20)
+        recs = get_recommendation_history(limit=100)
         result["pending"] = [r for r in recs if r.get("status") == "pending"]
         result["recent"] = [r for r in recs if r.get("status") != "pending"][:10]
+
+        # Compute per-agent performance stats
+        agent_names = [
+            "performance_agent", "research_agent", "risk_agent",
+            "regime_agent", "learning_agent", "backtest_agent",
+        ]
+        agent_stats = {}
+        for r in recs:
+            agent = r.get("from_agent", "unknown")
+            if agent not in agent_stats:
+                agent_stats[agent] = {
+                    "name": agent,
+                    "total": 0,
+                    "applied": 0,
+                    "rejected": 0,
+                    "pending": 0,
+                    "last_active": None,
+                    "categories": {},
+                }
+            s = agent_stats[agent]
+            s["total"] += 1
+            status = r.get("status", "pending")
+            if status == "pending":
+                s["pending"] += 1
+            elif status in ("applied", "accepted"):
+                s["applied"] += 1
+            elif status in ("rejected",):
+                s["rejected"] += 1
+            cat = r.get("category", "other")
+            s["categories"][cat] = s["categories"].get(cat, 0) + 1
+            ts = r.get("timestamp")
+            if ts and (s["last_active"] is None or ts > s["last_active"]):
+                s["last_active"] = ts
+
+        # Ensure all known agents appear even with 0 recs
+        for name in agent_names:
+            if name not in agent_stats:
+                agent_stats[name] = {
+                    "name": name,
+                    "total": 0, "applied": 0, "rejected": 0, "pending": 0,
+                    "last_active": None, "categories": {},
+                }
+
+        result["agent_stats"] = sorted(
+            agent_stats.values(), key=lambda x: x["total"], reverse=True,
+        )
     except Exception:
         pass
 
