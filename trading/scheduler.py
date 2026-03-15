@@ -389,6 +389,31 @@ def run_trading_cycle():
                 console.print(f"  [yellow]QUEUED {signal.symbol}: {reason}[/yellow]")
                 continue
 
+            # Volume gate — block BUY entries on low-volume assets
+            if signal.action == "buy":
+                try:
+                    from trading.risk.volume_gate import compute_volume_ratio, compute_volume_trend
+                    from trading.data.aster import alpaca_to_aster
+
+                    aster_sym = alpaca_to_aster(signal.symbol)
+                    if aster_sym:
+                        vol_ratio = compute_volume_ratio(aster_sym)
+                        vol_trend = compute_volume_trend(aster_sym) or 0.0
+                        min_entry_vol = RISK.get("min_volume_ratio", 0.30)
+
+                        if vol_ratio is not None and vol_ratio < min_entry_vol:
+                            log_action(
+                                "volume_block", "entry_blocked",
+                                symbol=signal.symbol,
+                                details=f"Volume {vol_ratio:.0%} of avg (min {min_entry_vol:.0%}), trend={vol_trend:+.2f}",
+                                data={"volume_ratio": round(vol_ratio, 3), "volume_trend": round(vol_trend, 3)},
+                            )
+                            console.print(f"  [yellow]VOLUME BLOCK {signal.symbol} — volume {vol_ratio:.0%} below {min_entry_vol:.0%} threshold[/yellow]")
+                            blocked_count += 1
+                            continue
+                except Exception as e:
+                    log.debug("Volume entry gate failed for %s: %s", signal.symbol, e)
+
             # Size the order (volatility-adjusted + strategy budgets)
             order_value = calculate_order_size(
                 signal, portfolio_value, buy_count
