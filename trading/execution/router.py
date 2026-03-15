@@ -67,6 +67,13 @@ def _to_aster(symbol: str) -> str:
     return aster
 
 
+def _is_valid_symbol(aster_sym: str) -> bool:
+    """Check if a symbol exists on AsterDex."""
+    if not _VALID_ASTER_SYMBOLS:
+        validate_aster_symbols()
+    return not _VALID_ASTER_SYMBOLS or aster_sym in _VALID_ASTER_SYMBOLS
+
+
 def _to_alpaca(symbol: str) -> str:
     """Convert AsterDex symbol back to Alpaca format for internal tracking."""
     if "/" in symbol:
@@ -225,6 +232,23 @@ def submit_order(
 
     aster_sym = _to_aster(symbol)
     side_upper = side.upper()
+
+    # Reject orders for symbols that don't exist on AsterDex
+    if not _is_valid_symbol(aster_sym):
+        log.warning("Rejecting order: %s (%s) not listed on AsterDex", aster_sym, symbol)
+        from trading.db.store import log_action
+        log_action("error", "symbol_not_listed", symbol=symbol,
+                   details=f"{aster_sym} is not listed on AsterDex — order skipped")
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "rejected",
+            "reason": f"{aster_sym} not listed on AsterDex",
+            "symbol": symbol,
+            "side": side,
+            "qty": 0,
+            "filled_qty": 0,
+            "filled_avg_price": 0,
+        }
 
     # Map buy/sell to AsterDex BUY/SELL
     if side_upper not in ("BUY", "SELL"):
