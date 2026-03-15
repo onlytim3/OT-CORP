@@ -215,6 +215,16 @@ def api_actions():
 @app.route("/api/trades")
 def api_trades():
     trades = get_trades(limit=50)
+    for t in trades:
+        price = t.get("price") or 0
+        close_price = t.get("close_price") or 0
+        pnl = t.get("pnl")
+        if pnl is not None and price > 0:
+            t["pnl_pct"] = round(pnl / (price * abs(t.get("qty", 1))) * 100, 2)
+        elif close_price > 0 and price > 0:
+            t["pnl_pct"] = round((close_price - price) / price * 100, 2)
+        else:
+            t["pnl_pct"] = None
     return jsonify(trades)
 
 

@@ -184,7 +184,7 @@ def get_positions_from_aster() -> list[dict]:
                 "current_price": mark_price,
                 "market_value": qty * mark_price,
                 "unrealized_pnl": unrealized,
-                "unrealized_plpc": (mark_price - entry_price) / entry_price if entry_price > 0 else 0,
+                "unrealized_pnl_pct": ((mark_price - entry_price) / entry_price * 100) if entry_price > 0 else 0,
                 "side": side,
                 "strategy": "",  # AsterDex doesn't track this; DB has it
                 "aster_symbol": aster_sym,
@@ -934,7 +934,7 @@ def _paper_get_positions() -> list[dict]:
             "current_price": mark_price,
             "market_value": qty * mark_price,
             "unrealized_pnl": unrealized,
-            "unrealized_plpc": unrealized_pct,
+            "unrealized_pnl_pct": unrealized_pct * 100,
             "side": side,
             "strategy": row.get("strategy", ""),
             "aster_symbol": aster_sym,
