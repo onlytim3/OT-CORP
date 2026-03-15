@@ -54,11 +54,13 @@ def _to_aster(symbol: str) -> str:
     if symbol.endswith("USDT"):
         aster = symbol
     else:
-        # Alpaca format (BTC/USD)
+        # Alpaca format (BTC/USD) or dashboard format (BTCUSD)
         aster = _ALPACA_TO_ASTER.get(symbol) or alpaca_to_aster(symbol)
         if not aster:
-            # Try stripping / and appending USDT
+            # Strip USD suffix (handles both "BTC/USD" and "BTCUSD")
             base = symbol.replace("/USD", "").replace("/", "")
+            if base.endswith("USD"):
+                base = base[:-3]  # BTCUSD → BTC
             aster = f"{base}USDT"
 
     # Warn if converted symbol is not in the validated set
