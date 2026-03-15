@@ -285,8 +285,39 @@ def submit_order(
         except Exception as e:
             log.warning("Failed to set leverage %dx for %s: %s", leverage, aster_sym, e)
 
-    # Round qty based on symbol (BTC needs more precision than AVAX)
+    # Round qty to exchange stepSize and enforce minQty
     qty = _round_qty(aster_sym, qty)
+
+    if qty <= 0:
+        log.warning("Qty rounded to 0 for %s (notional=$%.2f, price=%.4f)", aster_sym, notional or 0, mark_price)
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "rejected",
+            "reason": f"Order too small for {aster_sym} after rounding to exchange step size",
+            "symbol": symbol,
+            "side": side,
+            "qty": 0,
+            "filled_qty": 0,
+            "filled_avg_price": 0,
+        }
+
+    # Check min notional ($5 on most AsterDex pairs)
+    _load_symbol_filters()
+    sym_filters = _SYMBOL_FILTERS.get(aster_sym, {})
+    min_notional = sym_filters.get("minNotional", 5)
+    order_notional_est = qty * mark_price if mark_price > 0 else (notional or 0)
+    if order_notional_est < min_notional:
+        log.warning("Order below min notional: %s $%.2f < $%.2f", aster_sym, order_notional_est, min_notional)
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "rejected",
+            "reason": f"Order value ${order_notional_est:.2f} below minimum ${min_notional:.0f} for {aster_sym}",
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "filled_qty": 0,
+            "filled_avg_price": 0,
+        }
 
     # -----------------------------------------------------------------------
     # Slippage estimation (advisory — does not block the order)
@@ -510,50 +541,61 @@ def get_crypto_quote(symbol: str) -> dict:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _round_qty(aster_symbol: str, qty: float) -> float:
-    """Round quantity to appropriate precision for the symbol.
+_SYMBOL_FILTERS: dict[str, dict] = {}
 
-    AsterDex has different min quantity / step size per symbol.
-    Uses exchange info lookup with hardcoded fallbacks for known symbols.
+
+def _load_symbol_filters():
+    """Load exchange info filters for all symbols (cached)."""
+    global _SYMBOL_FILTERS
+    if _SYMBOL_FILTERS:
+        return
+    try:
+        from trading.execution.aster_client import get_aster_exchange_info
+        info = get_aster_exchange_info()
+        for s in info.get("symbols", []):
+            filters = {}
+            for f in s.get("filters", []):
+                if f["filterType"] == "LOT_SIZE":
+                    filters["stepSize"] = float(f["stepSize"])
+                    filters["minQty"] = float(f["minQty"])
+                    filters["maxQty"] = float(f["maxQty"])
+                elif f["filterType"] == "MIN_NOTIONAL":
+                    filters["minNotional"] = float(f["notional"])
+            _SYMBOL_FILTERS[s["symbol"]] = filters
+        log.info("Loaded filters for %d symbols", len(_SYMBOL_FILTERS))
+    except Exception as e:
+        log.warning("Could not load symbol filters: %s", e)
+
+
+def _round_qty(aster_symbol: str, qty: float) -> float:
+    """Round quantity to the exchange's stepSize and enforce minQty.
+
+    Uses live exchange info to determine precision, ensuring orders
+    comply with AsterDex's LOT_SIZE filter.
     """
-    # High-value assets need more decimal precision (smaller qty per dollar)
-    precision_map = {
-        # Crypto — high price
-        "BTCUSDT": 3, "ETHUSDT": 3, "BCHUSDT": 3,
-        "PAXGUSDT": 3,
-        # Crypto — medium price
-        "AAVEUSDT": 2, "LTCUSDT": 2, "BNBUSDT": 2, "ETCUSDT": 2,
-        "XMRUSDT": 3, "ZECUSDT": 3, "INJUSDT": 2, "TAOUSDT": 3,
-        "MKRUSDT": 3, "RENDERUSDT": 1,
-        # Crypto — lower price (larger qty per dollar)
-        "SOLUSDT": 1, "AVAXUSDT": 1, "DOTUSDT": 1, "LINKUSDT": 1,
-        "UNIUSDT": 1, "ADAUSDT": 0, "XRPUSDT": 0, "TRXUSDT": 0,
-        "DOGEUSDT": 0, "SUIUSDT": 0, "APTUSDT": 1, "ATOMUSDT": 1,
-        "NEARUSDT": 1, "TONUSDT": 1, "SEIUSDT": 0, "ARBUSDT": 0,
-        "OPUSDT": 1, "CRVUSDT": 0, "JUPUSDT": 0, "FETUSDT": 0,
-        "FILUSDT": 1, "ARUSDT": 1, "HBARUSDT": 0, "KASUSDT": 0,
-        "STXUSDT": 1, "DYDXUSDT": 1, "STRKUSDT": 0, "ICPUSDT": 1,
-        "MOVUSDT": 0, "FLOWUSDT": 0, "AXSUSDT": 1, "GALAUSDT": 0,
-        "APEUSDT": 0, "WLDUSDT": 1, "HYPEUSDT": 1, "PYTHUSDT": 0,
-        "JASMYUSDT": 0, "PENDLEUSDT": 1, "ONDOUSDT": 1,
-        "SNXUSDT": 1, "COWUSDT": 0, "EIGENUSDT": 1, "LDOUSDT": 1,
-        "CAKEUSDT": 1, "ETHFIUSDT": 1,
-        # Meme — very low price, trade in thousands
-        "1000SHIBUSDT": 0, "1000PEPEUSDT": 0, "1000BONKUSDT": 0,
-        "1000FLOKIUSDT": 0, "PNUTUSDT": 0, "TRUMPUSDT": 1,
-        "FARTCOINUSDT": 0, "MELANIAUSDT": 0, "BOMEUSDT": 0,
-        "MOODENGUSDT": 0, "TURBOUSDT": 0,
-        # AI tokens
-        "AIOUSDT": 0, "VIRTUALUSDT": 1, "GRASSUSDT": 0,
-        # Stocks — priced in USD, typically 0.01 share precision
-        "AAPLUSDT": 2, "AMZNUSDT": 2, "MSFTUSDT": 2, "NVDAUSDT": 2,
-        "TSLAUSDT": 2, "GOOGUSDT": 2, "METAUSDT": 2, "INTCUSDT": 1,
-        "HOODUSDT": 1,
-        # Commodities
-        "XAUUSDT": 2, "XAGUSDT": 1, "XCUUSDT": 1, "XPTUSDT": 2,
-        "XPDUSDT": 2, "NATGASUSDT": 1,
-        # Indices
-        "SPXUSDT": 2, "QQQUSDT": 2,
-    }
-    decimals = precision_map.get(aster_symbol, 2)
-    return round(qty, decimals)
+    _load_symbol_filters()
+    filters = _SYMBOL_FILTERS.get(aster_symbol)
+
+    if filters and "stepSize" in filters:
+        step = filters["stepSize"]
+        min_qty = filters.get("minQty", 0)
+
+        # Round down to nearest stepSize
+        if step > 0:
+            import math
+            qty = math.floor(qty / step) * step
+            # Determine decimal places from stepSize
+            if step >= 1:
+                qty = float(int(qty))
+            else:
+                decimals = max(0, -int(math.log10(step)))
+                qty = round(qty, decimals)
+
+        # Enforce minimum
+        if qty < min_qty:
+            qty = min_qty
+
+        return qty
+
+    # Fallback: round to 2 decimals
+    return round(qty, 2)

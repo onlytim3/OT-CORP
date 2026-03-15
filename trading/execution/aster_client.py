@@ -325,6 +325,13 @@ def _auth_request(method: str, path: str, params: Optional[dict] = None) -> Any:
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
 
+        if resp.status_code >= 400:
+            # Log the full error body before raising
+            try:
+                err_body = resp.json()
+                log.error("AsterDex %d error on %s: %s", resp.status_code, auth_path, err_body)
+            except Exception:
+                log.error("AsterDex %d error on %s: %s", resp.status_code, auth_path, resp.text[:500])
         resp.raise_for_status()
         data = resp.json()
 
