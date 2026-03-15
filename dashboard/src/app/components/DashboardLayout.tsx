@@ -102,13 +102,13 @@ export function DashboardLayout() {
 
       {/* Live Mode Confirmation Modal */}
       {showModeConfirm && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80">
-          <div className="bg-[#0a0a0a] border border-[#ff4466]/30 rounded-lg p-6 max-w-md w-full mx-4">
+        <div className="fixed inset-0 z-[100] flex max-sm:items-end sm:items-center justify-center bg-black/80">
+          <div className="bg-[#0a0a0a] border border-[#ff4466]/30 max-sm:rounded-t-2xl max-sm:rounded-b-none sm:rounded-lg p-5 sm:p-6 max-w-md w-full sm:mx-4">
             <div className="flex items-center gap-3 mb-4">
               <div className="p-2 rounded-lg bg-[#ff4466]/15 border border-[#ff4466]/30">
-                <AlertTriangle className="size-6 text-[#ff4466]" />
+                <AlertTriangle className="size-5 sm:size-6 text-[#ff4466]" />
               </div>
-              <h3 className="text-lg font-bold text-[#e8e8e8] uppercase tracking-wider">Switch to Live</h3>
+              <h3 className="text-base sm:text-lg font-bold text-[#e8e8e8] uppercase tracking-wider">Switch to Live</h3>
             </div>
             <p className="text-sm text-[#888888] mb-6 leading-relaxed">
               This will execute <span className="text-[#ff4466] font-medium">real trades with real money</span>.
@@ -117,14 +117,14 @@ export function DashboardLayout() {
             <div className="flex gap-3">
               <button
                 onClick={() => setShowModeConfirm(false)}
-                className="flex-1 px-4 py-2.5 rounded-lg bg-white/5 border border-white/10 text-[#c0c0c0] text-sm font-medium hover:bg-white/10 transition-colors uppercase tracking-wider"
+                className="flex-1 px-4 py-3 sm:py-2.5 rounded-lg bg-white/5 border border-white/10 text-[#c0c0c0] text-sm font-medium hover:bg-white/10 transition-colors uppercase tracking-wider"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmLiveMode}
                 disabled={switching}
-                className="flex-1 px-4 py-2.5 rounded-lg bg-[#ff4466] text-white text-sm font-medium hover:bg-[#ff4466]/80 transition-colors disabled:opacity-50 uppercase tracking-wider"
+                className="flex-1 px-4 py-3 sm:py-2.5 rounded-lg bg-[#ff4466] text-white text-sm font-medium hover:bg-[#ff4466]/80 transition-colors disabled:opacity-50 uppercase tracking-wider"
               >
                 {switching ? 'Switching...' : 'Confirm Live'}
               </button>

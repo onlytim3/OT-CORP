@@ -195,7 +195,7 @@ export function Trading() {
 
       {/* Trade Detail Modal */}
       <Dialog open={!!selectedTrade} onOpenChange={() => setSelectedTrade(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] max-w-2xl">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <Badge variant={selectedTrade?.side === 'buy' ? 'default' : 'destructive'}>{selectedTrade?.side.toUpperCase()}</Badge>
@@ -203,7 +203,7 @@ export function Trading() {
             </DialogTitle>
           </DialogHeader>
           {selectedTrade && (
-            <div className="grid grid-cols-2 gap-4 mt-4">
+            <div className="grid grid-cols-2 gap-2 sm:gap-4 mt-2 sm:mt-4">
               {[
                 ['Strategy', selectedTrade.strategy],
                 ['Quantity', selectedTrade.qty],
@@ -214,9 +214,9 @@ export function Trading() {
                 ['Time', new Date(selectedTrade.timestamp).toLocaleString()],
                 ['Closed', selectedTrade.closed_at ? new Date(selectedTrade.closed_at).toLocaleString() : 'Open'],
               ].map(([label, value]) => (
-                <div key={String(label)} className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">{label}</p>
-                  <p className="text-lg font-bold">{value}</p>
+                <div key={String(label)} className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">{label}</p>
+                  <p className="text-base sm:text-lg font-bold truncate">{value}</p>
                 </div>
               ))}
             </div>

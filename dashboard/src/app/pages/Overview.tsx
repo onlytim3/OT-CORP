@@ -121,17 +121,17 @@ export function Overview() {
 
       {/* Position Detail Modal */}
       <Dialog open={!!selectedPosition} onOpenChange={() => setSelectedPosition(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] max-w-2xl">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="text-2xl flex items-center gap-3">
+            <DialogTitle className="text-xl sm:text-2xl flex items-center gap-3">
               <div className="p-2 rounded-lg bg-[#4a9eff]/15 border border-[#4a9eff]/30">
-                <TrendingUp className="size-6 text-[#4a9eff]" />
+                <TrendingUp className="size-5 sm:size-6 text-[#4a9eff]" />
               </div>
               {selectedPosition?.symbol}
             </DialogTitle>
           </DialogHeader>
           {selectedPosition && (
-            <div className="grid grid-cols-2 gap-4 mt-4">
+            <div className="grid grid-cols-2 gap-2 sm:gap-4 mt-2 sm:mt-4">
               {[
                 ['Quantity', selectedPosition.qty],
                 ['Entry', `$${(selectedPosition.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
@@ -141,9 +141,9 @@ export function Overview() {
                 ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
                 ['Age', selectedPosition.age || 'N/A'],
               ].map(([label, value]) => (
-                <div key={String(label)} className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">{label}</p>
-                  <p className="text-lg font-bold">{value}</p>
+                <div key={String(label)} className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">{label}</p>
+                  <p className="text-base sm:text-lg font-bold">{value}</p>
                 </div>
               ))}
             </div>
@@ -184,30 +184,30 @@ export function Overview() {
 
       {/* Activity Detail Modal */}
       <Dialog open={!!selectedActivity} onOpenChange={() => setSelectedActivity(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] max-w-2xl">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
           <DialogHeader><DialogTitle>{selectedActivity?.action}</DialogTitle></DialogHeader>
           {selectedActivity && (
-            <div className="space-y-4 mt-4">
+            <div className="space-y-3 sm:space-y-4 mt-2 sm:mt-4">
               {selectedActivity.details && (
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Details</p>
-                  <p className="text-[#c0c0c0]">{selectedActivity.details}</p>
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Details</p>
+                  <p className="text-sm sm:text-base text-[#c0c0c0]">{selectedActivity.details}</p>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Category</p>
+              <div className="grid grid-cols-2 gap-2 sm:gap-4">
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Category</p>
                   <Badge>{selectedActivity.category}</Badge>
                 </div>
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Time</p>
-                  <p className="text-sm">{new Date(selectedActivity.timestamp).toLocaleString()}</p>
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Time</p>
+                  <p className="text-xs sm:text-sm">{new Date(selectedActivity.timestamp).toLocaleString()}</p>
                 </div>
               </div>
               {selectedActivity.data && (
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Data</p>
-                  <pre className="text-xs text-[#c0c0c0] overflow-auto max-h-40">{JSON.stringify(selectedActivity.data, null, 2)}</pre>
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Data</p>
+                  <pre className="text-xs text-[#c0c0c0] overflow-x-auto max-h-40 whitespace-pre-wrap break-all">{JSON.stringify(selectedActivity.data, null, 2)}</pre>
                 </div>
               )}
             </div>

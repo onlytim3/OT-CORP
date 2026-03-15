@@ -167,47 +167,47 @@ export function Agents() {
 
       {/* Recommendation Detail Modal */}
       <Dialog open={!!selectedRec} onOpenChange={() => setSelectedRec(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] max-w-2xl">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
-              <Bot className="size-6 text-[#4a9eff]" />
+              <Bot className="size-5 sm:size-6 text-[#4a9eff]" />
               Agent Recommendation
             </DialogTitle>
           </DialogHeader>
           {selectedRec && (
-            <div className="space-y-4 mt-4">
-              <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                <p className="text-sm text-[#888888] mb-1">Action</p>
-                <p className="text-lg font-bold">{selectedRec.action}</p>
+            <div className="space-y-3 sm:space-y-4 mt-2 sm:mt-4">
+              <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-xs sm:text-sm text-[#888888] mb-1">Action</p>
+                <p className="text-base sm:text-lg font-bold">{selectedRec.action}</p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">From Agent</p>
-                  <p className="font-medium">{selectedRec.from_agent}</p>
+              <div className="grid grid-cols-2 gap-2 sm:gap-4">
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">From Agent</p>
+                  <p className="text-sm sm:text-base font-medium truncate">{selectedRec.from_agent}</p>
                 </div>
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Target</p>
-                  <p className="font-medium">{selectedRec.target}</p>
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Target</p>
+                  <p className="text-sm sm:text-base font-medium truncate">{selectedRec.target}</p>
                 </div>
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Status</p>
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Status</p>
                   <Badge variant={selectedRec.status === 'accepted' ? 'default' : selectedRec.status === 'rejected' ? 'destructive' : 'secondary'}>
                     {selectedRec.status}
                   </Badge>
                 </div>
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Time</p>
-                  <p className="text-sm">{new Date(selectedRec.timestamp).toLocaleString()}</p>
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Time</p>
+                  <p className="text-xs sm:text-sm">{new Date(selectedRec.timestamp).toLocaleString()}</p>
                 </div>
               </div>
-              <div className="p-4 rounded-lg bg-[#4a9eff]/10 border border-[#4a9eff]/20">
-                <p className="text-sm text-[#888888] mb-2">Reasoning</p>
-                <p className="text-[#c0c0c0]">{selectedRec.reasoning}</p>
+              <div className="p-3 sm:p-4 rounded-lg bg-[#4a9eff]/10 border border-[#4a9eff]/20">
+                <p className="text-xs sm:text-sm text-[#888888] mb-2">Reasoning</p>
+                <p className="text-sm sm:text-base text-[#c0c0c0]">{selectedRec.reasoning}</p>
               </div>
               {selectedRec.data && (
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-sm text-[#888888] mb-1">Data</p>
-                  <pre className="text-xs text-[#c0c0c0] overflow-auto max-h-40">{JSON.stringify(selectedRec.data, null, 2)}</pre>
+                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Data</p>
+                  <pre className="text-xs text-[#c0c0c0] overflow-x-auto max-h-40 whitespace-pre-wrap break-all">{JSON.stringify(selectedRec.data, null, 2)}</pre>
                 </div>
               )}
             </div>
