@@ -66,7 +66,7 @@ services:
       - key: LEVERAGE_PROFILE
         value: conservative
       - key: DAEMON_INTERVAL_HOURS
-        value: "4"
+        value: "1"
 
     disk:
       name: agency-data
