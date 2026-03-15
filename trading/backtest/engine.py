@@ -57,22 +57,30 @@ class Backtester:
     the data available up to the current simulation date. Orders generated
     on day T are filled at day T+1 open price, with a configurable
     commission applied to every fill.
+
+    Leverage support:
+        When ``leverage > 1``, positions are margined. P&L is amplified by the
+        leverage factor. Positions are liquidated when unrealized loss exceeds
+        the maintenance margin (``1 / leverage * 0.8`` of notional).
     """
 
     def __init__(
         self,
         starting_capital: float = 100_000,
         commission_pct: float = 0.001,
+        leverage: int = 1,
     ) -> None:
         self.starting_capital = starting_capital
         self.commission_pct = commission_pct
+        self.leverage = max(1, leverage)
 
         # Mutable state -- reset on each run
         self._cash: float = 0.0
-        self._positions: dict[str, dict] = {}  # symbol -> {qty, avg_cost}
+        self._positions: dict[str, dict] = {}  # symbol -> {qty, avg_cost, margin}
         self._trade_log: list[dict] = []
         self._daily_values: list[dict] = []
         self._all_signals: list[dict] = []
+        self._liquidations: int = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -122,10 +130,11 @@ class Backtester:
         self._trade_log = []
         self._daily_values = []
         self._all_signals = []
+        self._liquidations = 0
 
-        dt_start = pd.Timestamp(start_date)
-        dt_end = pd.Timestamp(end_date)
-        date_range = pd.date_range(dt_start, dt_end, freq="D")
+        dt_start = pd.Timestamp(start_date, tz="UTC")
+        dt_end = pd.Timestamp(end_date, tz="UTC")
+        date_range = pd.date_range(dt_start, dt_end, freq="D", tz="UTC")
 
         # Pending orders from previous day's signals -- filled at today's open
         pending_orders: list[dict] = []
@@ -187,7 +196,11 @@ class Backtester:
                             }
                         )
 
-            # 5. Snapshot portfolio value at end of day
+            # 5. Check for liquidations (leveraged positions)
+            if self.leverage > 1:
+                self._check_liquidations(current_date, historical_data)
+
+            # 6. Snapshot portfolio value at end of day
             self._record_daily_value(current_date, historical_data)
 
         # Fill any remaining pending orders on the last day
@@ -220,6 +233,9 @@ class Backtester:
     ) -> dict | None:
         """Simulate a buy or sell at *price* for a given notional amount.
 
+        With leverage > 1, the margin required is ``notional / leverage``.
+        P&L is computed on the full notional, amplifying gains and losses.
+
         Returns a trade record dict or ``None`` if the order cannot be filled.
         """
         commission = notional * self.commission_pct
@@ -236,12 +252,16 @@ class Backtester:
             "qty": round(qty, 8),
             "notional": round(notional, 2),
             "commission": round(commission, 2),
+            "leverage": self.leverage,
         }
 
         if side == "buy":
-            if notional > self._cash:
-                # Not enough cash -- scale down
-                notional = self._cash
+            # With leverage, only margin is deducted from cash
+            margin_required = notional / self.leverage
+            if margin_required > self._cash:
+                # Scale down to what we can afford
+                margin_required = self._cash
+                notional = margin_required * self.leverage
                 commission = notional * self.commission_pct
                 qty = (notional - commission) / price if price > 0 else 0.0
                 if qty <= 0:
@@ -250,11 +270,15 @@ class Backtester:
                 trade["qty"] = round(qty, 8)
                 trade["commission"] = round(commission, 2)
 
-            self._cash -= notional
-            pos = self._positions.setdefault(symbol, {"qty": 0.0, "avg_cost": 0.0})
+            self._cash -= margin_required
+            pos = self._positions.setdefault(
+                symbol, {"qty": 0.0, "avg_cost": 0.0, "margin": 0.0}
+            )
             total_cost = pos["avg_cost"] * pos["qty"] + price * qty
             pos["qty"] += qty
             pos["avg_cost"] = total_cost / pos["qty"] if pos["qty"] else 0.0
+            pos["margin"] = pos.get("margin", 0.0) + margin_required
+            trade["margin_used"] = round(margin_required, 2)
 
         elif side == "sell":
             pos = self._positions.get(symbol)
@@ -262,21 +286,75 @@ class Backtester:
                 return None  # Nothing to sell
 
             sell_qty = min(qty, pos["qty"])
-            proceeds = sell_qty * price
-            commission = proceeds * self.commission_pct
+            sell_fraction = sell_qty / pos["qty"] if pos["qty"] > 0 else 1.0
+
+            # P&L is on the full leveraged notional
+            price_change_pct = (price - pos["avg_cost"]) / pos["avg_cost"] if pos["avg_cost"] > 0 else 0
+            leveraged_pnl = pos.get("margin", sell_qty * pos["avg_cost"] / self.leverage) * sell_fraction * price_change_pct * self.leverage
+
+            # Return margin + leveraged P&L
+            margin_returned = pos.get("margin", 0.0) * sell_fraction
+            proceeds = margin_returned + leveraged_pnl
+            commission = abs(proceeds) * self.commission_pct
             self._cash += proceeds - commission
 
-            pnl = (price - pos["avg_cost"]) * sell_qty
             trade["qty"] = round(sell_qty, 8)
-            trade["notional"] = round(proceeds, 2)
+            trade["notional"] = round(sell_qty * price, 2)
             trade["commission"] = round(commission, 2)
-            trade["pnl"] = round(pnl, 2)
+            trade["pnl"] = round(leveraged_pnl, 2)
+            trade["margin_returned"] = round(margin_returned, 2)
 
             pos["qty"] -= sell_qty
+            pos["margin"] = pos.get("margin", 0.0) * (1 - sell_fraction)
             if pos["qty"] <= 1e-12:
                 del self._positions[symbol]
 
         return trade
+
+    def _check_liquidations(
+        self, date: pd.Timestamp, historical_data: dict
+    ) -> None:
+        """Liquidate positions where unrealized loss exceeds maintenance margin.
+
+        Maintenance margin = 80% of initial margin. If the position's
+        unrealized P&L drops below -maintenance_margin, the position is
+        force-closed at current price with the margin fully lost.
+        """
+        to_liquidate = []
+        for symbol, pos in list(self._positions.items()):
+            price = self._get_open_price(symbol, date, historical_data)
+            if price is None or pos["avg_cost"] <= 0:
+                continue
+
+            margin = pos.get("margin", 0.0)
+            if margin <= 0:
+                continue
+
+            # Unrealized P&L on the leveraged position
+            price_change_pct = (price - pos["avg_cost"]) / pos["avg_cost"]
+            unrealized_pnl = margin * price_change_pct * self.leverage
+
+            # Maintenance margin = 80% of initial margin
+            maintenance = margin * 0.8
+            if unrealized_pnl < -maintenance:
+                to_liquidate.append((symbol, pos, price))
+
+        for symbol, pos, price in to_liquidate:
+            margin_lost = pos.get("margin", 0.0)
+            self._trade_log.append({
+                "date": str(date.date()),
+                "symbol": symbol,
+                "side": "liquidation",
+                "price": round(price, 6),
+                "qty": round(pos["qty"], 8),
+                "notional": round(pos["qty"] * price, 2),
+                "commission": 0,
+                "pnl": round(-margin_lost, 2),
+                "leverage": self.leverage,
+            })
+            # Margin is already deducted from cash; it's lost
+            del self._positions[symbol]
+            self._liquidations += 1
 
     # ------------------------------------------------------------------
     # Metrics
@@ -317,6 +395,17 @@ class Backtester:
             drawdowns = (values - cummax) / cummax
             max_drawdown = float(drawdowns.min())
 
+        # Calmar ratio = annualized return / |max drawdown|
+        calmar_ratio = 0.0
+        if len(daily) >= 2 and max_drawdown < 0:
+            total_days = len(daily)
+            total_return_pct = (daily[-1]["value"] - daily[0]["value"]) / daily[0]["value"]
+            ann_return = total_return_pct * (365 / total_days) if total_days > 0 else 0
+            calmar_ratio = ann_return / abs(max_drawdown) if max_drawdown != 0 else 0
+
+        closed_trades = [t for t in trades if t["side"] in ("sell", "liquidation") and "pnl" in t]
+        liquidation_trades = [t for t in trades if t.get("side") == "liquidation"]
+
         return {
             "total_trades": total_trades,
             "closed_trades": len(sell_trades),
@@ -325,13 +414,26 @@ class Backtester:
             "avg_trade_pnl": round(avg_trade_pnl, 2),
             "sharpe_ratio": round(sharpe_ratio, 4),
             "max_drawdown": round(max_drawdown, 4),
+            "calmar_ratio": round(calmar_ratio, 4),
             "best_trade": round(max((t["pnl"] for t in sell_trades), default=0.0), 2),
             "worst_trade": round(min((t["pnl"] for t in sell_trades), default=0.0), 2),
+            "leverage": self.leverage,
+            "liquidations": self._liquidations,
+            "liquidation_losses": round(sum(t["pnl"] for t in liquidation_trades), 2),
         }
 
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tz_compat(idx: pd.DatetimeIndex, ts: pd.Timestamp) -> pd.Timestamp:
+        """Ensure *ts* matches the timezone of *idx* for safe comparison."""
+        if idx.tz is not None and ts.tz is None:
+            return ts.tz_localize(idx.tz)
+        if idx.tz is None and ts.tz is not None:
+            return ts.tz_localize(None)
+        return ts
 
     def _get_open_price(
         self,
@@ -346,14 +448,12 @@ class Backtester:
         # Try OHLC data first (crypto coins use coin_id keys like "bitcoin")
         ohlc_data = historical_data.get("ohlc", {})
         for coin_id, df in ohlc_data.items():
-            # Match symbol heuristically -- strategies use Alpaca symbols like
-            # "BTC/USD" but data is keyed by CoinGecko ids like "bitcoin".
             if self._symbol_matches_coin(symbol, coin_id):
-                mask = df.index.normalize() == date.normalize()
+                compat_date = self._tz_compat(df.index, date)
+                mask = df.index.normalize() == compat_date.normalize()
                 if mask.any():
                     return float(df.loc[mask, "open"].iloc[0])
-                # Fall back to closest prior day
-                prior = df[df.index.normalize() <= date.normalize()]
+                prior = df[df.index.normalize() <= compat_date.normalize()]
                 if not prior.empty:
                     return float(prior["close"].iloc[-1])
 
@@ -362,12 +462,13 @@ class Backtester:
         etf_symbol = symbol.replace("/USD", "")  # "GLD" stays "GLD"
         for key, df in etf_data.items():
             if key.upper() == etf_symbol.upper() or key.upper() == symbol.upper():
-                mask = df.index.normalize() == date.normalize()
+                compat_date = self._tz_compat(df.index, date)
+                mask = df.index.normalize() == compat_date.normalize()
                 open_col = "Open" if "Open" in df.columns else "open"
                 close_col = "Close" if "Close" in df.columns else "close"
                 if mask.any() and open_col in df.columns:
                     return float(df.loc[mask, open_col].iloc[0])
-                prior = df[df.index.normalize() <= date.normalize()]
+                prior = df[df.index.normalize() <= compat_date.normalize()]
                 if not prior.empty and close_col in df.columns:
                     return float(prior[close_col].iloc[-1])
 
@@ -407,11 +508,20 @@ class Backtester:
         date: pd.Timestamp,
         historical_data: dict,
     ) -> None:
-        """Snapshot current portfolio value at end of day."""
+        """Snapshot current portfolio value at end of day.
+
+        With leverage, portfolio value = cash + sum(margin + unrealized_pnl)
+        where unrealized_pnl = margin * price_change_pct * leverage.
+        """
         positions_value = 0.0
         for symbol, pos in self._positions.items():
             price = self._get_open_price(symbol, date, historical_data)
-            if price is not None:
+            if price is not None and pos["avg_cost"] > 0:
+                margin = pos.get("margin", pos["qty"] * pos["avg_cost"] / self.leverage)
+                price_change_pct = (price - pos["avg_cost"]) / pos["avg_cost"]
+                unrealized_pnl = margin * price_change_pct * self.leverage
+                positions_value += margin + unrealized_pnl
+            elif price is not None:
                 positions_value += pos["qty"] * price
 
         total = self._cash + positions_value
@@ -440,6 +550,14 @@ class Backtester:
         """
         patches: dict[str, object] = {}
 
+        def _compat(df: pd.DataFrame, ts: pd.Timestamp) -> pd.Timestamp:
+            """Make *ts* tz-compatible with *df*'s index."""
+            if df.index.tz is not None and ts.tz is None:
+                return ts.tz_localize(df.index.tz)
+            if df.index.tz is None and ts.tz is not None:
+                return ts.tz_localize(None)
+            return ts
+
         ohlc_data = historical_data.get("ohlc", {})
         historical_prices_data = historical_data.get("historical_prices", {})
         market_data_df = historical_data.get("market_data")
@@ -448,6 +566,13 @@ class Backtester:
         etf_data = historical_data.get("etf_history", {})
         fred_data = historical_data.get("fred_series", {})
 
+        # Helper: add patch for data module AND all strategy modules that import it
+        def _add_patch(func_name: str, data_module: str, mock_fn: object,
+                       strategy_modules: list[str]) -> None:
+            patches[f"{data_module}.{func_name}"] = mock_fn
+            for smod in strategy_modules:
+                patches[f"trading.strategy.{smod}.{func_name}"] = mock_fn
+
         # -- trading.data.crypto.get_ohlc -----------------------------------
         if ohlc_data:
 
@@ -455,12 +580,21 @@ class Backtester:
                 df = ohlc_data.get(coin_id, pd.DataFrame())
                 if df.empty:
                     return df
-                sliced = df[df.index <= current_date]
-                if days and len(sliced) > days:
-                    sliced = sliced.tail(days)
+                cd = _compat(df, current_date)
+                sliced = df[df.index <= cd]
+                # Live mode returns hourly bars (~180 candles per 30 days).
+                # Backtest uses daily bars — serve 4x to compensate so
+                # EMA(50), Bollinger(20), RSI(14) etc. have enough data.
+                effective = max(days * 4, 120)
+                if len(sliced) > effective:
+                    sliced = sliced.tail(effective)
                 return sliced
 
-            patches["trading.data.crypto.get_ohlc"] = mock_get_ohlc
+            _add_patch("get_ohlc", "trading.data.crypto", mock_get_ohlc,
+                       ["rsi_divergence", "hmm_regime", "pairs_trading",
+                        "kalman_trend", "cross_asset_momentum",
+                        "regime_mean_reversion", "garch_volatility",
+                        "breakout_detection", "factor_crypto"])
 
         # -- trading.data.crypto.get_historical_prices ----------------------
         if historical_prices_data:
@@ -471,14 +605,14 @@ class Backtester:
                 df = historical_prices_data.get(coin_id, pd.DataFrame())
                 if df.empty:
                     return df
-                sliced = df[df.index <= current_date]
+                cd = _compat(df, current_date)
+                sliced = df[df.index <= cd]
                 if days and len(sliced) > days:
                     sliced = sliced.tail(days)
                 return sliced
 
-            patches["trading.data.crypto.get_historical_prices"] = (
-                mock_get_historical_prices
-            )
+            _add_patch("get_historical_prices", "trading.data.crypto",
+                       mock_get_historical_prices, ["factor_crypto"])
 
         # -- trading.data.crypto.get_prices ---------------------------------
         if prices_data:
@@ -500,7 +634,7 @@ class Backtester:
                             result[cid] = val
                 return result
 
-            patches["trading.data.crypto.get_prices"] = mock_get_prices
+            _add_patch("get_prices", "trading.data.crypto", mock_get_prices, [])
 
         # -- trading.data.crypto.get_market_data ----------------------------
         if market_data_df is not None:
@@ -516,19 +650,21 @@ class Backtester:
                     return market_data_df.copy()
                 return pd.DataFrame()
 
-            patches["trading.data.crypto.get_market_data"] = mock_get_market_data
+            _add_patch("get_market_data", "trading.data.crypto",
+                       mock_get_market_data, [])
 
         # -- trading.data.sentiment.get_fear_greed --------------------------
         if fg_list:
 
             def mock_get_fear_greed(limit: int = 30) -> dict:
                 # Filter to entries up to current_date
+                cd_naive = current_date.tz_localize(None) if current_date.tz else current_date
                 valid = []
                 for entry in fg_list:
                     ts = entry.get("timestamp")
                     if ts is not None:
                         entry_date = pd.Timestamp(int(ts), unit="s")
-                        if entry_date.normalize() <= current_date.normalize():
+                        if entry_date.normalize() <= cd_naive.normalize():
                             valid.append(entry)
                     else:
                         valid.append(entry)
@@ -568,7 +704,8 @@ class Backtester:
                     ],
                 }
 
-            patches["trading.data.sentiment.get_fear_greed"] = mock_get_fear_greed
+            _add_patch("get_fear_greed", "trading.data.sentiment",
+                       mock_get_fear_greed, [])
 
         # -- trading.data.commodities.get_etf_history -----------------------
         if etf_data:
@@ -579,12 +716,12 @@ class Backtester:
                 df = etf_data.get(symbol, pd.DataFrame())
                 if df.empty:
                     return df
-                sliced = df[df.index <= current_date]
+                cd = _compat(df, current_date)
+                sliced = df[df.index <= cd]
                 return sliced
 
-            patches["trading.data.commodities.get_etf_history"] = (
-                mock_get_etf_history
-            )
+            _add_patch("get_etf_history", "trading.data.commodities",
+                       mock_get_etf_history, ["dxy_dollar", "cross_asset_momentum"])
 
         # -- trading.data.commodities.get_fred_series -----------------------
         if fred_data:
@@ -595,14 +732,294 @@ class Backtester:
                 df = fred_data.get(series_id, pd.DataFrame())
                 if df.empty:
                     return df
-                sliced = df[df.index <= current_date]
+                cd = _compat(df, current_date)
+                sliced = df[df.index <= cd]
                 if limit and len(sliced) > limit:
                     sliced = sliced.tail(limit)
                 return sliced
 
-            patches["trading.data.commodities.get_fred_series"] = (
-                mock_get_fred_series
-            )
+            _add_patch("get_fred_series", "trading.data.commodities",
+                       mock_get_fred_series, [])
+
+        # -- trading.data.aster (AsterDex derivatives data) ------------------
+        # Derive realistic derivatives data from OHLC price action so that
+        # funding rates, basis, order books, and volume correlate with actual
+        # market movements.  This replaces the old random-noise mocks.
+        from trading.config import ASTER_SYMBOLS
+
+        # Reverse map: BTCUSDT -> bitcoin
+        _aster_to_coin = {v: k for k, v in ASTER_SYMBOLS.items()}
+
+        def _price_momentum(coin_id: str, lookback: int = 5) -> float:
+            """Return recent price momentum (-1..+1) from OHLC data."""
+            df = ohlc_data.get(coin_id, pd.DataFrame())
+            if df.empty:
+                return 0.0
+            cd = _compat(df, current_date)
+            sliced = df[df.index <= cd].tail(lookback + 1)
+            if len(sliced) < 2:
+                return 0.0
+            ret = (sliced["close"].iloc[-1] - sliced["close"].iloc[0]) / sliced["close"].iloc[0]
+            return float(np.clip(ret * 10, -1, 1))  # Scale so ±10% maps to ±1
+
+        def _current_price(coin_id: str) -> float:
+            """Return the latest close price from OHLC."""
+            df = ohlc_data.get(coin_id, pd.DataFrame())
+            if df.empty:
+                return 0.0
+            cd = _compat(df, current_date)
+            sliced = df[df.index <= cd]
+            return float(sliced["close"].iloc[-1]) if not sliced.empty else 0.0
+
+        def _volatility(coin_id: str, lookback: int = 20) -> float:
+            """Return recent realized volatility (annualized std of returns)."""
+            df = ohlc_data.get(coin_id, pd.DataFrame())
+            if df.empty:
+                return 0.02
+            cd = _compat(df, current_date)
+            sliced = df[df.index <= cd].tail(lookback + 1)
+            if len(sliced) < 3:
+                return 0.02
+            rets = sliced["close"].pct_change().dropna()
+            return float(rets.std()) if len(rets) > 0 else 0.02
+
+        def _coin_for_symbol(symbol: str) -> str:
+            """Map AsterDex symbol to coin_id."""
+            return _aster_to_coin.get(symbol, "bitcoin")
+
+        # --- Funding rates: dict[str, float] (coin_id -> rate) ---
+        def mock_get_funding_rates(symbols=None):
+            from trading.config import ASTER_SYMBOLS as _AS
+            target_coins = list(_AS.keys())[:6]  # Top 6
+            result = {}
+            for coin_id in target_coins:
+                mom = _price_momentum(coin_id, lookback=3)
+                # Funding positive in uptrends (longs pay shorts), negative in downtrends
+                rate = mom * 0.0005 + np.random.normal(0, 0.0001)
+                result[coin_id] = float(np.clip(rate, -0.003, 0.003))
+            return result
+
+        # --- Funding rate history: list[float] ---
+        def mock_get_funding_rate_history(symbol, limit=100):
+            coin_id = _coin_for_symbol(symbol)
+            df = ohlc_data.get(coin_id, pd.DataFrame())
+            if df.empty:
+                return [np.random.normal(0.0001, 0.0003) for _ in range(limit)]
+            cd = _compat(df, current_date)
+            sliced = df[df.index <= cd].tail(limit + 1)
+            if len(sliced) < 3:
+                return [np.random.normal(0.0001, 0.0003) for _ in range(limit)]
+            rets = sliced["close"].pct_change().dropna()
+            # Funding tracks momentum: positive returns → positive funding
+            rates = []
+            for r in rets:
+                rate = float(r * 0.05 + np.random.normal(0, 0.0002))
+                rates.append(float(np.clip(rate, -0.005, 0.005)))
+            # Pad to requested limit
+            while len(rates) < limit:
+                rates.insert(0, float(np.random.normal(0.0001, 0.0003)))
+            return rates[-limit:]
+
+        # --- Order book imbalance: dict ---
+        def mock_get_orderbook_imbalance(symbol, depth=20):
+            coin_id = _coin_for_symbol(symbol)
+            price = _current_price(coin_id)
+            if price <= 0:
+                price = 50000.0 if "BTC" in symbol else 3000.0
+            mom = _price_momentum(coin_id, lookback=3)
+            # Bid-heavy in uptrends, ask-heavy in downtrends
+            base_bid = 100 + mom * 40
+            base_ask = 100 - mom * 40
+            bid_vol = max(10, base_bid + np.random.normal(0, 15))
+            ask_vol = max(10, base_ask + np.random.normal(0, 15))
+            total = bid_vol + ask_vol
+            return {
+                "bid_volume": round(bid_vol, 4),
+                "ask_volume": round(ask_vol, 4),
+                "imbalance": round((bid_vol - ask_vol) / total, 4),
+                "spread_bps": round(abs(np.random.normal(3, 2)), 2),
+                "mid_price": round(price, 2),
+            }
+
+        # --- Basis spread: dict or list[dict] ---
+        def mock_get_basis_spread(symbol=None):
+            def _single(s):
+                coin_id = _coin_for_symbol(s)
+                price = _current_price(coin_id)
+                if price <= 0:
+                    price = 50000.0 if "BTC" in s else 3000.0
+                mom = _price_momentum(coin_id, lookback=5)
+                # Contango in uptrends, backwardation in downtrends
+                basis_pct = mom * 0.15 + np.random.normal(0, 0.05)
+                mark = price * (1 + basis_pct / 100)
+                rate = mom * 0.0005 + np.random.normal(0, 0.0001)
+                return {
+                    "symbol": s,
+                    "markPrice": round(mark, 2),
+                    "indexPrice": round(price, 2),
+                    "basis_pct": round(basis_pct, 4),
+                    "fundingRate": round(float(np.clip(rate, -0.003, 0.003)), 6),
+                }
+            if symbol:
+                return _single(symbol)
+            tracked = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT"]
+            return [_single(s) for s in tracked]
+
+        # --- Taker volume ratio: dict ---
+        def mock_get_taker_volume_ratio(symbol, interval="1h", limit=24):
+            coin_id = _coin_for_symbol(symbol)
+            mom = _price_momentum(coin_id, lookback=3)
+            # Buy-heavy in uptrends, sell-heavy in downtrends
+            buy_ratio = 0.5 + mom * 0.12 + np.random.normal(0, 0.03)
+            buy_ratio = float(np.clip(buy_ratio, 0.25, 0.75))
+            return {
+                "symbol": symbol,
+                "buy_ratio": round(buy_ratio, 4),
+                "sell_ratio": round(1 - buy_ratio, 4),
+                "net_ratio": round(buy_ratio * 2 - 1, 4),
+                "periods": limit,
+            }
+
+        # --- AsterDex OHLCV: pd.DataFrame ---
+        def mock_get_aster_ohlcv(symbol, interval="1h", limit=500):
+            coin_id = _coin_for_symbol(symbol)
+            df = ohlc_data.get(coin_id, pd.DataFrame())
+            if df.empty:
+                return pd.DataFrame()
+            cd = _compat(df, current_date)
+            sliced = df[df.index <= cd].tail(limit)
+            if sliced.empty:
+                return pd.DataFrame()
+            # Add taker buy volume (correlated with price direction)
+            result = sliced.copy()
+            if "volume" not in result.columns:
+                result["volume"] = 1000.0
+            rets = result["close"].pct_change().fillna(0)
+            # Taker buy ratio higher when price goes up
+            taker_ratio = 0.5 + rets.clip(-0.1, 0.1) * 3
+            result["taker_buy_base_vol"] = result["volume"] * taker_ratio
+            if "trades" not in result.columns:
+                result["trades"] = 100
+            return result
+
+        # --- AsterDex klines (from aster_client): pd.DataFrame ---
+        def mock_get_aster_klines(symbol, interval="1d", limit=500):
+            return mock_get_aster_ohlcv(symbol, interval=interval, limit=limit)
+
+        # --- AsterDex order book (from aster_client): dict ---
+        def mock_get_aster_orderbook(symbol, limit=50):
+            coin_id = _coin_for_symbol(symbol)
+            price = _current_price(coin_id)
+            if price <= 0:
+                price = 50000.0 if "BTC" in symbol else 3000.0
+            mom = _price_momentum(coin_id, lookback=3)
+            spread = price * 0.0002  # 2 bps spread
+            bids = []
+            asks = []
+            for i in range(min(limit, 50)):
+                bid_p = price - spread * (i + 1)
+                ask_p = price + spread * (i + 1)
+                # Bid volume higher in uptrends (support), diminishing with depth
+                bid_q = max(0.001, (1.0 - i * 0.015) * (1 + mom * 0.3) + np.random.normal(0, 0.1))
+                ask_q = max(0.001, (1.0 - i * 0.015) * (1 - mom * 0.3) + np.random.normal(0, 0.1))
+                bids.append((round(bid_p, 2), round(bid_q, 4)))
+                asks.append((round(ask_p, 2), round(ask_q, 4)))
+            return {"bids": bids, "asks": asks}
+
+        # --- AsterDex open interest (from aster_client): dict ---
+        def mock_get_aster_open_interest(symbol):
+            coin_id = _coin_for_symbol(symbol)
+            vol = _volatility(coin_id)
+            price = _current_price(coin_id)
+            # OI higher with higher volatility and price
+            base_oi = price * 1000 * (1 + vol * 10)
+            return {"openInterest": round(base_oi + np.random.normal(0, base_oi * 0.05), 2),
+                    "symbol": symbol}
+
+        # --- AsterDex mark prices (from aster_client): list or dict ---
+        def mock_get_aster_mark_prices(symbol=None):
+            if symbol:
+                coin_id = _coin_for_symbol(symbol)
+                price = _current_price(coin_id)
+                if price <= 0:
+                    price = 50000.0 if "BTC" in symbol else 3000.0
+                mom = _price_momentum(coin_id, lookback=5)
+                basis = mom * 0.15 / 100
+                return {
+                    "symbol": symbol,
+                    "markPrice": round(price * (1 + basis), 2),
+                    "indexPrice": round(price, 2),
+                    "lastFundingRate": round(float(mom * 0.0005), 6),
+                    "nextFundingTime": int(current_date.timestamp() * 1000) + 28800000,
+                }
+            # All symbols
+            tracked = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT"]
+            results = []
+            for s in tracked:
+                results.append(mock_get_aster_mark_prices(s))
+            return results
+
+        # --- Market summary ---
+        def mock_get_aster_market_summary():
+            btc_mom = _price_momentum("bitcoin", lookback=5)
+            return {
+                "funding_sentiment": round(btc_mom * 0.0005, 6),
+                "orderbook_pressure": round(btc_mom * 0.2, 4),
+                "basis_regime": "contango" if btc_mom > 0 else "backwardation",
+                "volume_flow": round(btc_mom * 0.3, 4),
+            }
+
+        # All strategy modules that import from trading.data.aster or aster_client
+        _aster_strategies = [
+            "funding_arb", "liquidation_cascade", "basis_zscore",
+            "funding_term_structure", "taker_divergence", "cross_basis_rv",
+            "oi_price_divergence", "whale_flow", "cross_asset_momentum",
+            "multi_factor_rank", "meme_momentum", "volatility_regime",
+            "equity_crypto_correlation", "gold_crypto_hedge",
+        ]
+
+        # Patch trading.data.aster functions
+        _add_patch("get_funding_rates", "trading.data.aster",
+                   mock_get_funding_rates, _aster_strategies)
+        _add_patch("get_funding_rate_history", "trading.data.aster",
+                   mock_get_funding_rate_history, _aster_strategies)
+        _add_patch("get_orderbook_imbalance", "trading.data.aster",
+                   mock_get_orderbook_imbalance, _aster_strategies)
+        _add_patch("get_basis_spread", "trading.data.aster",
+                   mock_get_basis_spread, _aster_strategies)
+        _add_patch("get_taker_volume_ratio", "trading.data.aster",
+                   mock_get_taker_volume_ratio, _aster_strategies)
+        _add_patch("get_aster_ohlcv", "trading.data.aster",
+                   mock_get_aster_ohlcv, _aster_strategies)
+        _add_patch("get_aster_market_summary", "trading.data.aster",
+                   mock_get_aster_market_summary, _aster_strategies)
+        _add_patch("get_open_interest", "trading.data.aster",
+                   lambda s: mock_get_aster_open_interest(s).get("openInterest"),
+                   _aster_strategies)
+
+        # Patch trading.execution.aster_client functions (some strategies import directly)
+        _add_patch("get_aster_klines", "trading.execution.aster_client",
+                   mock_get_aster_klines, _aster_strategies)
+        _add_patch("get_aster_orderbook", "trading.execution.aster_client",
+                   mock_get_aster_orderbook, _aster_strategies)
+        _add_patch("get_aster_open_interest", "trading.execution.aster_client",
+                   mock_get_aster_open_interest, _aster_strategies)
+        _add_patch("get_aster_mark_prices", "trading.execution.aster_client",
+                   mock_get_aster_mark_prices, _aster_strategies)
+
+        # _public_get is used by oi_price_divergence to fetch OI directly
+        def mock_public_get(endpoint, params=None):
+            params = params or {}
+            if "openInterest" in endpoint:
+                symbol = params.get("symbol", "BTCUSDT")
+                return mock_get_aster_open_interest(symbol)
+            if "klines" in endpoint:
+                symbol = params.get("symbol", "BTCUSDT")
+                return []  # klines go through get_aster_klines
+            return {}
+
+        _add_patch("_public_get", "trading.execution.aster_client",
+                   mock_public_get, _aster_strategies)
 
         return patches
 
@@ -613,16 +1030,33 @@ class Backtester:
 
 
 class _apply_patches:
-    """Context manager that applies multiple ``unittest.mock.patch`` objects."""
+    """Context manager that applies multiple ``unittest.mock.patch`` objects.
+
+    Patches that target non-existent attributes (e.g. lazy imports inside
+    functions) are silently skipped so they don't crash the entire patching
+    context for all strategies.
+    """
 
     def __init__(self, targets: dict[str, object]) -> None:
         self._patchers = []
         for target, replacement in targets.items():
-            self._patchers.append(patch(target, replacement))
+            try:
+                p = patch(target, replacement)
+                self._patchers.append(p)
+            except AttributeError:
+                # Target module doesn't have this attribute at module level
+                # (strategy uses lazy import inside a function) — skip it.
+                pass
 
     def __enter__(self) -> None:
+        started = []
         for p in self._patchers:
-            p.start()
+            try:
+                p.start()
+                started.append(p)
+            except AttributeError:
+                pass
+        self._patchers = started
 
     def __exit__(self, *exc: object) -> None:
         for p in self._patchers:
@@ -648,9 +1082,9 @@ def _fetch_historical_data(
 
     # -- Crypto OHLC --------------------------------------------------------
     # Determine which coins to fetch based on strategy config
-    from trading.config import MOMENTUM
+    from trading.config import CRYPTO_SYMBOLS
 
-    default_coins = MOMENTUM.get("coins", ["bitcoin", "ethereum"])
+    default_coins = list(CRYPTO_SYMBOLS.keys())
 
     try:
         ohlc = {}
@@ -693,7 +1127,7 @@ def _fetch_historical_data(
 
     # -- Fear & Greed -------------------------------------------------------
     try:
-        fg = get_fear_greed(limit=min(days, 365))
+        fg = get_fear_greed(limit=min(days, 1000))
         # Convert to list-of-dicts format the engine expects
         history = fg.get("history")
         if history is not None and not history.empty:
@@ -713,8 +1147,14 @@ def _fetch_historical_data(
 
     # -- ETF history --------------------------------------------------------
     try:
-        etf_symbols = ["GLD", "SLV", "USO", "UNG"]
-        period = "6mo" if days <= 180 else "1y"
+        # Include leveraged ETFs (UGL, AGQ) and DXY index used by strategies
+        etf_symbols = ["GLD", "SLV", "USO", "UNG", "UGL", "AGQ", "DX-Y.NYB"]
+        if days <= 180:
+            period = "6mo"
+        elif days <= 365:
+            period = "1y"
+        else:
+            period = "2y"
         etfs = {}
         for sym in etf_symbols:
             try:
@@ -732,7 +1172,7 @@ def _fetch_historical_data(
         fred = {}
         for sid in fred_ids:
             try:
-                fred[sid] = get_fred_series(sid, limit=days)
+                fred[sid] = get_fred_series(sid, limit=min(days + 60, 1000))
                 console.print(f"  FRED {sid}: {len(fred[sid])} rows")
             except Exception as exc:
                 logger.debug("Could not fetch FRED %s: %s", sid, exc)
@@ -747,6 +1187,7 @@ def run_backtest(
     strategy_name: str,
     days: int = 90,
     starting_capital: float = 100_000,
+    leverage: int = 1,
 ) -> BacktestResult:
     """High-level convenience function: fetch data, run backtest, print report.
 
@@ -758,6 +1199,8 @@ def run_backtest(
         How many days of history to simulate over.
     starting_capital:
         Initial cash balance.
+    leverage:
+        Leverage multiplier (1x = no leverage).
 
     Returns
     -------
@@ -771,12 +1214,13 @@ def run_backtest(
     backtester = Backtester(
         starting_capital=starting_capital,
         commission_pct=0.001,
+        leverage=leverage,
     )
 
     console.print(
         f"\n[bold]Running backtest:[/] {strategy_name} "
         f"from {start_date} to {end_date} "
-        f"(capital: ${starting_capital:,.0f})\n"
+        f"(capital: ${starting_capital:,.0f}, leverage: {leverage}x)\n"
     )
 
     result = backtester.run(
@@ -813,7 +1257,9 @@ def print_backtest_report(result: BacktestResult) -> None:
         else 0.0
     )
 
+    lev = result.metrics.get("leverage", 1)
     summary.add_row("Date Range", f"{result.start_date} to {result.end_date}")
+    summary.add_row("Leverage", f"{lev}x")
     summary.add_row("Starting Capital", f"${result.starting_capital:,.2f}")
     summary.add_row("Ending Capital", f"${ending_capital:,.2f}")
     summary.add_row(
@@ -827,7 +1273,11 @@ def print_backtest_report(result: BacktestResult) -> None:
     summary.add_row("Best Trade", f"${m.get('best_trade', 0):+,.2f}")
     summary.add_row("Worst Trade", f"${m.get('worst_trade', 0):+,.2f}")
     summary.add_row("Sharpe Ratio", f"{m.get('sharpe_ratio', 0):.4f}")
+    summary.add_row("Calmar Ratio", f"{m.get('calmar_ratio', 0):.4f}")
     summary.add_row("Max Drawdown", f"{m.get('max_drawdown', 0) * 100:.2f}%")
+    if m.get("liquidations", 0) > 0:
+        summary.add_row("Liquidations", f"[red]{m['liquidations']}[/red]")
+        summary.add_row("Liquidation Losses", f"[red]${m.get('liquidation_losses', 0):+,.2f}[/red]")
 
     console.print(summary)
 

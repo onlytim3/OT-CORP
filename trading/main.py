@@ -9,20 +9,20 @@ console = Console()
 
 
 def get_account():
-    """Get account from Alpaca (paper or live handled by alpaca_client config)."""
-    from trading.execution.alpaca_client import get_account as _get_account
+    """Get account from AsterDex (primary execution venue)."""
+    from trading.execution.router import get_account as _get_account
     return _get_account()
 
 
 def get_positions_list():
-    """Get positions from Alpaca (paper or live handled by alpaca_client config)."""
-    from trading.execution.alpaca_client import get_positions_from_alpaca
-    return get_positions_from_alpaca()
+    """Get positions from AsterDex."""
+    from trading.execution.router import get_positions_from_aster
+    return get_positions_from_aster()
 
 
 def execute_order(symbol, side, notional=None, qty=None):
-    """Execute order via Alpaca (paper or live handled by alpaca_client config)."""
-    from trading.execution.alpaca_client import submit_order
+    """Execute order via AsterDex perpetual futures."""
+    from trading.execution.router import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty)
 
 
@@ -107,7 +107,7 @@ def cmd_run(paper: bool = False):
                     entry_price = order_value  # Will be refined after fill
                     if "/" in signal.symbol:
                         try:
-                            from trading.execution.alpaca_client import get_crypto_quote
+                            from trading.execution.router import get_crypto_quote
                             q = get_crypto_quote(signal.symbol)
                             entry_price = q.get("mid") or entry_price
                         except Exception:
@@ -318,8 +318,8 @@ def cmd_backtest():
     # Simple momentum backtest
     console.print("[cyan]Backtesting Momentum Strategy[/cyan]")
     try:
-        from trading.config import MOMENTUM, CRYPTO_SYMBOLS
-        coins = MOMENTUM["coins"][:5]  # Top 5 for speed
+        from trading.config import DEFAULT_COINS, CRYPTO_SYMBOLS
+        coins = DEFAULT_COINS[:5]  # Top 5 for speed
         results = {}
         for coin in coins:
             hist = get_historical_prices(coin, days=90)

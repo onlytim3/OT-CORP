@@ -1,0 +1,29 @@
+{
+  "run_date": "2026-03-15T01:13:32.898427+00:00",
+  "days": 365,
+  "starting_capital": 100000.0,
+  "strategies": [
+    {
+      "strategy": "funding_arb",
+      "total_return_pct": -2.7704,
+      "metrics": {
+        "total_trades": 107,
+        "closed_trades": 45,
+        "win_rate": 0.7556,
+        "total_pnl": 14468.89,
+        "avg_trade_pnl": 321.53,
+        "sharpe_ratio": -0.0319,
+        "max_drawdown": -0.2431,
+        "calmar_ratio": -0.1136,
+        "best_trade": 1472.63,
+        "worst_trade": -729.4,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 107,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    }
+  ]
+}

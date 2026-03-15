@@ -1,0 +1,183 @@
+{
+  "run_date": "2026-03-15T01:18:11.320349+00:00",
+  "days": 365,
+  "starting_capital": 100000,
+  "strategies": [
+    {
+      "strategy": "liquidation_cascade",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "calmar_ratio": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 0,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    },
+    {
+      "strategy": "basis_zscore",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "calmar_ratio": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 0,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    },
+    {
+      "strategy": "taker_divergence",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "calmar_ratio": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 0,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    },
+    {
+      "strategy": "funding_arb",
+      "total_return_pct": -9.5555,
+      "metrics": {
+        "total_trades": 119,
+        "closed_trades": 52,
+        "win_rate": 0.6538,
+        "total_pnl": 8646.14,
+        "avg_trade_pnl": 166.27,
+        "sharpe_ratio": -0.3586,
+        "max_drawdown": -0.295,
+        "calmar_ratio": -0.323,
+        "best_trade": 1299.78,
+        "worst_trade": -911.71,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 119,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    },
+    {
+      "strategy": "oi_price_divergence",
+      "total_return_pct": -12.0563,
+      "metrics": {
+        "total_trades": 230,
+        "closed_trades": 27,
+        "win_rate": 0.8889,
+        "total_pnl": 119.93,
+        "avg_trade_pnl": 4.44,
+        "sharpe_ratio": 0.095,
+        "max_drawdown": -0.6044,
+        "calmar_ratio": -0.1989,
+        "best_trade": 22.07,
+        "worst_trade": -3.78,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 230,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    },
+    {
+      "strategy": "whale_flow",
+      "total_return_pct": -22.8459,
+      "metrics": {
+        "total_trades": 315,
+        "closed_trades": 152,
+        "win_rate": 0.5658,
+        "total_pnl": -13807.26,
+        "avg_trade_pnl": -90.84,
+        "sharpe_ratio": -0.2709,
+        "max_drawdown": -0.5588,
+        "calmar_ratio": -0.4077,
+        "best_trade": 252.84,
+        "worst_trade": -1258.32,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 315,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    },
+    {
+      "strategy": "funding_term_structure",
+      "total_return_pct": -24.2964,
+      "metrics": {
+        "total_trades": 233,
+        "closed_trades": 110,
+        "win_rate": 0.5818,
+        "total_pnl": 12981.42,
+        "avg_trade_pnl": 118.01,
+        "sharpe_ratio": -0.3998,
+        "max_drawdown": -0.5212,
+        "calmar_ratio": -0.4649,
+        "best_trade": 1153.1,
+        "worst_trade": -655.63,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 233,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    },
+    {
+      "strategy": "cross_basis_rv",
+      "total_return_pct": -29.7507,
+      "metrics": {
+        "total_trades": 636,
+        "closed_trades": 298,
+        "win_rate": 0.5436,
+        "total_pnl": 11106.51,
+        "avg_trade_pnl": 37.27,
+        "sharpe_ratio": -0.3493,
+        "max_drawdown": -0.6044,
+        "calmar_ratio": -0.4909,
+        "best_trade": 786.76,
+        "worst_trade": -391.13,
+        "leverage": 1,
+        "liquidations": 0,
+        "liquidation_losses": 0
+      },
+      "total_trades": 636,
+      "start_date": "2025-03-14",
+      "end_date": "2026-03-14"
+    }
+  ]
+}

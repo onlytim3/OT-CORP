@@ -156,6 +156,22 @@ def init_db():
                 expires_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS agent_recommendations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                from_agent TEXT NOT NULL,
+                to_agent TEXT NOT NULL,
+                category TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT,
+                reasoning TEXT NOT NULL,
+                data JSON,
+                status TEXT DEFAULT 'pending',
+                resolved_at TEXT,
+                resolution TEXT,
+                outcome TEXT
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -562,3 +578,60 @@ def clear_deferred_signal(signal_id: int):
     """Remove a deferred signal after execution."""
     with get_db() as conn:
         conn.execute("DELETE FROM deferred_signals WHERE id=?", (signal_id,))
+
+
+# --- Agent Recommendations (agent-to-agent communication) ---
+
+def insert_recommendation(from_agent: str, to_agent: str, category: str,
+                          action: str, target: str, reasoning: str, data: dict = None) -> int:
+    """Log an agent recommendation for another agent to act on.
+
+    Categories: enable_strategy, disable_strategy, adjust_param,
+                shift_allocation, add_strategy, remove_strategy,
+                change_regime, performance_alert, research_finding
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO agent_recommendations "
+            "(timestamp, from_agent, to_agent, category, action, target, reasoning, data) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (_now(), from_agent, to_agent, category, action, target, reasoning,
+             json.dumps(data) if data else None),
+        )
+        return cur.lastrowid
+
+
+def get_pending_recommendations(to_agent: str = None, category: str = None) -> list:
+    """Get pending recommendations, optionally filtered by recipient or category."""
+    with get_db() as conn:
+        query = "SELECT * FROM agent_recommendations WHERE status='pending'"
+        params = []
+        if to_agent:
+            query += " AND to_agent=?"
+            params.append(to_agent)
+        if category:
+            query += " AND category=?"
+            params.append(category)
+        query += " ORDER BY timestamp DESC"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def resolve_recommendation(rec_id: int, resolution: str, outcome: str = None):
+    """Mark a recommendation as resolved (applied, rejected, deferred)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE agent_recommendations SET status='resolved', resolved_at=?, "
+            "resolution=?, outcome=? WHERE id=?",
+            (_now(), resolution, outcome, rec_id),
+        )
+
+
+def get_recommendation_history(limit: int = 50) -> list:
+    """Get recent recommendation history for learning."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM agent_recommendations ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]

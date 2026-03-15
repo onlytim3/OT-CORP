@@ -60,20 +60,20 @@ def _now_str():
 
 
 def _get_account():
-    """Get account from Alpaca (paper or live handled by alpaca_client config)."""
-    from trading.execution.alpaca_client import get_account
+    """Get account from AsterDex (primary execution venue)."""
+    from trading.execution.router import get_account
     return get_account()
 
 
 def _get_positions():
-    """Get positions from Alpaca (paper or live handled by alpaca_client config)."""
-    from trading.execution.alpaca_client import get_positions_from_alpaca
-    return get_positions_from_alpaca()
+    """Get positions from AsterDex."""
+    from trading.execution.router import get_positions_from_aster
+    return get_positions_from_aster()
 
 
 def _execute_order(symbol, side, notional=None, qty=None):
-    """Execute order via Alpaca (paper or live handled by alpaca_client config)."""
-    from trading.execution.alpaca_client import submit_order
+    """Execute order via AsterDex perpetual futures."""
+    from trading.execution.router import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty)
 
 
@@ -99,9 +99,11 @@ def run_trading_cycle():
     from trading.execution.market_hours import can_trade_now
     from trading.execution.sync import run_sync
     from trading.data.cache import clear_cache
+    from trading.risk.portfolio import clear_allocation_cache
     from trading.monitor.notifications import notify_trade, notify_error, notify_cycle_summary
 
     clear_cache()  # Fresh data each cycle
+    clear_allocation_cache()  # Reset dynamic sizing caches (confluence, regime, perf)
     log_action("strategy_run", "cycle_start", details=f"Mode: {TRADING_MODE}")
     log.info("Trading cycle started")
     console.print(f"\n[bold cyan]{'='*60}[/]")
@@ -149,11 +151,37 @@ def run_trading_cycle():
             console.print(f"[yellow]Sync warning: {e}[/yellow]")
 
         # ---------------------------------------------------------------
+        # Phase 1.5: Market Intelligence Briefing
+        # ---------------------------------------------------------------
+        briefing = None
+        try:
+            from trading.intelligence.engine import generate_briefing
+            briefing = generate_briefing()
+            console.print(f"\n[bold gold1]Intelligence:[/] {briefing.summary()}")
+            for cat, info in briefing.categories.items():
+                score = info['score']
+                color = "green" if score > 0.1 else "red" if score < -0.1 else "dim"
+                conf = info.get('confidence', 0)
+                comps = ", ".join(info.get('components', []))
+                console.print(f"  [{color}]{cat}: {score:+.2f} ({info['label']}, {conf:.0%} conf)[/{color}]")
+                if comps:
+                    console.print(f"    [dim]{comps}[/dim]")
+            if briefing.event_risk:
+                console.print(f"  [bold red]EVENT RISK: {', '.join(briefing.event_risk)}[/bold red]")
+            log_action("intelligence", "briefing", details=briefing.summary(),
+                       data=briefing.to_dict())
+        except Exception as e:
+            log.warning("Intelligence briefing failed (non-fatal): %s", e)
+            console.print(f"[yellow]Intelligence briefing skipped: {e}[/yellow]")
+
+        # ---------------------------------------------------------------
         # Phase 2: Collect ALL signals from ALL strategies
         # ---------------------------------------------------------------
         strategies = get_enabled_strategies()
         raw_signals = []
         contexts = {}
+        if briefing:
+            contexts["_intelligence"] = briefing.to_dict()
 
         for strategy in strategies:
             console.print(f"\n[cyan]-> {strategy.name}[/cyan]")
@@ -312,7 +340,7 @@ def run_trading_cycle():
                 filled_qty = order.get("filled_qty")
                 filled_price = order.get("filled_avg_price")
                 if (not filled_qty or not filled_price) and order.get("id"):
-                    from trading.execution.alpaca_client import get_order_status
+                    from trading.execution.router import get_order_status
                     for _poll in range(3):
                         time.sleep(1)
                         try:
@@ -440,6 +468,32 @@ def run_trading_cycle():
 
         # Send cycle summary notification
         _notify_safe(notify_cycle_summary, signal_count, executed_count, blocked_count)
+
+        # ---------------------------------------------------------------
+        # Phase 7: Autonomous improvement cycle
+        # ---------------------------------------------------------------
+        # Agents analyze performance, risk, regime, and research gaps.
+        # Safe actions are auto-applied; dangerous ones stored for review.
+        try:
+            from trading.intelligence.autonomous import run_autonomous_cycle
+            auto_result = run_autonomous_cycle()
+            auto_applied = auto_result.get("auto_applied", 0)
+            auto_review = auto_result.get("needs_review", 0)
+            auto_total = auto_result.get("total_recommendations", 0)
+            if auto_total > 0:
+                console.print(
+                    f"\n[bold magenta]Autonomous: {auto_total} recommendations — "
+                    f"{auto_applied} auto-applied, {auto_review} need review[/bold magenta]"
+                )
+                for action in auto_result.get("applied_actions", []):
+                    console.print(
+                        f"  [magenta]→ {action['action']}: {action['target']} — {action['result']}[/magenta]"
+                    )
+            else:
+                console.print("[dim]Autonomous: no recommendations this cycle[/dim]")
+        except Exception as e:
+            log.warning("Autonomous cycle failed (non-fatal): %s", e)
+            console.print(f"[yellow]Autonomous cycle skipped: {e}[/yellow]")
 
     except Exception as e:
         log_action("error", "cycle_crash", details=str(e))
@@ -589,6 +643,18 @@ def run_weekly_review():
     except Exception as e:
         log.warning("Adaptation analysis failed: %s", e)
 
+    # Run strategy research cycle — discover gaps and update catalog
+    try:
+        from trading.intelligence.strategy_researcher import run_research_cycle
+        research = run_research_cycle()
+        log_action("research", "strategy_research",
+                   details=research.summary(),
+                   data=research.to_dict())
+        log.info("Strategy research: %s", research.summary())
+        console.print(f"[cyan]{research.summary()}[/cyan]")
+    except Exception as e:
+        log.warning("Strategy research cycle failed: %s", e)
+
 
 # ---------------------------------------------------------------------------
 # Daemon entry point
@@ -611,23 +677,22 @@ def start_daemon(interval_hours=4, paper=False):
 
     mode = "PAPER" if TRADING_MODE == "paper" or paper else "LIVE"
     console.print(f"\n[bold green]{'='*60}[/]")
-    console.print(f"[bold green]  AUTONOMOUS TRADER v3.0 -- {mode} MODE[/bold green]")
+    console.print(f"[bold green]  AUTONOMOUS TRADER v5.0 -- {mode} MODE[/bold green]")
+    console.print(f"[bold green]  Self-Evolving Trading System[/bold green]")
+    console.print(f"[bold green]  Execution: AsterDex Perpetual Futures[/bold green]")
     console.print(f"[bold green]{'='*60}[/]")
     console.print(f"  Trading cycle:       every {interval_hours} hours")
     console.print(f"  Stop/profit check:   every 15 minutes")
-    console.print(f"  Position sync:       every cycle + post-trade")
     console.print(f"  Signal aggregation:  enabled (dedup + conflict resolution)")
-    console.print(f"  Market hours gate:   enabled (ETFs -> NYSE only)")
-    console.print(f"  Correlation limits:  enabled (70% crypto cap, 50% group cap)")
-    console.print(f"  Vol-adjusted sizing: enabled (ATR-based)")
-    console.print(f"  Strategy budgets:    enabled (per-strategy allocation)")
-    console.print(f"  Order retry:         enabled (3x exponential backoff)")
-    console.print(f"  Take-profit:         15% target")
-    console.print(f"  Trailing stop:       4% trail after 8% gain")
-    console.print(f"  Notifications:       Discord/Telegram if configured")
-    console.print(f"  Structured logging:  enabled (logs/trading.log)")
-    console.print(f"  Adaptation:          auto-apply approved changes")
-    console.print(f"  Weekly review:       every Sunday at 00:00")
+    console.print(f"  Dynamic allocation:  confluence + regime + performance tilt")
+    console.print(f"  Autonomous agents:   5 agents (perf, risk, regime, research, learning)")
+    console.print(f"  Agent conversation:  continuous self-improvement loop")
+    console.print(f"  Auto-disable:        strategies with <25% win rate")
+    console.print(f"  Auto-rebalance:      shift capital to winners")
+    console.print(f"  Risk auto-tighten:   at 10% drawdown, halt at 18%")
+    console.print(f"  Regime adaptation:   defensive posture in bearish markets")
+    console.print(f"  Strategy research:   weekly gap analysis + priority queue")
+    console.print(f"  Knowledge base:      continuous learning from outcomes")
     console.print(f"  Dashboard:           http://localhost:5050")
     console.print(f"[bold green]{'='*60}[/]\n")
 
@@ -641,14 +706,8 @@ def start_daemon(interval_hours=4, paper=False):
     except Exception:
         pass
 
-    # Reconcile any orphaned orders from a previous crash
-    try:
-        from trading.execution.alpaca_client import reconcile_orders_on_startup
-        fixed = reconcile_orders_on_startup()
-        if fixed:
-            console.print(f"  [yellow]Reconciled {fixed} orphaned order(s) from Alpaca[/yellow]")
-    except Exception as e:
-        log.warning("Order reconciliation on startup failed: %s", e)
+    # Note: AsterDex orders are immediate (market orders) — no orphaned order reconciliation needed
+    log.info("AsterDex primary venue — skipping Alpaca order reconciliation")
 
     # Run immediately on start
     run_trading_cycle()

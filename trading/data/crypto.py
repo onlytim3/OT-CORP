@@ -1,25 +1,44 @@
-"""Crypto market data from Alpaca Data API (free, no auth, no rate limits).
+"""Crypto market data — AsterDex primary, Alpaca fallback.
 
-v3: Migrated from CoinGecko to Alpaca. Same function signatures so all 10
-    strategies continue working without changes. Eliminates CoinGecko rate
-    limiting entirely — all prices, OHLC, and historical data come from
-    Alpaca's CryptoHistoricalDataClient in a single fast call.
+v4: Migrated from Alpaca to AsterDex klines for all crypto data.
+    Same function signatures so all strategies continue working.
+    Uses AsterDex public endpoints (no auth needed for market data).
 """
 
 import logging
 
 import pandas as pd
 
-from trading.config import CRYPTO_SYMBOLS, MOMENTUM
+from trading.config import CRYPTO_SYMBOLS, ASTER_SYMBOLS, DEFAULT_COINS
 from trading.data.cache import cached
-from trading.execution.alpaca_client import (
-    get_crypto_snapshots,
-    get_crypto_bars,
-    get_crypto_daily_bars,
-)
-from alpaca.data.timeframe import TimeFrame
 
 log = logging.getLogger(__name__)
+
+
+def _get_aster_klines(symbol: str, interval: str = "1h", limit: int = 500) -> pd.DataFrame:
+    """Fetch klines from AsterDex and return as DataFrame.
+
+    The aster_client.get_aster_klines already returns a properly-indexed DataFrame
+    with open, high, low, close, volume columns.
+    """
+    from trading.execution.aster_client import get_aster_klines
+
+    try:
+        df = get_aster_klines(symbol, interval=interval, limit=limit)
+        return df
+    except Exception as e:
+        log.error("AsterDex klines failed for %s: %s", symbol, e)
+        return pd.DataFrame()
+
+
+def _get_aster_ticker(aster_sym: str) -> dict:
+    """Get 24h ticker from AsterDex."""
+    from trading.execution.aster_client import get_aster_ticker_24h
+    try:
+        return get_aster_ticker_24h(aster_sym)
+    except Exception as e:
+        log.error("AsterDex ticker failed for %s: %s", aster_sym, e)
+        return {}
 
 
 class DataValidationError(Exception):
@@ -45,7 +64,7 @@ def _symbol_to_coin(symbol: str) -> str | None:
 def _all_symbols(coin_ids: list[str] | None = None) -> list[str]:
     """Convert coin IDs to Alpaca symbols, filtering out unknowns."""
     if coin_ids is None:
-        coin_ids = MOMENTUM["coins"]
+        coin_ids = DEFAULT_COINS
     symbols = []
     for cid in coin_ids:
         sym = _coin_to_symbol(cid)
@@ -67,30 +86,29 @@ def get_prices(coin_ids: list[str] | None = None) -> dict:
 
     Backward-compatible with CoinGecko format used by all strategies.
     """
-    symbols = _all_symbols(coin_ids)
-    if not symbols:
-        return {}
-
-    try:
-        snapshots = get_crypto_snapshots(symbols)
-    except Exception as e:
-        log.error("Alpaca crypto snapshot failed: %s", e)
-        return {}
+    if coin_ids is None:
+        coin_ids = DEFAULT_COINS
 
     result = {}
-    for sym, snap in snapshots.items():
-        coin_id = _symbol_to_coin(sym)
-        if not coin_id:
+    for coin_id in coin_ids:
+        aster_sym = ASTER_SYMBOLS.get(coin_id)
+        if not aster_sym:
             continue
-        price = snap.get("price")
-        if price is None or price <= 0:
-            log.warning("Invalid price for %s (%s): %s — skipping", coin_id, sym, price)
+
+        ticker = _get_aster_ticker(aster_sym)
+        if not ticker:
             continue
+
+        price = float(ticker.get("lastPrice", 0))
+        if price <= 0:
+            log.warning("Invalid price for %s: %s — skipping", coin_id, price)
+            continue
+
         result[coin_id] = {
             "usd": price,
-            "usd_24h_change": snap.get("change_pct", 0.0),
-            "usd_24h_vol": snap.get("daily_volume", 0.0),
-            "usd_market_cap": 0,  # Alpaca doesn't provide market cap
+            "usd_24h_change": float(ticker.get("priceChangePercent", 0)),
+            "usd_24h_vol": float(ticker.get("quoteVolume", 0)),
+            "usd_market_cap": 0,
         }
 
     return result
@@ -103,79 +121,59 @@ def get_market_data(coin_ids: list[str] | None = None) -> pd.DataFrame:
     Returns DataFrame with columns: id, symbol, name, current_price,
     market_cap, total_volume, price_change_7d, price_change_30d, price_change_24h
 
-    7d and 30d changes are computed from Alpaca daily bars.
+    Uses AsterDex 24h tickers + daily klines for 7d/30d changes.
     """
     if coin_ids is None:
-        coin_ids = MOMENTUM["coins"]
-
-    symbols = _all_symbols(coin_ids)
-    if not symbols:
-        return pd.DataFrame()
-
-    # Get current snapshots (prices + 24h change)
-    try:
-        snapshots = get_crypto_snapshots(symbols)
-    except Exception as e:
-        log.error("Alpaca snapshot failed for market data: %s", e)
-        return pd.DataFrame()
-
-    # Get 30d daily bars to compute 7d and 30d changes
-    try:
-        bars_df = get_crypto_bars(symbols, timeframe=TimeFrame.Day, days=31)
-    except Exception as e:
-        log.warning("Alpaca daily bars failed, using snapshot only: %s", e)
-        bars_df = pd.DataFrame()
+        coin_ids = DEFAULT_COINS
 
     rows = []
-    for sym in symbols:
-        coin_id = _symbol_to_coin(sym)
-        if not coin_id or sym not in snapshots:
+    for coin_id in coin_ids:
+        aster_sym = ASTER_SYMBOLS.get(coin_id)
+        if not aster_sym:
             continue
 
-        snap = snapshots[sym]
-        price = snap.get("price")
-        if price is None or price <= 0:
+        ticker = _get_aster_ticker(aster_sym)
+        if not ticker:
             continue
 
-        # Compute 7d and 30d changes from bars
+        price = float(ticker.get("lastPrice", 0))
+        if price <= 0:
+            continue
+
+        # Get 30d daily klines for 7d/30d changes
         change_7d = 0.0
         change_30d = 0.0
-        if not bars_df.empty:
-            try:
-                if isinstance(bars_df.index, pd.MultiIndex):
-                    sym_bars = bars_df.xs(sym, level="symbol")
-                else:
-                    sym_bars = bars_df
-                closes = sym_bars["close"].values
+        try:
+            daily_df = _get_aster_klines(aster_sym, interval="1d", limit=31)
+            if not daily_df.empty:
+                closes = daily_df["close"].values
                 if len(closes) >= 7:
                     change_7d = (price - closes[-7]) / closes[-7] * 100
                 if len(closes) >= 30:
                     change_30d = (price - closes[-30]) / closes[-30] * 100
                 elif len(closes) >= 2:
                     change_30d = (price - closes[0]) / closes[0] * 100
-            except Exception as e:
-                log.debug("Bar change calc failed for %s: %s", sym, e)
+        except Exception as e:
+            log.debug("Daily kline change calc failed for %s: %s", coin_id, e)
 
-        # Extract short symbol (BTC, ETH, etc.)
-        short_sym = sym.replace("/USD", "").lower()
+        short_sym = aster_sym.replace("USDT", "").lower()
 
         rows.append({
             "id": coin_id,
             "symbol": short_sym,
             "name": coin_id.replace("-", " ").title(),
             "current_price": price,
-            "market_cap": 0,  # Alpaca doesn't provide market cap
-            "total_volume": snap.get("daily_volume", 0.0),
+            "market_cap": 0,
+            "total_volume": float(ticker.get("quoteVolume", 0)),
             "price_change_7d": change_7d,
             "price_change_30d": change_30d,
-            "price_change_24h": snap.get("change_pct", 0.0),
+            "price_change_24h": float(ticker.get("priceChangePercent", 0)),
         })
 
     df = pd.DataFrame(rows)
     if df.empty:
         return df
 
-    # Validate price column
     invalid = df["current_price"].isna() | (df["current_price"] <= 0)
     if invalid.any():
         log.warning("Dropping %d coins with invalid prices", invalid.sum())
@@ -193,41 +191,33 @@ def get_ohlc(coin_id: str, days: int = 30) -> pd.DataFrame:
         days: Number of days of history
 
     Returns DataFrame with columns: open, high, low, close
-    indexed by timestamp. Uses hourly bars for <= 30 days, daily for longer.
+    indexed by timestamp. Uses hourly klines for <= 30 days, daily for longer.
     """
-    symbol = _coin_to_symbol(coin_id)
-    if not symbol:
+    aster_sym = ASTER_SYMBOLS.get(coin_id)
+    if not aster_sym:
         log.warning("Unknown coin ID for OHLC: %s", coin_id)
         return pd.DataFrame(columns=["open", "high", "low", "close"])
 
-    # Use hourly bars for short periods (more data points), daily for longer
-    timeframe = TimeFrame.Hour if days <= 30 else TimeFrame.Day
+    # Use hourly klines for short periods, daily for longer
+    if days <= 30:
+        interval = "4h"
+        limit = min(days * 6, 500)  # 6 candles per day at 4h
+    else:
+        interval = "1d"
+        limit = min(days, 500)
 
-    try:
-        df = get_crypto_bars(symbol, timeframe=timeframe, days=days)
-    except Exception as e:
-        log.error("Alpaca bars failed for %s: %s", coin_id, e)
-        return pd.DataFrame(columns=["open", "high", "low", "close"])
+    df = _get_aster_klines(aster_sym, interval=interval, limit=limit)
 
     if df.empty:
         log.warning("Empty OHLC data for %s", coin_id)
         return pd.DataFrame(columns=["open", "high", "low", "close"])
 
-    # Flatten multi-index if present
-    if isinstance(df.index, pd.MultiIndex):
-        df = df.xs(symbol, level="symbol")
-
-    # Validate OHLC values
-    for col in ["open", "high", "low", "close"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
     df.dropna(subset=["close"], inplace=True)
 
     if df.empty:
         log.warning("All OHLC rows invalid for %s", coin_id)
         return df
 
-    # Return only OHLC columns (strategies expect this)
     return df[["open", "high", "low", "close"]]
 
 
@@ -242,20 +232,15 @@ def get_historical_prices(coin_id: str, days: int = 90) -> pd.DataFrame:
     Returns DataFrame with columns: price, volume
     indexed by timestamp (daily).
     """
-    symbol = _coin_to_symbol(coin_id)
-    if not symbol:
+    aster_sym = ASTER_SYMBOLS.get(coin_id)
+    if not aster_sym:
         raise DataValidationError(f"Unknown coin ID: {coin_id}")
 
-    try:
-        df = get_crypto_daily_bars(symbol, days=days)
-    except Exception as e:
-        log.error("Alpaca daily bars failed for %s: %s", coin_id, e)
-        raise DataValidationError(f"Failed to get historical data for {coin_id}: {e}")
+    df = _get_aster_klines(aster_sym, interval="1d", limit=min(days, 500))
 
     if df.empty:
         raise DataValidationError(f"Empty historical data for {coin_id}")
 
-    # Convert to CoinGecko-compatible format: columns = price, volume
     result = pd.DataFrame({
         "price": pd.to_numeric(df["close"], errors="coerce"),
         "volume": pd.to_numeric(df["volume"], errors="coerce") if "volume" in df.columns else 0,

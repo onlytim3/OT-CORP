@@ -1,0 +1,2337 @@
+{
+  "run_date": "2026-03-15T00:52:50.192080+00:00",
+  "days": 90,
+  "starting_capital": 100000,
+  "leverage_levels": [
+    1,
+    2,
+    3,
+    5,
+    7,
+    10
+  ],
+  "recommendations": {
+    "basis_zscore": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "cross_asset_momentum": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "cross_basis_rv": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 10,
+      "greedy": 10
+    },
+    "equity_crypto_correlation": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "factor_crypto": {
+      "conservative": 10,
+      "moderate": 10,
+      "aggressive": 10,
+      "greedy": 10
+    },
+    "funding_arb": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "funding_term_structure": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "gold_crypto_hedge": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "hmm_regime": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "kalman_trend": {
+      "conservative": 10,
+      "moderate": 10,
+      "aggressive": 10,
+      "greedy": 10
+    },
+    "liquidation_cascade": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "meme_momentum": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "multi_factor_rank": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "oi_price_divergence": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "pairs_trading": {
+      "conservative": 3,
+      "moderate": 3,
+      "aggressive": 3,
+      "greedy": 3
+    },
+    "regime_mean_reversion": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "rsi_divergence": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "taker_divergence": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "volatility_regime": {
+      "conservative": 1,
+      "moderate": 1,
+      "aggressive": 1,
+      "greedy": 1
+    },
+    "whale_flow": {
+      "conservative": 7,
+      "moderate": 7,
+      "aggressive": 7,
+      "greedy": 7
+    }
+  },
+  "strategy_results": {
+    "basis_zscore": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "cross_asset_momentum": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "cross_basis_rv": {
+      "1": {
+        "total_return_pct": -5.9858,
+        "metrics": {
+          "total_trades": 82,
+          "closed_trades": 38,
+          "win_rate": 0.3421,
+          "total_pnl": -6009.64,
+          "avg_trade_pnl": -158.15,
+          "sharpe_ratio": -1.6885,
+          "max_drawdown": -0.1035,
+          "calmar_ratio": -2.319,
+          "best_trade": 313.34,
+          "worst_trade": -866.24,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": -9.8518,
+        "metrics": {
+          "total_trades": 81,
+          "closed_trades": 37,
+          "win_rate": 0.2432,
+          "total_pnl": -9331.16,
+          "avg_trade_pnl": -252.19,
+          "sharpe_ratio": -2.133,
+          "max_drawdown": -0.1629,
+          "calmar_ratio": -2.426,
+          "best_trade": 367.99,
+          "worst_trade": -1158.84,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": -12.9934,
+        "metrics": {
+          "total_trades": 73,
+          "closed_trades": 27,
+          "win_rate": 0.4074,
+          "total_pnl": -2539.2,
+          "avg_trade_pnl": -94.04,
+          "sharpe_ratio": -3.4409,
+          "max_drawdown": -0.1681,
+          "calmar_ratio": -3.1007,
+          "best_trade": 421.13,
+          "worst_trade": -1228.99,
+          "leverage": 3,
+          "liquidations": 3,
+          "liquidation_losses": -11153.63
+        }
+      },
+      "5": {
+        "total_return_pct": -7.7916,
+        "metrics": {
+          "total_trades": 84,
+          "closed_trades": 35,
+          "win_rate": 0.5143,
+          "total_pnl": -585.8,
+          "avg_trade_pnl": -16.74,
+          "sharpe_ratio": -2.9506,
+          "max_drawdown": -0.1066,
+          "calmar_ratio": -2.9309,
+          "best_trade": 252.01,
+          "worst_trade": -587.81,
+          "leverage": 5,
+          "liquidations": 5,
+          "liquidation_losses": -7562.66
+        }
+      },
+      "7": {
+        "total_return_pct": -2.926,
+        "metrics": {
+          "total_trades": 83,
+          "closed_trades": 31,
+          "win_rate": 0.6129,
+          "total_pnl": 1507.53,
+          "avg_trade_pnl": 48.63,
+          "sharpe_ratio": -0.9184,
+          "max_drawdown": -0.0876,
+          "calmar_ratio": -1.3404,
+          "best_trade": 1112.52,
+          "worst_trade": -605.15,
+          "leverage": 7,
+          "liquidations": 3,
+          "liquidation_losses": -5731.43
+        }
+      },
+      "10": {
+        "total_return_pct": 0.512,
+        "metrics": {
+          "total_trades": 87,
+          "closed_trades": 35,
+          "win_rate": 0.7143,
+          "total_pnl": 4148.28,
+          "avg_trade_pnl": 118.52,
+          "sharpe_ratio": 0.2555,
+          "max_drawdown": -0.0654,
+          "calmar_ratio": 0.3139,
+          "best_trade": 630.46,
+          "worst_trade": -192.31,
+          "leverage": 10,
+          "liquidations": 7,
+          "liquidation_losses": -4167.7
+        }
+      }
+    },
+    "equity_crypto_correlation": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "factor_crypto": {
+      "1": {
+        "total_return_pct": -0.0765,
+        "metrics": {
+          "total_trades": 2,
+          "closed_trades": 1,
+          "win_rate": 0.0,
+          "total_pnl": -73.15,
+          "avg_trade_pnl": -73.15,
+          "sharpe_ratio": -0.8206,
+          "max_drawdown": -0.002,
+          "calmar_ratio": -1.5175,
+          "best_trade": -73.15,
+          "worst_trade": -73.15,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": -0.0748,
+        "metrics": {
+          "total_trades": 2,
+          "closed_trades": 1,
+          "win_rate": 0.0,
+          "total_pnl": -73.15,
+          "avg_trade_pnl": -73.15,
+          "sharpe_ratio": -0.8031,
+          "max_drawdown": -0.002,
+          "calmar_ratio": -1.4834,
+          "best_trade": -73.15,
+          "worst_trade": -73.15,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": -0.0742,
+        "metrics": {
+          "total_trades": 2,
+          "closed_trades": 1,
+          "win_rate": 0.0,
+          "total_pnl": -73.15,
+          "avg_trade_pnl": -73.15,
+          "sharpe_ratio": -0.7972,
+          "max_drawdown": -0.002,
+          "calmar_ratio": -1.4721,
+          "best_trade": -73.15,
+          "worst_trade": -73.15,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": -0.0738,
+        "metrics": {
+          "total_trades": 2,
+          "closed_trades": 1,
+          "win_rate": 0.0,
+          "total_pnl": -73.15,
+          "avg_trade_pnl": -73.15,
+          "sharpe_ratio": -0.7925,
+          "max_drawdown": -0.002,
+          "calmar_ratio": -1.463,
+          "best_trade": -73.15,
+          "worst_trade": -73.15,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": -0.0736,
+        "metrics": {
+          "total_trades": 2,
+          "closed_trades": 1,
+          "win_rate": 0.0,
+          "total_pnl": -73.15,
+          "avg_trade_pnl": -73.15,
+          "sharpe_ratio": -0.7905,
+          "max_drawdown": -0.002,
+          "calmar_ratio": -1.459,
+          "best_trade": -73.15,
+          "worst_trade": -73.15,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": -0.0734,
+        "metrics": {
+          "total_trades": 2,
+          "closed_trades": 1,
+          "win_rate": 0.0,
+          "total_pnl": -73.15,
+          "avg_trade_pnl": -73.15,
+          "sharpe_ratio": -0.7891,
+          "max_drawdown": -0.002,
+          "calmar_ratio": -1.4563,
+          "best_trade": -73.15,
+          "worst_trade": -73.15,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "funding_arb": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "funding_term_structure": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "gold_crypto_hedge": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "hmm_regime": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "kalman_trend": {
+      "1": {
+        "total_return_pct": 0.134,
+        "metrics": {
+          "total_trades": 3,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 3.4811,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.1346,
+        "metrics": {
+          "total_trades": 3,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 3.4836,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.1348,
+        "metrics": {
+          "total_trades": 3,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 3.4844,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.1349,
+        "metrics": {
+          "total_trades": 3,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 3.485,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.135,
+        "metrics": {
+          "total_trades": 3,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 3.4853,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.1351,
+        "metrics": {
+          "total_trades": 3,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 3.4855,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "liquidation_cascade": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "meme_momentum": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "multi_factor_rank": {
+      "1": {
+        "total_return_pct": -24.9133,
+        "metrics": {
+          "total_trades": 180,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.9435,
+          "max_drawdown": -0.4954,
+          "calmar_ratio": -2.0172,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": -44.2476,
+        "metrics": {
+          "total_trades": 180,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.0868,
+          "max_drawdown": -0.7485,
+          "calmar_ratio": -2.3709,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": -68.0087,
+        "metrics": {
+          "total_trades": 182,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -2.8817,
+          "max_drawdown": -0.8094,
+          "calmar_ratio": -3.3701,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 2,
+          "liquidation_losses": -71204.25
+        }
+      },
+      "5": {
+        "total_return_pct": -46.6612,
+        "metrics": {
+          "total_trades": 183,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -1.4179,
+          "max_drawdown": -0.7082,
+          "calmar_ratio": -2.6429,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 3,
+          "liquidation_losses": -52920.91
+        }
+      },
+      "7": {
+        "total_return_pct": -34.7019,
+        "metrics": {
+          "total_trades": 184,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.9519,
+          "max_drawdown": -0.6396,
+          "calmar_ratio": -2.1761,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 4,
+          "liquidation_losses": -42505.34
+        }
+      },
+      "10": {
+        "total_return_pct": -29.1233,
+        "metrics": {
+          "total_trades": 186,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.9196,
+          "max_drawdown": -0.5817,
+          "calmar_ratio": -2.0082,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 6,
+          "liquidation_losses": -36691.85
+        }
+      }
+    },
+    "oi_price_divergence": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "pairs_trading": {
+      "1": {
+        "total_return_pct": -3.3442,
+        "metrics": {
+          "total_trades": 14,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.5117,
+          "max_drawdown": -0.0837,
+          "calmar_ratio": -1.6027,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": -3.3309,
+        "metrics": {
+          "total_trades": 14,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.4132,
+          "max_drawdown": -0.0911,
+          "calmar_ratio": -1.466,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": -3.3143,
+        "metrics": {
+          "total_trades": 14,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.3796,
+          "max_drawdown": -0.0938,
+          "calmar_ratio": -1.4172,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": -9.86,
+        "metrics": {
+          "total_trades": 16,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -2.5601,
+          "max_drawdown": -0.1133,
+          "calmar_ratio": -3.4892,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 2,
+          "liquidation_losses": -10332.83
+        }
+      },
+      "7": {
+        "total_return_pct": -6.9896,
+        "metrics": {
+          "total_trades": 16,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -2.6621,
+          "max_drawdown": -0.0852,
+          "calmar_ratio": -3.2906,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 2,
+          "liquidation_losses": -7481.93
+        }
+      },
+      "10": {
+        "total_return_pct": -4.784,
+        "metrics": {
+          "total_trades": 16,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -2.4452,
+          "max_drawdown": -0.0636,
+          "calmar_ratio": -3.0184,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 2,
+          "liquidation_losses": -5291.31
+        }
+      }
+    },
+    "regime_mean_reversion": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "rsi_divergence": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "taker_divergence": {
+      "1": {
+        "total_return_pct": -21.7184,
+        "metrics": {
+          "total_trades": 110,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -1.1919,
+          "max_drawdown": -0.413,
+          "calmar_ratio": -2.1091,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": -47.262,
+        "metrics": {
+          "total_trades": 180,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -0.5705,
+          "max_drawdown": -0.714,
+          "calmar_ratio": -2.6549,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": -93.6275,
+        "metrics": {
+          "total_trades": 182,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -2.8183,
+          "max_drawdown": -0.9615,
+          "calmar_ratio": -3.9059,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 2,
+          "liquidation_losses": -94159.96
+        }
+      },
+      "5": {
+        "total_return_pct": -76.5136,
+        "metrics": {
+          "total_trades": 182,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -1.8747,
+          "max_drawdown": -0.8761,
+          "calmar_ratio": -3.5031,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 2,
+          "liquidation_losses": -78417.14
+        }
+      },
+      "7": {
+        "total_return_pct": -64.6981,
+        "metrics": {
+          "total_trades": 184,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -1.5773,
+          "max_drawdown": -0.8151,
+          "calmar_ratio": -3.1837,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 4,
+          "liquidation_losses": -68115.41
+        }
+      },
+      "10": {
+        "total_return_pct": -50.3616,
+        "metrics": {
+          "total_trades": 186,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": -1.2378,
+          "max_drawdown": -0.7448,
+          "calmar_ratio": -2.7121,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 6,
+          "liquidation_losses": -56692.05
+        }
+      }
+    },
+    "volatility_regime": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 5,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "7": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    },
+    "whale_flow": {
+      "1": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 1,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "2": {
+        "total_return_pct": 0.0,
+        "metrics": {
+          "total_trades": 0,
+          "closed_trades": 0,
+          "win_rate": 0.0,
+          "total_pnl": 0,
+          "avg_trade_pnl": 0.0,
+          "sharpe_ratio": 0.0,
+          "max_drawdown": 0.0,
+          "calmar_ratio": 0.0,
+          "best_trade": 0.0,
+          "worst_trade": 0.0,
+          "leverage": 2,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "3": {
+        "total_return_pct": -0.1221,
+        "metrics": {
+          "total_trades": 3,
+          "closed_trades": 2,
+          "win_rate": 0.0,
+          "total_pnl": -119.83,
+          "avg_trade_pnl": -59.91,
+          "sharpe_ratio": -2.4714,
+          "max_drawdown": -0.0013,
+          "calmar_ratio": -3.8984,
+          "best_trade": -14.14,
+          "worst_trade": -105.69,
+          "leverage": 3,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "5": {
+        "total_return_pct": -2.7609,
+        "metrics": {
+          "total_trades": 18,
+          "closed_trades": 8,
+          "win_rate": 0.5,
+          "total_pnl": -670.14,
+          "avg_trade_pnl": -83.77,
+          "sharpe_ratio": -1.507,
+          "max_drawdown": -0.0644,
+          "calmar_ratio": -1.719,
+          "best_trade": 44.05,
+          "worst_trade": -495.88,
+          "leverage": 5,
+          "liquidations": 1,
+          "liquidation_losses": -2254.43
+        }
+      },
+      "7": {
+        "total_return_pct": 1.4307,
+        "metrics": {
+          "total_trades": 16,
+          "closed_trades": 6,
+          "win_rate": 0.6667,
+          "total_pnl": 325.8,
+          "avg_trade_pnl": 54.3,
+          "sharpe_ratio": 0.4003,
+          "max_drawdown": -0.0567,
+          "calmar_ratio": 1.012,
+          "best_trade": 213.88,
+          "worst_trade": -164.8,
+          "leverage": 7,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      },
+      "10": {
+        "total_return_pct": 0.1296,
+        "metrics": {
+          "total_trades": 5,
+          "closed_trades": 3,
+          "win_rate": 1.0,
+          "total_pnl": 130.55,
+          "avg_trade_pnl": 43.52,
+          "sharpe_ratio": 0.3495,
+          "max_drawdown": -0.0053,
+          "calmar_ratio": 0.9784,
+          "best_trade": 91.52,
+          "worst_trade": 6.38,
+          "leverage": 10,
+          "liquidations": 0,
+          "liquidation_losses": 0
+        }
+      }
+    }
+  }
+}

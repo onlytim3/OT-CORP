@@ -23,7 +23,7 @@ from trading.db.store import (
     update_trade_status,
     upsert_position,
 )
-from trading.execution.alpaca_client import get_order_status, get_positions_from_alpaca
+from trading.execution.router import get_order_status, get_positions_from_aster as get_positions_from_alpaca
 from trading.learning.journal import record_outcome
 
 console = Console()

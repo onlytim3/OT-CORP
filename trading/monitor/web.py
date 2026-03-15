@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 
 from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH
 from trading.db.store import (
@@ -14,7 +14,7 @@ from trading.db.store import (
     get_signals, get_action_log, get_action_log_summary,
     get_journal, get_reviews,
 )
-from trading.execution.alpaca_client import get_account, get_positions_from_alpaca
+from trading.execution.router import get_account, get_positions_from_aster as get_positions_from_alpaca
 
 log = logging.getLogger(__name__)
 
@@ -276,6 +276,340 @@ def api_position_detail(symbol):
         },
         "recent_signals": buy_signals[:10],
     })
+
+
+@app.route("/api/trade/<int:trade_id>")
+def api_trade_detail(trade_id):
+    """Full detail for a single trade — journal, signals, risk targets."""
+    import json as _json
+
+    with get_db() as conn:
+        trade = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not trade:
+            return jsonify({"error": f"Trade #{trade_id} not found"}), 404
+        trade = dict(trade)
+
+        # Journal entry for this trade
+        journal = [dict(r) for r in conn.execute(
+            "SELECT * FROM journal WHERE trade_id=? ORDER BY timestamp DESC", (trade_id,)
+        ).fetchall()]
+        for j in journal:
+            if j.get("market_context") and isinstance(j["market_context"], str):
+                try:
+                    j["market_context"] = _json.loads(j["market_context"])
+                except Exception:
+                    pass
+
+        # Related signals (same symbol, within 1 hour before the trade)
+        signals = []
+        if trade.get("symbol") and trade.get("timestamp"):
+            sym = trade["symbol"]
+            sym_variants = list({sym, sym.replace("/", ""), sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym})
+            placeholders = ",".join("?" for _ in sym_variants)
+            signals = [dict(r) for r in conn.execute(
+                f"SELECT * FROM signals WHERE symbol IN ({placeholders}) "
+                f"AND timestamp <= ? ORDER BY timestamp DESC LIMIT 10",
+                sym_variants + [trade["timestamp"]],
+            ).fetchall()]
+            for s in signals:
+                if s.get("data") and isinstance(s["data"], str):
+                    try:
+                        s["data"] = _json.loads(s["data"])
+                    except Exception:
+                        pass
+
+    return jsonify({"trade": trade, "journal": journal, "signals": signals})
+
+
+@app.route("/api/signal/<int:signal_id>")
+def api_signal_detail(signal_id):
+    """Full detail for a single signal."""
+    import json as _json
+
+    with get_db() as conn:
+        sig = conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
+        if not sig:
+            return jsonify({"error": f"Signal #{signal_id} not found"}), 404
+        sig = dict(sig)
+        if sig.get("data") and isinstance(sig["data"], str):
+            try:
+                sig["data"] = _json.loads(sig["data"])
+            except Exception:
+                pass
+
+        # Find trades that happened shortly after this signal (same symbol, within 5 min)
+        related_trades = []
+        if sig.get("symbol") and sig.get("timestamp"):
+            sym = sig["symbol"]
+            sym_variants = list({sym, sym.replace("/", ""), sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym})
+            placeholders = ",".join("?" for _ in sym_variants)
+            related_trades = [dict(r) for r in conn.execute(
+                f"SELECT * FROM trades WHERE symbol IN ({placeholders}) "
+                f"AND timestamp >= ? ORDER BY timestamp ASC LIMIT 5",
+                sym_variants + [sig["timestamp"]],
+            ).fetchall()]
+
+    return jsonify({"signal": sig, "related_trades": related_trades})
+
+
+@app.route("/api/action/<int:action_id>")
+def api_action_detail(action_id):
+    """Full detail for a single action log entry."""
+    import json as _json
+
+    with get_db() as conn:
+        action = conn.execute("SELECT * FROM action_log WHERE id=?", (action_id,)).fetchone()
+        if not action:
+            return jsonify({"error": f"Action #{action_id} not found"}), 404
+        action = dict(action)
+        if action.get("data") and isinstance(action["data"], str):
+            try:
+                action["data"] = _json.loads(action["data"])
+            except Exception:
+                pass
+
+        # Get neighboring actions for context (5 before and 5 after)
+        context_before = [dict(r) for r in conn.execute(
+            "SELECT * FROM action_log WHERE id < ? ORDER BY id DESC LIMIT 5", (action_id,)
+        ).fetchall()]
+        context_after = [dict(r) for r in conn.execute(
+            "SELECT * FROM action_log WHERE id > ? ORDER BY id ASC LIMIT 5", (action_id,)
+        ).fetchall()]
+
+    return jsonify({
+        "action": action,
+        "context_before": list(reversed(context_before)),
+        "context_after": context_after,
+    })
+
+
+@app.route("/api/pnl/<date>")
+def api_pnl_detail(date):
+    """Full detail for a single day's P&L — all trades, signals, actions."""
+    import json as _json
+
+    with get_db() as conn:
+        pnl = conn.execute("SELECT * FROM daily_pnl WHERE date=?", (date,)).fetchone()
+        if not pnl:
+            return jsonify({"error": f"No P&L data for {date}"}), 404
+        pnl = dict(pnl)
+
+        trades = [dict(r) for r in conn.execute(
+            "SELECT * FROM trades WHERE timestamp LIKE ? ORDER BY timestamp", (f"{date}%",)
+        ).fetchall()]
+
+        signals = [dict(r) for r in conn.execute(
+            "SELECT * FROM signals WHERE timestamp LIKE ? ORDER BY timestamp", (f"{date}%",)
+        ).fetchall()]
+        for s in signals:
+            if s.get("data") and isinstance(s["data"], str):
+                try:
+                    s["data"] = _json.loads(s["data"])
+                except Exception:
+                    pass
+
+        actions = [dict(r) for r in conn.execute(
+            "SELECT * FROM action_log WHERE timestamp LIKE ? ORDER BY timestamp", (f"{date}%",)
+        ).fetchall()]
+
+    # Compute day stats
+    buys = [t for t in trades if t["side"] == "buy"]
+    sells = [t for t in trades if t["side"] == "sell"]
+    buy_volume = sum(t.get("total") or 0 for t in buys)
+    sell_volume = sum(t.get("total") or 0 for t in sells)
+    strategies_active = list({t["strategy"] for t in trades if t.get("strategy")})
+    symbols_traded = list({t["symbol"] for t in trades if t.get("symbol")})
+
+    return jsonify({
+        "pnl": pnl,
+        "trades": trades,
+        "signals": signals,
+        "actions": actions,
+        "stats": {
+            "total_trades": len(trades),
+            "buys": len(buys),
+            "sells": len(sells),
+            "buy_volume": round(buy_volume, 2),
+            "sell_volume": round(sell_volume, 2),
+            "strategies_active": strategies_active,
+            "symbols_traded": symbols_traded,
+            "total_signals": len(signals),
+            "total_actions": len(actions),
+        },
+    })
+
+
+@app.route("/api/strategies")
+def api_strategies():
+    """Strategy performance breakdown for dashboard."""
+    import json as _json
+    from trading.config import STRATEGY_ENABLED
+
+    enabled = {k: v for k, v in STRATEGY_ENABLED.items() if v}
+
+    # Signal counts per strategy
+    signals = get_signals(limit=500)
+    strat_data: dict[str, dict] = {}
+    for s in signals:
+        name = s["strategy"]
+        if name not in strat_data:
+            strat_data[name] = {"signals": 0, "buys": 0, "sells": 0, "holds": 0}
+        strat_data[name]["signals"] += 1
+        if s["signal"] == "buy":
+            strat_data[name]["buys"] += 1
+        elif s["signal"] == "sell":
+            strat_data[name]["sells"] += 1
+        else:
+            strat_data[name]["holds"] += 1
+
+    # Trade counts and P&L per strategy
+    trades = get_trades(limit=500)
+    for t in trades:
+        name = t.get("strategy", "")
+        if not name:
+            continue
+        if name not in strat_data:
+            strat_data[name] = {"signals": 0, "buys": 0, "sells": 0, "holds": 0}
+        strat_data[name].setdefault("trades", 0)
+        strat_data[name]["trades"] = strat_data[name].get("trades", 0) + 1
+        if t.get("pnl") is not None:
+            strat_data[name].setdefault("total_pnl", 0)
+            strat_data[name]["total_pnl"] = strat_data[name].get("total_pnl", 0) + (t["pnl"] or 0)
+        if t.get("closed_at"):
+            strat_data[name].setdefault("closed", 0)
+            strat_data[name]["closed"] = strat_data[name].get("closed", 0) + 1
+            if (t.get("pnl") or 0) > 0:
+                strat_data[name].setdefault("wins", 0)
+                strat_data[name]["wins"] = strat_data[name].get("wins", 0) + 1
+
+    result = []
+    for name in sorted(enabled.keys()):
+        d = strat_data.get(name, {})
+        closed = d.get("closed", 0)
+        wins = d.get("wins", 0)
+        result.append({
+            "name": name,
+            "enabled": True,
+            "signals": d.get("signals", 0),
+            "trades": d.get("trades", 0),
+            "buys": d.get("buys", 0),
+            "sells": d.get("sells", 0),
+            "closed_trades": closed,
+            "win_rate": round(wins / closed, 2) if closed > 0 else None,
+            "total_pnl": round(d.get("total_pnl", 0), 2),
+        })
+
+    return jsonify(result)
+
+
+@app.route("/api/intelligence")
+def api_intelligence():
+    """Market intelligence and sentiment data for dashboard."""
+    result = {"fear_greed": None, "briefings": [], "regime_signals": []}
+
+    # Fear & Greed
+    try:
+        from trading.data.crypto import get_fear_greed_index
+        fg = get_fear_greed_index()
+        if fg and isinstance(fg, list) and fg:
+            result["fear_greed"] = fg[0]
+    except Exception:
+        pass
+
+    # Recent intelligence briefings from action log
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM action_log WHERE "
+            "(action LIKE '%briefing%' OR action LIKE '%intelligence%' OR action LIKE '%regime%') "
+            "ORDER BY timestamp DESC LIMIT 5"
+        ).fetchall()
+        result["briefings"] = [dict(r) for r in rows]
+
+        # Regime signals
+        rows = conn.execute(
+            "SELECT * FROM signals WHERE strategy IN ('hmm_regime', 'volatility_regime', 'regime_mean_reversion') "
+            "ORDER BY timestamp DESC LIMIT 5"
+        ).fetchall()
+        regime_sigs = []
+        for r in rows:
+            d = dict(r)
+            if d.get("data") and isinstance(d["data"], str):
+                try:
+                    import json as _json
+                    d["data"] = _json.loads(d["data"])
+                except Exception:
+                    pass
+            regime_sigs.append(d)
+        result["regime_signals"] = regime_sigs
+
+    return jsonify(result)
+
+
+@app.route("/api/agents")
+def api_agents():
+    """Autonomous agent recommendations and activity."""
+    from trading.db.store import get_recommendation_history, get_pending_recommendations
+
+    result = {"pending": [], "recent": [], "activity": []}
+
+    try:
+        recs = get_recommendation_history(limit=20)
+        result["pending"] = [r for r in recs if r.get("status") == "pending"]
+        result["recent"] = [r for r in recs if r.get("status") != "pending"][:10]
+    except Exception:
+        pass
+
+    # Agent-related actions from action log
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM action_log WHERE category IN ('review', 'system', 'scheduler') "
+            "ORDER BY timestamp DESC LIMIT 10"
+        ).fetchall()
+        result["activity"] = [dict(r) for r in rows]
+
+    return jsonify(result)
+
+
+@app.route("/api/allocation")
+def api_allocation():
+    """Portfolio allocation configuration and current state."""
+    from trading.config import STRATEGY_ENABLED
+
+    result = {"strategies": [], "factors": [
+        "Base Budget", "Confluence Boost", "Regime Alignment",
+        "Performance Tilt", "Volatility Scaling", "Signal Strength",
+    ]}
+
+    try:
+        from trading.risk.portfolio import STRATEGY_BUDGETS, DEFAULT_BUDGET
+        enabled = {k for k, v in STRATEGY_ENABLED.items() if v}
+        for name in sorted(enabled):
+            result["strategies"].append({
+                "name": name,
+                "base_pct": round(STRATEGY_BUDGETS.get(name, DEFAULT_BUDGET) * 100, 1),
+            })
+    except ImportError:
+        pass
+
+    return jsonify(result)
+
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    """Chat assistant endpoint — answers questions about the trading system."""
+    from trading.monitor.chat import handle_chat
+
+    data = request.get_json(silent=True) or {}
+    message = data.get("message", "").strip()
+    if not message:
+        return jsonify({"error": "No message provided"}), 400
+
+    try:
+        answer = handle_chat(message)
+        return jsonify({"answer": answer})
+    except Exception as exc:
+        log.exception("Chat handler error")
+        return jsonify({"answer": f"Sorry, I encountered an error: {exc}"}), 200
 
 
 @app.route("/api/health")

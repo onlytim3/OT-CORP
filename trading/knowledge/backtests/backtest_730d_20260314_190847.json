@@ -1,0 +1,187 @@
+{
+  "run_date": "2026-03-14T19:08:47.778908+00:00",
+  "days": 730,
+  "starting_capital": 100000.0,
+  "strategies": [
+    {
+      "strategy": "rsi_divergence",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "dxy_dollar",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "hmm_regime",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "pairs_trading",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "kalman_trend",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "cross_asset_momentum",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "regime_mean_reversion",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "factor_crypto",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "funding_arb",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    },
+    {
+      "strategy": "liquidation_cascade",
+      "total_return_pct": 0.0,
+      "metrics": {
+        "total_trades": 0,
+        "closed_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0,
+        "avg_trade_pnl": 0.0,
+        "sharpe_ratio": 0.0,
+        "max_drawdown": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0
+      },
+      "total_trades": 0,
+      "start_date": "2024-03-13",
+      "end_date": "2026-03-13"
+    }
+  ]
+}
