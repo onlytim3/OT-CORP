@@ -30,7 +30,7 @@ from rich.console import Console
 
 from trading.config import TRADING_MODE, RISK, INITIAL_CAPITAL
 from trading.db.store import (
-    init_db, insert_trade, insert_signal, log_action,
+    init_db, get_db, insert_trade, insert_signal, log_action,
     record_daily_pnl, get_action_log, get_daily_pnl,
     get_setting, set_setting,
 )
@@ -285,7 +285,14 @@ def run_trading_cycle():
                 norm = signal.symbol.replace("/", "")
                 if norm not in held_symbols and signal.symbol not in held_symbols:
                     from trading.config import ALLOW_SHORT_SELLING, SHORT_ALLOWED_STRATEGIES
-                    if not ALLOW_SHORT_SELLING or signal.strategy not in SHORT_ALLOWED_STRATEGIES:
+                    # For aggregator signals, check contributing strategies
+                    strat_name = signal.strategy
+                    if strat_name == "aggregator":
+                        contributing = (signal.data or {}).get("contributing_strategies", [])
+                        short_allowed = any(s in SHORT_ALLOWED_STRATEGIES for s in contributing)
+                    else:
+                        short_allowed = strat_name in SHORT_ALLOWED_STRATEGIES
+                    if not ALLOW_SHORT_SELLING or not short_allowed:
                         console.print(f"  [dim]Skip SELL {signal.symbol} -- no position held[/dim]")
                         continue
                     # Allow short for permitted strategies
@@ -499,6 +506,21 @@ def run_trading_cycle():
                 set_setting("initial_capital", str(initial))
             cum_ret = (pv - initial) / initial if initial > 0 else 0
             record_daily_pnl(pv, cash, pos_value, daily_ret, cum_ret)
+
+            # One-time fix: recalculate old daily_pnl records that used wrong initial capital
+            if not get_setting("pnl_recalc_done"):
+                try:
+                    db = get_db()
+                    db.execute(
+                        "UPDATE daily_pnl SET cumulative_return = "
+                        "(portfolio_value - ?) / ? WHERE cumulative_return < -0.5",
+                        (initial, initial),
+                    )
+                    db.commit()
+                    set_setting("pnl_recalc_done", "true")
+                    log.info("Recalculated stale P&L records with correct initial capital $%.0f", initial)
+                except Exception as fix_err:
+                    log.warning("P&L recalc failed: %s", fix_err)
         except Exception as e:
             log.warning("P&L snapshot warning: %s", e)
             console.print(f"[yellow]P&L snapshot warning: {e}[/yellow]")

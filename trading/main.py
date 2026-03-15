@@ -86,7 +86,14 @@ def cmd_run(paper: bool = False):
                     norm = signal.symbol.replace("/", "")
                     if norm not in held_symbols and signal.symbol not in held_symbols:
                         from trading.config import ALLOW_SHORT_SELLING, SHORT_ALLOWED_STRATEGIES
-                        if not ALLOW_SHORT_SELLING or signal.strategy not in SHORT_ALLOWED_STRATEGIES:
+                        # For aggregator signals, check contributing strategies
+                        strat_name = signal.strategy
+                        if strat_name == "aggregator":
+                            contributing = (signal.data or {}).get("contributing_strategies", [])
+                            short_allowed = any(s in SHORT_ALLOWED_STRATEGIES for s in contributing)
+                        else:
+                            short_allowed = strat_name in SHORT_ALLOWED_STRATEGIES
+                        if not ALLOW_SHORT_SELLING or not short_allowed:
                             # Skip sell for non-short-allowed strategies
                             console.print(f"  [dim]Skipping SELL {signal.symbol} — no position held[/dim]")
                             continue

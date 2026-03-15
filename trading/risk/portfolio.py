@@ -390,8 +390,17 @@ def calculate_order_size(
         log.debug("No budget remaining for %s", signal.strategy)
         return 0.0
 
-    # Split among concurrent buy signals
-    per_signal = ceiling / max(num_signals, 1)
+    # Per-signal allocation: the ceiling already incorporates the strategy's
+    # budget cap, so we only split free_capital (not strategy budget) among
+    # concurrent buy signals to prevent over-deployment.
+    # This ensures small portfolios don't produce sub-minimum orders.
+    if use_strategy_budgets and strategy_remaining < free_capital:
+        # Strategy budget is the binding constraint — no need to split further
+        # since each strategy's budget is independent
+        per_signal = ceiling
+    else:
+        # Free capital is the constraint — split among all buy signals
+        per_signal = ceiling / max(num_signals, 1)
 
     # --- Factor 6: Signal strength ---
     order_value = per_signal * signal.strength
