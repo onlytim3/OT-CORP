@@ -885,6 +885,22 @@ def _paper_get_positions() -> list[dict]:
     if not rows:
         return []
 
+    # Batch-fetch ALL mark prices in one call to avoid per-symbol failures
+    mark_prices: dict[str, float] = {}
+    try:
+        all_marks = get_aster_mark_prices()  # No symbol = fetch all
+        if isinstance(all_marks, list):
+            for entry in all_marks:
+                sym = entry.get("symbol", "")
+                mp = entry.get("markPrice")
+                if sym and mp:
+                    mark_prices[sym] = float(mp) if not isinstance(mp, float) else mp
+            log.info("Fetched %d mark prices from AsterDex", len(mark_prices))
+        else:
+            log.warning("Unexpected mark prices response type: %s", type(all_marks))
+    except Exception as e:
+        log.error("Failed to fetch mark prices from AsterDex: %s", e)
+
     result = []
     for row in rows:
         row = dict(row)
@@ -893,12 +909,12 @@ def _paper_get_positions() -> list[dict]:
         avg_cost = row["avg_cost"]
         side = row.get("side", "long")
 
-        # Get current mark price
+        # Get current mark price from batch data
         aster_sym = _to_aster(sym_key)
-        try:
-            mark_data = get_aster_mark_prices(aster_sym)
-            mark_price = mark_data.get("markPrice", avg_cost)
-        except Exception:
+        mark_price = mark_prices.get(aster_sym)
+        if mark_price is None or mark_price <= 0:
+            log.warning("No mark price for %s (aster: %s), falling back to avg_cost %.4f",
+                        sym_key, aster_sym, avg_cost)
             mark_price = avg_cost
 
         if side == "long":
