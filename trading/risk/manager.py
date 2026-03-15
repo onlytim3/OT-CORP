@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 
 from trading.config import RISK, CRYPTO_SYMBOLS
 from trading.risk.profit_manager import TAKE_PROFIT_PCT, TRAILING_STOP_ACTIVATE
+from trading.risk.volume_gate import compute_volume_ratio, compute_volume_trend, check_spread, check_market_impact
+from trading.data.aster import alpaca_to_aster
 from trading.db.store import get_positions, get_daily_pnl, get_trades
 from trading.strategy.base import Signal
 
@@ -73,6 +75,8 @@ class RiskManager:
         checks = [
             self._check_account_status(),
             self._check_buying_power(order_value),
+            self._check_volume(signal),
+            self._check_liquidity(signal, order_value),
             self._check_position_size(signal, order_value, positions),
             self._check_crypto_exposure(signal, order_value, positions),
             self._check_correlation_group(signal, order_value, positions),
@@ -119,6 +123,85 @@ class RiskManager:
                 signal=Signal("risk", "", "hold", 0, ""),
             )
         return RiskCheck(allowed=True, reason="Buying power OK", signal=Signal("risk", "", "hold", 0, ""))
+
+    # ------------------------------------------------------------------
+    # Volume gate — only trade assets with adequate volume
+    # ------------------------------------------------------------------
+
+    def _check_volume(self, signal: Signal) -> RiskCheck:
+        """Block buy entries when volume is too low or fading.
+
+        Checks both absolute volume level AND volume trend (building vs fading).
+        Only applies to buy signals — sells/exits are never blocked.
+        Fails open: if data is unavailable, the gate passes.
+        """
+        if signal.action != "buy":
+            return RiskCheck(allowed=True, reason="Not a buy — volume gate skipped", signal=signal)
+
+        min_ratio = self.rules.get("min_volume_ratio", 0.30)
+        aster_sym = alpaca_to_aster(signal.symbol)
+        if not aster_sym:
+            return RiskCheck(allowed=True, reason="No AsterDex symbol — volume gate skipped", signal=signal)
+
+        ratio = compute_volume_ratio(aster_sym)
+        if ratio is None:
+            return RiskCheck(allowed=True, reason="Volume data unavailable — gate passed", signal=signal)
+
+        if ratio < min_ratio:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Volume too low: {signal.symbol} at {ratio:.0%} of average (minimum {min_ratio:.0%})",
+                signal=signal,
+            )
+
+        # Check volume trend — block if volume is rapidly fading even if still above threshold
+        trend = compute_volume_trend(aster_sym)
+        if trend is not None and trend < -0.5 and ratio < 0.6:
+            return RiskCheck(
+                allowed=False,
+                reason=(
+                    f"Volume fading fast: {signal.symbol} at {ratio:.0%} of average "
+                    f"and declining {abs(trend):.0%} — move is dying"
+                ),
+                signal=signal,
+            )
+
+        return RiskCheck(allowed=True, reason=f"Volume OK: {ratio:.0%} of average, trend {trend or 0:+.0%}", signal=signal)
+
+    def _check_liquidity(self, signal: Signal, order_value: float) -> RiskCheck:
+        """Block entries when spread is too wide or order would move the market.
+
+        Wide spread = bad fill quality. Large order relative to volume = market impact.
+        Only applies to buys. Fails open on data errors.
+        """
+        if signal.action != "buy":
+            return RiskCheck(allowed=True, reason="Not a buy — liquidity check skipped", signal=signal)
+
+        aster_sym = alpaca_to_aster(signal.symbol)
+        if not aster_sym:
+            return RiskCheck(allowed=True, reason="No AsterDex symbol — liquidity check skipped", signal=signal)
+
+        # Check spread — block if spread is too wide (> 50 bps = 0.5%)
+        max_spread_bps = self.rules.get("max_spread_bps", 50)
+        spread = check_spread(aster_sym)
+        if spread is not None and spread > max_spread_bps:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Spread too wide: {signal.symbol} at {spread:.0f} bps (max {max_spread_bps} bps)",
+                signal=signal,
+            )
+
+        # Check market impact — block if order is > 1% of recent 4h quote volume
+        max_impact = self.rules.get("max_market_impact_pct", 0.01)
+        impact_ok = check_market_impact(aster_sym, order_value, max_impact)
+        if impact_ok is not None and not impact_ok:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Market impact too high: ${order_value:.0f} order is > {max_impact:.0%} of recent volume for {signal.symbol}",
+                signal=signal,
+            )
+
+        return RiskCheck(allowed=True, reason="Liquidity OK", signal=signal)
 
     # ------------------------------------------------------------------
     # Position-level checks

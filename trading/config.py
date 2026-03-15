@@ -64,6 +64,10 @@ RISK = {
     "max_drawdown_pct": 0.20,       # 20% max total drawdown → halt trading
     "min_cash_reserve_pct": 0.15,   # Keep 15% in cash (more strategies need buffer)
     "max_trades_per_day": 25,       # 20+ active strategies
+    "min_volume_ratio": 0.30,       # Block entries when volume < 30% of 7d average
+    "volume_exit_ratio": 0.20,      # Exit positions when volume < 20% of 7d average
+    "max_spread_bps": 50,           # Block entries when bid-ask spread > 50 basis points
+    "max_market_impact_pct": 0.01,  # Block entries when order > 1% of recent 4h quote volume
 }
 
 # --- Short Selling ---

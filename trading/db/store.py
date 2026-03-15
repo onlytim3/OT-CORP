@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from trading.config import DB_PATH
 
@@ -191,6 +191,21 @@ def init_db():
                 verdict TEXT,
                 data TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS volume_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                hour_of_day INTEGER NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                volume_ratio REAL NOT NULL,
+                quote_volume REAL,
+                trade_count INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_vol_profile_symbol
+                ON volume_profiles(symbol);
+            CREATE INDEX IF NOT EXISTS idx_vol_profile_hour
+                ON volume_profiles(hour_of_day);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
@@ -725,3 +740,76 @@ def get_strategies_needing_backtest(cooldown_days: int = 7) -> list[str]:
 
     # All known strategies minus recently tested ones
     return [s for s in STRATEGY_ENABLED if s not in recently_tested]
+
+
+# ---------------------------------------------------------------------------
+# Volume profiles — learning volume patterns by hour/day
+# ---------------------------------------------------------------------------
+
+def insert_volume_profile(
+    symbol: str,
+    hour_of_day: int,
+    day_of_week: int,
+    volume_ratio: float,
+    quote_volume: float = 0,
+    trade_count: int = 0,
+) -> None:
+    """Record a volume snapshot for learning."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO volume_profiles
+               (symbol, timestamp, hour_of_day, day_of_week, volume_ratio, quote_volume, trade_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, datetime.now(timezone.utc).isoformat(),
+             hour_of_day, day_of_week, volume_ratio, quote_volume, trade_count),
+        )
+
+
+def get_volume_profile(symbol: str, days: int = 30) -> list[dict]:
+    """Get average volume ratio by hour-of-day for a symbol.
+
+    Returns list of dicts: [{hour: 0, avg_ratio: 1.2, samples: 30}, ...]
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT hour_of_day as hour,
+                      AVG(volume_ratio) as avg_ratio,
+                      COUNT(*) as samples
+               FROM volume_profiles
+               WHERE symbol = ? AND timestamp > ?
+               GROUP BY hour_of_day
+               ORDER BY hour_of_day""",
+            (symbol, cutoff),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_volume_profile_by_day(symbol: str, days: int = 30) -> list[dict]:
+    """Get average volume ratio by day-of-week for a symbol.
+
+    Returns list of dicts: [{day: 0, avg_ratio: 1.1, samples: 4}, ...]
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT day_of_week as day,
+                      AVG(volume_ratio) as avg_ratio,
+                      COUNT(*) as samples
+               FROM volume_profiles
+               WHERE symbol = ? AND timestamp > ?
+               GROUP BY day_of_week
+               ORDER BY day_of_week""",
+            (symbol, cutoff),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def cleanup_old_volume_profiles(keep_days: int = 90) -> int:
+    """Delete volume profiles older than keep_days. Returns rows deleted."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM volume_profiles WHERE timestamp < ?", (cutoff,)
+        )
+        return cursor.rowcount

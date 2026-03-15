@@ -424,6 +424,20 @@ def calculate_order_size(
     else:
         vol_mult = 1.0
 
+    # --- Factor 7: Volume-based sizing ---
+    # Scale position size with current volume conditions
+    if signal.action == "buy":
+        try:
+            from trading.risk.volume_gate import compute_volume_sizing_multiplier
+            from trading.data.aster import alpaca_to_aster
+            aster_sym = alpaca_to_aster(signal.symbol)
+            volume_mult = compute_volume_sizing_multiplier(aster_sym) if aster_sym else 1.0
+        except Exception:
+            volume_mult = 1.0
+        order_value *= volume_mult
+    else:
+        volume_mult = 1.0
+
     # Hard cap
     order_value = min(order_value, max_per_position)
 
@@ -433,9 +447,9 @@ def calculate_order_size(
 
     log.info(
         "Dynamic sizing %s %s: base=$%.0f × confluence=%.1f × regime=%.2f "
-        "× perf=%.2f × vol=%.1f × strength=%.2f → $%.2f",
+        "× perf=%.2f × vol=%.1f × volume=%.2f × strength=%.2f → $%.2f",
         signal.action, signal.symbol, per_signal,
-        confluence_mult, regime_mult, perf_mult, vol_mult,
+        confluence_mult, regime_mult, perf_mult, vol_mult, volume_mult,
         signal.strength, order_value,
     )
 

@@ -535,6 +535,52 @@ def _learning_agent_think() -> list[dict]:
                 },
             })
 
+    # Analyze volume profiles to learn optimal trading times
+    try:
+        from trading.db.store import get_volume_profile, get_volume_profile_by_day
+        from trading.config import ASTER_SYMBOLS
+
+        for coin in ("bitcoin", "ethereum", "solana"):
+            aster_sym = ASTER_SYMBOLS.get(coin)
+            if not aster_sym:
+                continue
+
+            hourly = get_volume_profile(aster_sym, days=30)
+            if len(hourly) < 12:
+                continue  # Not enough data yet
+
+            # Find peak and dead volume hours
+            peak_hours = sorted(hourly, key=lambda h: h["avg_ratio"], reverse=True)[:3]
+            dead_hours = sorted(hourly, key=lambda h: h["avg_ratio"])[:3]
+
+            if dead_hours and dead_hours[0]["avg_ratio"] < 0.4:
+                dead_range = ", ".join(f"{h['hour']:02d}:00" for h in dead_hours)
+                peak_range = ", ".join(f"{h['hour']:02d}:00" for h in peak_hours)
+                recommendations.append({
+                    "from_agent": LEARNING_AGENT,
+                    "to_agent": LEARNING_AGENT,
+                    "category": "research_finding",
+                    "action": "volume_pattern",
+                    "target": coin,
+                    "reasoning": (
+                        f"Volume analysis for {coin} (30d): "
+                        f"Peak hours UTC: {peak_range} "
+                        f"(avg {peak_hours[0]['avg_ratio']:.0%} of baseline). "
+                        f"Dead hours UTC: {dead_range} "
+                        f"(avg {dead_hours[0]['avg_ratio']:.0%} of baseline). "
+                        f"Avoid entries during dead hours."
+                    ),
+                    "data": {
+                        "peak_hours": [h["hour"] for h in peak_hours],
+                        "dead_hours": [h["hour"] for h in dead_hours],
+                        "peak_avg_ratio": round(peak_hours[0]["avg_ratio"], 3),
+                        "dead_avg_ratio": round(dead_hours[0]["avg_ratio"], 3),
+                        "auto_approve": True,
+                    },
+                })
+    except Exception:
+        log.debug("Volume profile analysis failed (non-fatal)", exc_info=True)
+
     return recommendations
 
 

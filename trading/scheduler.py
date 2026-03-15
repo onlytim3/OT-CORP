@@ -671,6 +671,31 @@ def run_trading_cycle():
         except Exception as e:
             log.warning("Alert check failed (non-fatal): %s", e)
 
+        # ---------------------------------------------------------------
+        # Phase 9: Record volume snapshots for learning
+        # ---------------------------------------------------------------
+        try:
+            from trading.risk.volume_gate import record_volume_snapshot
+            from trading.data.aster import alpaca_to_aster
+            # Record for all symbols we have open positions in + top coins
+            vol_symbols = set()
+            for pos in _get_positions():
+                a = alpaca_to_aster(pos["symbol"])
+                if a:
+                    vol_symbols.add(a)
+            # Always track top liquid markets
+            for coin in ("bitcoin", "ethereum", "solana"):
+                from trading.config import ASTER_SYMBOLS
+                a = ASTER_SYMBOLS.get(coin)
+                if a:
+                    vol_symbols.add(a)
+            for vs in vol_symbols:
+                record_volume_snapshot(vs)
+            if vol_symbols:
+                log.debug("Recorded volume snapshots for %d symbols", len(vol_symbols))
+        except Exception as e:
+            log.debug("Volume snapshot recording failed (non-fatal): %s", e)
+
     except Exception as e:
         log_action("error", "cycle_crash", details=str(e))
         log.exception("Cycle crashed: %s", e)
@@ -778,7 +803,74 @@ def check_stop_losses():
                     except Exception:
                         pass
 
-        # -- 3. Post-check sync --
+        # -- 3. Volume dry-up exit check --
+        # Close positions where volume has died (the move is over).
+        # Only exit if position is profitable or near break-even to avoid
+        # compounding losses — deep losers should be handled by stop-loss.
+        try:
+            from trading.risk.volume_gate import compute_volume_ratio, compute_volume_trend
+            from trading.data.aster import alpaca_to_aster
+
+            vol_exit_ratio = RISK.get("volume_exit_ratio", 0.20)
+            already_sold = {a["symbol"] for a in profit_actions}
+            for pos in positions:
+                symbol = pos["symbol"]
+                if symbol in already_sold:
+                    continue
+                aster_sym = alpaca_to_aster(symbol)
+                if not aster_sym:
+                    continue
+                ratio = compute_volume_ratio(aster_sym)
+                if ratio is None:
+                    continue
+                trend = compute_volume_trend(aster_sym) or 0.0
+
+                # Exit if volume is below absolute threshold
+                # OR if volume is low-ish AND rapidly fading
+                volume_dead = ratio < vol_exit_ratio
+                volume_fading_fast = ratio < 0.50 and trend < -0.40
+                if not volume_dead and not volume_fading_fast:
+                    continue
+
+                # Only exit if P&L is not deeply negative (> -2%)
+                pnl_pct = pos.get("unrealized_pnl_pct", 0) / 100 if pos.get("unrealized_pnl_pct") else 0
+                if pnl_pct < -0.02:
+                    log.info("Volume dry for %s (ratio=%.0f%% trend=%.2f) but P&L %.1f%% — keeping for stop-loss",
+                             symbol, ratio * 100, trend, pnl_pct * 100)
+                    continue
+
+                exit_reason = "fading fast" if volume_fading_fast and not volume_dead else "below threshold"
+                console.print(f"[bold yellow]VOLUME EXIT: {symbol} — volume {ratio:.0%} ({exit_reason})[/]")
+                log_action(
+                    "volume_exit", "triggered",
+                    symbol=symbol,
+                    details=f"Volume {ratio:.0%} trend={trend:+.2f} ({exit_reason}), P&L {pnl_pct*100:.1f}%",
+                    data={"volume_ratio": round(ratio, 3), "volume_trend": round(trend, 3), "pnl_pct": pnl_pct, "qty": pos["qty"]},
+                )
+                try:
+                    order = _execute_order(symbol, "sell", qty=pos["qty"])
+                except Exception as e:
+                    log.error("Volume exit sell failed for %s: %s", symbol, e)
+                    continue
+
+                if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                    insert_trade(
+                        symbol=symbol,
+                        side="sell",
+                        qty=pos["qty"],
+                        price=float(order.get("filled_avg_price") or 0),
+                        total=pos["qty"] * float(order.get("filled_avg_price") or 0),
+                        strategy="volume_exit",
+                        status=order["status"],
+                        alpaca_order_id=order.get("id"),
+                    )
+                    log_action("trade", "volume_exit_sell", symbol=symbol, result=order["status"])
+                    tracker.remove(symbol)
+                    already_sold.add(symbol)
+        except Exception as e:
+            log.debug("Volume exit check error: %s", e, exc_info=True)
+
+        # -- 4. Post-check sync --
         try:
             from trading.execution.sync import sync_positions
             sync_positions()
