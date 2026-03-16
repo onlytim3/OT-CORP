@@ -7,9 +7,12 @@ autonomous agents, portfolio allocation, trailing stops, and more.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from trading.db.store import (
     get_db, get_trades, get_signals, get_daily_pnl,
@@ -20,10 +23,27 @@ from trading.db.store import (
 
 
 def handle_chat(message: str) -> str:
-    """Route a user question to the appropriate query handler and return a text answer."""
+    """Route a user question — always use LLM if available, regex as fallback."""
     msg = message.lower().strip()
 
-    # Dispatch based on intent (more specific matches first)
+    # Step 1: Gather relevant data based on intent (fast regex matching)
+    structured_data = _gather_intent_data(msg, message)
+
+    # Step 2: Send to LLM with gathered data for a conversational response
+    llm_answer = _llm_respond(message, structured_data)
+    if llm_answer:
+        return llm_answer
+
+    # Step 3: If LLM unavailable, fall back to raw formatted data
+    if structured_data:
+        return structured_data
+
+    return _help_answer()
+
+
+def _gather_intent_data(msg: str, original: str) -> str:
+    """Use regex intent matching to gather structured system data for LLM context."""
+
     if _match(msg, ["backtest", "back test", "backtested", "historical performance",
                      "how would", "simulate", "paper test"]):
         return _backtest_answer(msg)
@@ -97,19 +117,51 @@ def handle_chat(message: str) -> str:
     if _match(msg, ["help", "what can you", "commands", "how to"]):
         return _help_answer()
 
-    # Fallback — try knowledge search
-    knowledge = search_knowledge(message, limit=3)
+    # No specific intent matched — knowledge search
+    knowledge = search_knowledge(original, limit=3)
     if knowledge:
-        answer = "Here's what I found in the knowledge base:\n\n"
+        answer = "Knowledge base results:\n"
         for k in knowledge:
-            answer += f"**{k['title']}** ({k['category']})\n"
-            if k.get("key_rules"):
-                answer += f"{k['key_rules'][:200]}\n"
-            answer += "\n"
+            answer += f"- {k['title']} ({k['category']}): {(k.get('key_rules') or '')[:200]}\n"
         return answer
 
-    # LLM fallback — send to AI with full system context
-    return _llm_fallback(message)
+    return ""
+
+
+def _llm_respond(message: str, structured_data: str) -> str | None:
+    """Send message + gathered data to LLM for a conversational response."""
+    try:
+        from trading.llm.engine import ask_llm, TRADING_SYSTEM_PROMPT
+    except ImportError:
+        return None
+
+    # Also gather live system context
+    context = _gather_system_context()
+
+    prompt = f"""The operator asks: "{message}"
+
+RELEVANT SYSTEM DATA (gathered from live queries):
+{structured_data if structured_data else "(No specific data matched — use the system context below)"}
+
+CURRENT SYSTEM STATE:
+{json.dumps(context, indent=2, default=str)}
+
+Instructions:
+- Answer conversationally and naturally, like a knowledgeable trading co-pilot
+- Reference specific numbers, strategies, and timestamps from the data above
+- Be concise but thorough — highlight what matters most
+- Use markdown formatting (bold for key numbers, bullet points for lists)
+- If the data shows something concerning (large losses, risk blocks, system errors), proactively mention it
+- Don't just reformat the data — add insight, analysis, and actionable observations"""
+
+    try:
+        result = ask_llm(TRADING_SYSTEM_PROMPT, prompt, tier="quality")
+        if result and "LLM unavailable" not in result:
+            return result
+    except Exception:
+        pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1056,31 +1108,6 @@ def _help_answer() -> str:
         "- *\"Show reviews\"* — performance summaries\n"
         "- *\"Show journal\"* — trade rationale & lessons\n"
     )
-
-
-# ---------------------------------------------------------------------------
-# LLM-powered fallback for unmatched queries
-# ---------------------------------------------------------------------------
-
-def _llm_fallback(message: str) -> str:
-    """Send unmatched questions to the LLM with full trading system context."""
-    try:
-        from trading.llm.engine import chat_with_context
-    except ImportError:
-        return _help_answer()
-
-    # Gather system context for the LLM
-    context = _gather_system_context()
-
-    try:
-        answer = chat_with_context(message, context)
-        if answer and "LLM unavailable" not in answer:
-            return answer
-    except Exception as e:
-        log.warning("LLM fallback error: %s", e) if log.isEnabledFor(logging.WARNING) else None
-
-    # If LLM is unavailable, return help text
-    return _help_answer()
 
 
 def _gather_system_context() -> dict:

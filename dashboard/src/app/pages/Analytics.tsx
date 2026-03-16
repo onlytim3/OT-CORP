@@ -313,6 +313,61 @@ export function Analytics() {
 
         {/* Strategy Performance Tab */}
         <TabsContent value="strategies" className="space-y-6">
+          {/* Strategy Performance Table */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                Strategy Performance
+                <span className="text-sm font-normal text-[#888888]">{strategies?.length || 0} strategies</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(!strategies || strategies.length === 0) ? (
+                <p className="text-[#888888] text-center py-8">No strategies loaded</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-white/5">
+                        <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
+                        <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Status</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Signals</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Trades</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Closed</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Win Rate</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...strategies].sort((a, b) => b.total_pnl - a.total_pnl).map((s) => (
+                        <tr key={s.name} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                          <td className="py-3 px-4 font-medium text-[#e8e8e8]">{s.name.replace(/_/g, ' ')}</td>
+                          <td className="py-3 px-4 text-center">
+                            <Badge variant={s.enabled ? "default" : "secondary"}>
+                              {s.enabled ? 'Active' : 'Off'}
+                            </Badge>
+                          </td>
+                          <td className="text-right py-3 px-4 text-[#c0c0c0]">{s.signals || 0}</td>
+                          <td className="text-right py-3 px-4 text-[#c0c0c0]">{s.trades || 0}</td>
+                          <td className="text-right py-3 px-4 text-[#c0c0c0]">{s.closed_trades || 0}</td>
+                          <td className="text-right py-3 px-4">
+                            <span className={s.win_rate !== null && s.win_rate !== undefined && s.win_rate >= 0.5 ? 'text-[#00d4aa]' : 'text-[#c0c0c0]'}>
+                              {s.win_rate !== null && s.win_rate !== undefined ? `${(s.win_rate * 100).toFixed(1)}%` : '-'}
+                            </span>
+                          </td>
+                          <td className={`text-right py-3 px-4 font-medium ${(s.total_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                            {(s.total_pnl || 0) >= 0 ? '+' : ''}${(s.total_pnl || 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* P&L Chart */}
           {strategyChartData.length > 0 && (
             <Card>
               <CardHeader><CardTitle>Strategy P&L Comparison</CardTitle></CardHeader>

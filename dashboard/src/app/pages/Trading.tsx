@@ -3,7 +3,7 @@ import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { TrendingUp, TrendingDown, DollarSign, Volume2, RefreshCw, ArrowUpDown, ShieldAlert } from "lucide-react";
 import { useState } from "react";
-import { api, usePolling, type StatusResponse, type Trade, type Strategy, type VolumeAnalysis, type MarginHealth } from "../config/api";
+import { api, usePolling, type StatusResponse, type Trade, type VolumeAnalysis, type MarginHealth } from "../config/api";
 
 function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
   const pct = Math.min(ratio * 100, 200);
@@ -24,7 +24,6 @@ function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
 export function Trading() {
   const { data: status } = usePolling<StatusResponse>(api.status, 10000);
   const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
-  const { data: strategies } = usePolling<Strategy[]>(api.strategies, 30000);
   const { data: volumes } = usePolling<VolumeAnalysis[]>(api.volume, 30000);
   const { data: marginData } = usePolling<MarginHealth[]>(api.margin, 15000);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -125,58 +124,6 @@ export function Trading() {
         })}
       </div>
 
-      {/* Strategy Performance */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            Strategy Performance
-            <span className="text-sm font-normal text-[#888888]">{strategies?.length || 0} strategies</span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {(!strategies || strategies.length === 0) ? (
-            <p className="text-[#888888] text-center py-8">No strategies loaded</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-white/5">
-                    <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
-                    <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Status</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Signals</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Trades</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Win Rate</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {strategies.sort((a, b) => b.total_pnl - a.total_pnl).map((s) => (
-                    <tr key={s.name} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                      <td className="py-3 px-4 font-medium text-[#e8e8e8]">{s.name}</td>
-                      <td className="py-3 px-4 text-center">
-                        <Badge variant={s.enabled ? "default" : "secondary"}>
-                          {s.enabled ? 'Active' : 'Disabled'}
-                        </Badge>
-                      </td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{s.signals}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{s.trades}</td>
-                      <td className="text-right py-3 px-4">
-                        <span className={s.win_rate !== null && s.win_rate >= 50 ? 'text-[#00d4aa]' : 'text-[#c0c0c0]'}>
-                          {s.win_rate !== null ? `${s.win_rate.toFixed(1)}%` : '-'}
-                        </span>
-                      </td>
-                      <td className={`text-right py-3 px-4 font-medium ${s.total_pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
-                        {s.total_pnl >= 0 ? '+' : ''}${s.total_pnl.toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
       {/* Recent Trades */}
       <Card>
         <CardHeader>
@@ -200,6 +147,7 @@ export function Trading() {
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total</th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L %</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Time</th>
                   </tr>
                 </thead>
@@ -216,6 +164,9 @@ export function Trading() {
                       <td className="py-3 px-4 text-[#888888] text-sm">{t.strategy}</td>
                       <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
                         {t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
+                      </td>
+                      <td className={`text-right py-3 px-4 font-medium ${t.pnl_pct !== null ? (t.pnl_pct >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
+                        {t.pnl_pct !== null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%` : '-'}
                       </td>
                       <td className="text-right py-3 px-4 text-[#888888] text-sm">{new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
                     </tr>

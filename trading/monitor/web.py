@@ -92,7 +92,10 @@ def _safe_positions():
 
 
 def _add_position_ages(positions: list) -> list:
-    """Add human-readable age to each position based on earliest trade."""
+    """Add human-readable age to each position based on earliest open buy trade.
+
+    Falls back to the most recent buy trade if no explicitly 'open' trade is found.
+    """
     if not positions:
         return positions
     try:
@@ -102,26 +105,58 @@ def _add_position_ages(positions: list) -> list:
                 sym = p["symbol"]
                 sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
                 sym_flat = sym.replace("/", "")
-                placeholders = ",".join("?" for _ in {sym, sym_slash, sym_flat})
+                variants = list({sym, sym_slash, sym_flat})
+                placeholders = ",".join("?" for _ in variants)
+
+                # Try 1: earliest open buy trade (not closed)
                 row = conn.execute(
-                    f"SELECT MIN(timestamp) as opened FROM trades WHERE symbol IN ({placeholders}) AND side='buy' AND status != 'closed'",
-                    list({sym, sym_slash, sym_flat}),
+                    f"SELECT MIN(timestamp) as opened FROM trades "
+                    f"WHERE symbol IN ({placeholders}) AND side='buy' "
+                    f"AND (status IS NULL OR status != 'closed') AND closed_at IS NULL",
+                    variants,
                 ).fetchone()
+
+                # Try 2: fall back to earliest unclosed buy trade
+                if not row or not row["opened"]:
+                    row = conn.execute(
+                        f"SELECT MIN(timestamp) as opened FROM trades "
+                        f"WHERE symbol IN ({placeholders}) AND side='buy' AND closed_at IS NULL",
+                        variants,
+                    ).fetchone()
+
+                # Try 3: fall back to most recent buy trade for this symbol
+                if not row or not row["opened"]:
+                    row = conn.execute(
+                        f"SELECT MAX(timestamp) as opened FROM trades "
+                        f"WHERE symbol IN ({placeholders}) AND side='buy'",
+                        variants,
+                    ).fetchone()
+
                 if row and row["opened"]:
-                    opened = datetime.fromisoformat(row["opened"].replace("Z", "+00:00"))
+                    opened_str = row["opened"]
+                    try:
+                        opened = datetime.fromisoformat(opened_str.replace("Z", "+00:00"))
+                    except (ValueError, AttributeError):
+                        p["age"] = ""
+                        continue
                     if opened.tzinfo is None:
-                        from datetime import timezone as _tz
-                        opened = opened.replace(tzinfo=_tz.utc)
+                        opened = opened.replace(tzinfo=timezone.utc)
                     delta = now - opened
                     mins = int(delta.total_seconds() / 60)
-                    if mins < 60:
+                    if mins < 0:
+                        p["age"] = "0m"
+                    elif mins < 60:
                         p["age"] = f"{mins}m"
                     elif mins < 1440:
-                        p["age"] = f"{mins // 60}h"
+                        hours = mins // 60
+                        remaining_mins = mins % 60
+                        p["age"] = f"{hours}h {remaining_mins}m" if remaining_mins else f"{hours}h"
                     else:
-                        p["age"] = f"{mins // 1440}d"
+                        days = mins // 1440
+                        remaining_hours = (mins % 1440) // 60
+                        p["age"] = f"{days}d {remaining_hours}h" if remaining_hours else f"{days}d"
                 else:
-                    p["age"] = ""
+                    p["age"] = "new"
     except Exception:
         log.debug("Could not compute position ages", exc_info=True)
     return positions
