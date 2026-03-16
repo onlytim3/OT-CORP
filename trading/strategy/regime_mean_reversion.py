@@ -157,11 +157,11 @@ class RegimeMeanReversionStrategy(Strategy):
             "bb_lower": round(current_lower, 2),
         }
 
-        # Trending regime: hold
+        # Trending regime: hold — strength from ADX confidence
         if current_adx > self.adx_threshold:
             return Signal(
                 strategy=self.name, symbol=alpaca_symbol, action="hold",
-                strength=0.0,
+                strength=round(min(current_adx / 100.0, 0.5), 3),  # ADX 50 → 50% strength
                 reason=f"{coin_id} ADX {current_adx:.0f} > {self.adx_threshold} — trending regime",
                 data={"adx": round(current_adx, 1), "regime": "trending", "coin": coin_id},
             )

@@ -195,12 +195,29 @@ def api_status():
     account = _safe_account()
     positions = _add_position_ages(sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
     summary = get_action_log_summary()
+
+    # Include P&L from daily_pnl as fallback for position-level P&L
+    pnl_snapshot = {}
+    try:
+        pnl_data = get_daily_pnl(limit=1)
+        if pnl_data:
+            latest = pnl_data[0]
+            pnl_snapshot = {
+                "portfolio_value": latest.get("portfolio_value", 0),
+                "daily_return": latest.get("daily_return", 0),
+                "cumulative_return": latest.get("cumulative_return", 0),
+                "date": latest.get("date", ""),
+            }
+    except Exception:
+        pass
+
     return jsonify({
         "account": account,
         "positions": positions,
         "summary": summary,
         "mode": get_setting("trading_mode", TRADING_MODE),
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pnl_snapshot": pnl_snapshot,
     })
 
 
@@ -665,6 +682,14 @@ def api_strategies():
                 strat_data[name].setdefault("wins", 0)
                 strat_data[name]["wins"] = strat_data[name].get("wins", 0) + 1
 
+    # Add unrealized P&L from open positions
+    positions = _safe_positions()
+    for p in positions:
+        strat = p.get("strategy", "")
+        if strat and strat in strat_data:
+            strat_data[strat].setdefault("total_pnl", 0)
+            strat_data[strat]["total_pnl"] += (p.get("unrealized_pnl") or 0)
+
     result = []
     for name in sorted(enabled.keys()):
         d = strat_data.get(name, {})
@@ -722,11 +747,27 @@ def api_intelligence():
                     d["data"] = _json.loads(d["data"])
                 except Exception:
                     pass
-            # Fix: when strength is 0 (hold/sideways), use regime_prob from data
+            # Fix: when strength is 0, extract confidence from regime data fields
             if (d.get("strength") or 0) == 0 and isinstance(d.get("data"), dict):
-                prob = d["data"].get("regime_prob") or d["data"].get("probability") or d["data"].get("confidence") or 0
+                rd = d["data"]
+                prob = (
+                    rd.get("regime_prob")
+                    or rd.get("probability")
+                    or rd.get("confidence")
+                    or 0
+                )
+                if not prob:
+                    # volatility regime: derive from vol_ratio distance from 1.0
+                    vol_ratio = rd.get("vol_ratio")
+                    if vol_ratio is not None:
+                        prob = min(abs(float(vol_ratio) - 1.0), 1.0)
+                if not prob:
+                    # regime_mean_reversion: derive from ADX
+                    adx = rd.get("adx")
+                    if adx is not None:
+                        prob = min(float(adx) / 100.0, 1.0)
                 if prob:
-                    d["strength"] = float(prob)
+                    d["strength"] = round(float(prob), 3)
             regime_sigs.append(d)
         result["regime_signals"] = regime_sigs
 

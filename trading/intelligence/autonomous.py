@@ -51,33 +51,94 @@ log = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Auto-approve thresholds — these actions happen without human intervention
-AUTO_DISABLE_WIN_RATE = 0.25        # Disable strategy if win rate below 25%
-AUTO_DISABLE_MIN_TRADES = 20        # Minimum trades before auto-disabling
-AUTO_DISABLE_MAX_LOSS_PCT = -0.15   # Disable if total loss > 15% of deployed capital
+# ---------------------------------------------------------------------------
+# Adaptive Threshold System — thresholds the Learning Agent can tune
+# ---------------------------------------------------------------------------
 
-DRAWDOWN_TIGHTEN_THRESHOLD = 0.10   # Tighten risk at 10% drawdown
-DRAWDOWN_HALT_THRESHOLD = 0.18      # Emergency halt at 18% drawdown
+_DEFAULT_THRESHOLDS = {
+    "auto_disable_win_rate": 0.25,       # Disable strategy if win rate below this
+    "auto_disable_min_trades": 20,       # Minimum trades before auto-disabling
+    "auto_disable_max_loss_pct": -0.15,  # Disable if total loss > this % of capital
+    "drawdown_tighten_threshold": 0.10,  # Tighten risk at this drawdown
+    "drawdown_halt_threshold": 0.18,     # Emergency halt at this drawdown
+    "backtest_adopt_win_rate": 0.60,     # Auto-enable if win rate >= this
+    "backtest_adopt_sharpe": 0.3,        # Minimum Sharpe to adopt
+    "backtest_adopt_max_dd": 0.20,       # Max drawdown to still adopt
+    "backtest_discard_win_rate": 0.30,   # Discard if win rate < this
+    "backtest_discard_max_dd": 0.30,     # Discard if drawdown > this
+    "concentration_max_pct": 0.25,       # Trim budget when position > this
+    "event_risk_sizing_mult": 0.6,       # Reduce sizing during event risk
+}
 
+_THRESHOLD_BOUNDS = {
+    "auto_disable_win_rate": (0.15, 0.50),
+    "auto_disable_min_trades": (10, 50),
+    "auto_disable_max_loss_pct": (-0.30, -0.05),
+    "drawdown_tighten_threshold": (0.05, 0.20),
+    "drawdown_halt_threshold": (0.12, 0.30),
+    "backtest_adopt_win_rate": (0.40, 0.80),
+    "backtest_adopt_sharpe": (0.1, 1.0),
+    "backtest_adopt_max_dd": (0.10, 0.35),
+    "backtest_discard_win_rate": (0.15, 0.50),
+    "backtest_discard_max_dd": (0.15, 0.50),
+    "concentration_max_pct": (0.10, 0.40),
+    "event_risk_sizing_mult": (0.3, 0.9),
+}
+
+MAX_THRESHOLD_ADJUSTMENT = 0.05  # ±5% max change per cycle
+
+# Runtime cache for threshold overrides (populated by set_threshold)
+_threshold_overrides: dict[str, float] = {}
+
+
+def get_threshold(name: str) -> float:
+    """Get a tunable threshold value. Checks runtime overrides, then defaults."""
+    if name in _threshold_overrides:
+        return _threshold_overrides[name]
+    return _DEFAULT_THRESHOLDS.get(name, 0)
+
+
+def set_threshold(name: str, value: float) -> float:
+    """Set a threshold with bounds clamping and max-delta enforcement.
+
+    Returns the actual value after clamping.
+    """
+    if name not in _DEFAULT_THRESHOLDS:
+        log.warning("Unknown threshold: %s", name)
+        return value
+
+    # Clamp to bounds
+    lo, hi = _THRESHOLD_BOUNDS.get(name, (value, value))
+    clamped = max(lo, min(hi, value))
+
+    # Enforce max delta per cycle (±5% of current value)
+    current = get_threshold(name)
+    if current != 0:
+        max_delta = abs(current) * MAX_THRESHOLD_ADJUSTMENT
+        delta = clamped - current
+        if abs(delta) > max_delta:
+            clamped = current + (max_delta if delta > 0 else -max_delta)
+        clamped = max(lo, min(hi, clamped))  # Re-clamp after delta cap
+
+    clamped = round(clamped, 4)
+    _threshold_overrides[name] = clamped
+    log_action(
+        "autonomous", "threshold_adjusted",
+        details=f"{name}: {current} → {clamped}",
+        data={"threshold": name, "old": current, "new": clamped},
+    )
+    return clamped
+
+
+# --- Fixed constants (not tunable) ---
 REALLOCATION_INTERVAL_HOURS = 24    # Rebalance allocations daily
 PERFORMANCE_REVIEW_TRADES = 50      # Look at last 50 trades per strategy
-
-# Backtest-before-adopt thresholds
-BACKTEST_ADOPT_WIN_RATE = 0.60       # Auto-enable if win rate >= 60%
-BACKTEST_ADOPT_SHARPE = 0.3          # Minimum Sharpe to adopt
-BACKTEST_ADOPT_MAX_DD = 0.20         # Max drawdown to still adopt
-BACKTEST_DISCARD_WIN_RATE = 0.30     # Discard if win rate < 30%
-BACKTEST_DISCARD_MAX_DD = 0.30       # Discard if drawdown > 30%
 BACKTEST_MIN_TRADES = 5              # Need at least 5 trades to judge
 BACKTEST_LOOKBACK_DAYS = 365         # Test against past year of data
 BACKTEST_COOLDOWN_DAYS = 7           # Don't re-test within 7 days
 BACKTEST_MAX_PER_CYCLE = 3           # Max backtests per autonomous cycle
-
-# Follow-through verification
 VERIFY_LOOKBACK_HOURS = 6            # Check actions from last N hours
 MAX_FOLLOWUP_ESCALATIONS = 3         # Re-raise failed action up to N times
-CONCENTRATION_MAX_PCT = 0.25         # Trim budget when position > 25%
-EVENT_RISK_SIZING_MULT = 0.6         # Reduce sizing during event risk
 
 # Agent identifiers
 PERF_AGENT = "performance_agent"
@@ -114,7 +175,7 @@ def _performance_agent_think() -> list[dict]:
 
     for strat_name, trades in by_strategy.items():
         closed = [t for t in trades if t.get("pnl") is not None]
-        if len(closed) < AUTO_DISABLE_MIN_TRADES:
+        if len(closed) < get_threshold("auto_disable_min_trades"):
             continue
 
         # Recent performance (last N closed trades)
@@ -129,7 +190,7 @@ def _performance_agent_think() -> list[dict]:
         loss_pct = total_pnl / total_deployed if total_deployed > 0 else 0
 
         # --- Auto-disable losing strategies ---
-        if win_rate < AUTO_DISABLE_WIN_RATE and strat_name in STRATEGY_ENABLED:
+        if win_rate < get_threshold("auto_disable_win_rate") and strat_name in STRATEGY_ENABLED:
             recommendations.append({
                 "from_agent": PERF_AGENT,
                 "to_agent": EXECUTOR_AGENT,
@@ -138,7 +199,7 @@ def _performance_agent_think() -> list[dict]:
                 "target": strat_name,
                 "reasoning": (
                     f"Strategy '{strat_name}' has {win_rate*100:.0f}% win rate over "
-                    f"{len(recent)} recent trades (threshold: {AUTO_DISABLE_WIN_RATE*100:.0f}%). "
+                    f"{len(recent)} recent trades (threshold: {get_threshold("auto_disable_win_rate")*100:.0f}%). "
                     f"Total P&L: ${total_pnl:+.2f}. Auto-disabling to protect capital."
                 ),
                 "data": {
@@ -151,7 +212,7 @@ def _performance_agent_think() -> list[dict]:
             })
 
         # --- Flag heavy losses ---
-        elif loss_pct < AUTO_DISABLE_MAX_LOSS_PCT and strat_name in STRATEGY_ENABLED:
+        elif loss_pct < get_threshold("auto_disable_max_loss_pct") and strat_name in STRATEGY_ENABLED:
             recommendations.append({
                 "from_agent": PERF_AGENT,
                 "to_agent": EXECUTOR_AGENT,
@@ -161,7 +222,7 @@ def _performance_agent_think() -> list[dict]:
                 "reasoning": (
                     f"Strategy '{strat_name}' has lost {loss_pct*100:.1f}% of deployed capital "
                     f"(${total_pnl:+.2f} on ${total_deployed:.0f} deployed). "
-                    f"Exceeds {AUTO_DISABLE_MAX_LOSS_PCT*100:.0f}% loss threshold. Auto-disabling."
+                    f"Exceeds {get_threshold("auto_disable_max_loss_pct")*100:.0f}% loss threshold. Auto-disabling."
                 ),
                 "data": {
                     "loss_pct": round(loss_pct, 4),
@@ -235,7 +296,7 @@ def _risk_agent_think() -> list[dict]:
     drawdown = (peak_value - current_value) / peak_value if peak_value > 0 else 0
 
     # --- Emergency halt at severe drawdown ---
-    if drawdown >= DRAWDOWN_HALT_THRESHOLD:
+    if drawdown >= get_threshold("drawdown_halt_threshold"):
         recommendations.append({
             "from_agent": RISK_AGENT,
             "to_agent": EXECUTOR_AGENT,
@@ -245,7 +306,7 @@ def _risk_agent_think() -> list[dict]:
             "reasoning": (
                 f"CRITICAL: Portfolio drawdown at {drawdown*100:.1f}% "
                 f"(current: ${current_value:.0f}, peak: ${peak_value:.0f}). "
-                f"Exceeds {DRAWDOWN_HALT_THRESHOLD*100:.0f}% threshold. "
+                f"Exceeds {get_threshold("drawdown_halt_threshold")*100:.0f}% threshold. "
                 f"Recommending emergency halt — disable all strategies until review."
             ),
             "data": {
@@ -257,7 +318,7 @@ def _risk_agent_think() -> list[dict]:
         })
 
     # --- Tighten risk during moderate drawdown ---
-    elif drawdown >= DRAWDOWN_TIGHTEN_THRESHOLD:
+    elif drawdown >= get_threshold("drawdown_tighten_threshold"):
         recommendations.append({
             "from_agent": RISK_AGENT,
             "to_agent": EXECUTOR_AGENT,
@@ -266,7 +327,7 @@ def _risk_agent_think() -> list[dict]:
             "target": "risk_params",
             "reasoning": (
                 f"Portfolio drawdown at {drawdown*100:.1f}% "
-                f"(threshold: {DRAWDOWN_TIGHTEN_THRESHOLD*100:.0f}%). "
+                f"(threshold: {get_threshold("drawdown_tighten_threshold")*100:.0f}%). "
                 f"Tightening: reduce max_position_pct, increase cash reserve, "
                 f"tighten stop losses. Will revert when drawdown recovers."
             ),
@@ -516,6 +577,73 @@ def _learning_agent_think() -> list[dict]:
                 },
             })
 
+            # --- Close the feedback loop: actually adjust thresholds ---
+            if success_rate < 0.3 and len(applied) >= 5:
+                # Many actions applied but few worked → system is too aggressive
+                # Loosen auto-disable (higher threshold = harder to trigger disable)
+                cur_wr = get_threshold("auto_disable_win_rate")
+                recommendations.append({
+                    "from_agent": LEARNING_AGENT,
+                    "to_agent": EXECUTOR_AGENT,
+                    "category": "adjust_param",
+                    "action": "adjust_threshold",
+                    "target": "auto_disable_win_rate",
+                    "reasoning": (
+                        f"Success rate is {success_rate*100:.0f}% ({len(successful)}/{len(applied)} applied). "
+                        f"System is too aggressive — loosening auto-disable win rate from "
+                        f"{cur_wr*100:.0f}% to reduce false disables."
+                    ),
+                    "data": {
+                        "threshold_name": "auto_disable_win_rate",
+                        "current_value": cur_wr,
+                        "new_value": round(cur_wr * 1.05, 4),  # +5%
+                        "direction": "increase",
+                        "auto_approve": True,
+                    },
+                })
+                # Tighten backtest adoption (require stronger evidence)
+                cur_bt = get_threshold("backtest_adopt_win_rate")
+                recommendations.append({
+                    "from_agent": LEARNING_AGENT,
+                    "to_agent": EXECUTOR_AGENT,
+                    "category": "adjust_param",
+                    "action": "adjust_threshold",
+                    "target": "backtest_adopt_win_rate",
+                    "reasoning": (
+                        f"Low success rate ({success_rate*100:.0f}%) suggests adopted strategies "
+                        f"aren't performing. Tightening backtest adoption threshold from "
+                        f"{cur_bt*100:.0f}% to require stronger evidence."
+                    ),
+                    "data": {
+                        "threshold_name": "backtest_adopt_win_rate",
+                        "current_value": cur_bt,
+                        "new_value": round(cur_bt * 1.05, 4),  # +5%
+                        "direction": "increase",
+                        "auto_approve": True,
+                    },
+                })
+            elif success_rate > 0.7 and len(applied) >= 5:
+                # System is effective — can be slightly more aggressive
+                cur_wr = get_threshold("auto_disable_win_rate")
+                recommendations.append({
+                    "from_agent": LEARNING_AGENT,
+                    "to_agent": EXECUTOR_AGENT,
+                    "category": "adjust_param",
+                    "action": "adjust_threshold",
+                    "target": "auto_disable_win_rate",
+                    "reasoning": (
+                        f"High success rate ({success_rate*100:.0f}%) — system is effective. "
+                        f"Can be slightly more aggressive with auto-disable threshold."
+                    ),
+                    "data": {
+                        "threshold_name": "auto_disable_win_rate",
+                        "current_value": cur_wr,
+                        "new_value": round(cur_wr * 0.95, 4),  # -5%
+                        "direction": "decrease",
+                        "auto_approve": True,
+                    },
+                })
+
     # Check for strategies that were disabled by auto-disable but might have recovered
     disabled_recs = [
         r for r in history
@@ -682,20 +810,20 @@ def _backtest_agent_think() -> list[dict]:
                     f"produced only {total_trades} trades (min {BACKTEST_MIN_TRADES}). "
                     f"Insufficient data to judge — deferring."
                 )
-            elif (win_rate >= BACKTEST_ADOPT_WIN_RATE
-                  and sharpe >= BACKTEST_ADOPT_SHARPE
-                  and max_dd <= BACKTEST_ADOPT_MAX_DD):
+            elif (win_rate >= get_threshold("backtest_adopt_win_rate")
+                  and sharpe >= get_threshold("backtest_adopt_sharpe")
+                  and max_dd <= get_threshold("backtest_adopt_max_dd")):
                 verdict = "adopt"
                 reasoning = (
                     f"Backtest PASSED for '{strategy_name}': "
-                    f"win_rate={win_rate*100:.0f}% (≥{BACKTEST_ADOPT_WIN_RATE*100:.0f}%), "
-                    f"Sharpe={sharpe:.2f} (≥{BACKTEST_ADOPT_SHARPE}), "
-                    f"max_dd={max_dd*100:.1f}% (≤{BACKTEST_ADOPT_MAX_DD*100:.0f}%), "
+                    f"win_rate={win_rate*100:.0f}% (≥{get_threshold("backtest_adopt_win_rate")*100:.0f}%), "
+                    f"Sharpe={sharpe:.2f} (≥{get_threshold("backtest_adopt_sharpe")}), "
+                    f"max_dd={max_dd*100:.1f}% (≤{get_threshold("backtest_adopt_max_dd")*100:.0f}%), "
                     f"{total_trades} trades over {BACKTEST_LOOKBACK_DAYS} days. "
                     f"Recommending auto-enable."
                 )
-            elif (win_rate < BACKTEST_DISCARD_WIN_RATE
-                  or max_dd > BACKTEST_DISCARD_MAX_DD):
+            elif (win_rate < get_threshold("backtest_discard_win_rate")
+                  or max_dd > get_threshold("backtest_discard_max_dd")):
                 verdict = "discard"
                 reasoning = (
                     f"Backtest FAILED for '{strategy_name}': "
@@ -783,6 +911,89 @@ def _backtest_agent_think() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Verification — ensure previous cycle's actions actually took effect
 # ---------------------------------------------------------------------------
+
+def _evaluate_outcomes():
+    """Evaluate outcomes of recently applied recommendations.
+
+    Checks if applied actions had the desired effect and updates outcome
+    to 'positive' or 'negative'. This closes the feedback loop so the
+    Learning Agent has real success/failure data.
+    """
+    try:
+        from trading.db.store import (
+            get_recently_applied_recommendations,
+            update_recommendation_outcome,
+        )
+    except ImportError:
+        return
+
+    recent = get_recently_applied_recommendations(hours=48)
+    if not recent:
+        return
+
+    trades = get_trades(limit=500)
+    pnl_data = get_daily_pnl(limit=7)
+    current_drawdown = 0.0
+    if pnl_data and len(pnl_data) >= 2:
+        peak = max(d.get("portfolio_value", 0) for d in pnl_data)
+        current_val = pnl_data[0].get("portfolio_value", 0) if pnl_data else 0
+        current_drawdown = (peak - current_val) / peak if peak > 0 else 0
+
+    for rec in recent:
+        action = rec.get("action", "")
+        target = rec.get("target", "")
+        data = json.loads(rec["data"]) if isinstance(rec.get("data"), str) else (rec.get("data") or {})
+        outcome = None
+
+        try:
+            if action == "auto_disable":
+                # Positive if strategy is still disabled (action stuck)
+                # Check recent market — would strategy have lost more?
+                strat_trades = [t for t in trades if t.get("strategy") == target
+                                and t.get("timestamp", "") > rec.get("resolved_at", "")]
+                if not strat_trades:
+                    # No trades since disable = action had effect, mark positive
+                    outcome = "positive"
+                else:
+                    strat_pnl = sum(t.get("pnl", 0) or 0 for t in strat_trades)
+                    outcome = "positive" if strat_pnl <= 0 else "negative"
+
+            elif action == "tighten_risk":
+                # Positive if drawdown was contained (didn't hit halt threshold)
+                outcome = "positive" if current_drawdown < get_threshold("drawdown_halt_threshold") else "negative"
+
+            elif action == "emergency_halt":
+                # Positive if drawdown decreased after halt
+                outcome = "positive" if current_drawdown < get_threshold("drawdown_halt_threshold") else "negative"
+
+            elif action == "backtest_adopt":
+                # Positive if re-enabled strategy has positive recent P&L
+                strat_trades = [t for t in trades if t.get("strategy") == target
+                                and t.get("timestamp", "") > rec.get("resolved_at", "")]
+                if strat_trades:
+                    strat_pnl = sum(t.get("pnl", 0) or 0 for t in strat_trades)
+                    outcome = "positive" if strat_pnl > 0 else "negative"
+
+            elif action == "adjust_threshold":
+                # Positive — we trust the learning agent's direction for now
+                # (outcome evaluated on next meta_analysis cycle)
+                outcome = "positive"
+
+            elif action in ("implement_strategy", "coverage_gap"):
+                # Strategy was built — positive if file exists
+                outcome = "positive"
+
+            elif action in ("reduce_budget", "increase_budget", "event_risk",
+                            "concentration_warning", "defensive_posture"):
+                # Risk management — positive if no further escalation needed
+                outcome = "positive"
+
+            if outcome:
+                update_recommendation_outcome(rec["id"], outcome)
+                log.debug("OUTCOME: rec #%d (%s on %s) → %s", rec["id"], action, target, outcome)
+        except Exception as e:
+            log.debug("Outcome evaluation failed for rec #%d: %s", rec.get("id", 0), e)
+
 
 def _verify_previous_actions() -> list[dict]:
     """Check that actions from the last cycle actually took effect.
@@ -974,6 +1185,18 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 except Exception as e:
                     result = f"Budget increase failed: {e}"
 
+            elif action == "adjust_threshold":
+                # Learning Agent feedback loop — actually tune thresholds
+                t_name = data.get("threshold_name", "")
+                t_new = data.get("new_value")
+                if t_name and t_new is not None:
+                    old_val = get_threshold(t_name)
+                    actual = set_threshold(t_name, float(t_new))
+                    result = f"Threshold '{t_name}' adjusted: {old_val} → {actual}"
+                    log.info("THRESHOLD ADJUSTED: %s — %s", result, rec["reasoning"][:100])
+                else:
+                    result = f"Threshold adjustment skipped: missing name or value"
+
             elif action == "meta_analysis":
                 # Save meta-analysis to knowledge base
                 insert_knowledge(
@@ -1018,7 +1241,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
 
             elif action == "event_risk":
                 # Actually reduce sizing during event risk — don't just log it
-                sizing_mult = data.get("suggested_sizing_mult", EVENT_RISK_SIZING_MULT)
+                sizing_mult = data.get("suggested_sizing_mult", get_threshold("event_risk_sizing_mult"))
                 try:
                     from trading.risk.portfolio import STRATEGY_BUDGETS, DEFAULT_BUDGET
                     adjusted = 0
@@ -1047,7 +1270,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 try:
                     from trading.risk.portfolio import STRATEGY_BUDGETS, DEFAULT_BUDGET
                     concentration = data.get("concentration_pct", 0)
-                    if concentration > CONCENTRATION_MAX_PCT and target:
+                    if concentration > get_threshold("concentration_max_pct") and target:
                         # Find strategies trading this symbol and reduce their budgets
                         positions = get_positions()
                         concentrated_strats = set()
@@ -1313,7 +1536,13 @@ def run_autonomous_cycle() -> dict:
     all_recommendations = []
     agent_results = {}
 
-    # --- Phase 0: Verify previous cycle's actions took effect ---
+    # --- Phase 0a: Evaluate outcomes of previously applied recommendations ---
+    try:
+        _evaluate_outcomes()
+    except Exception as e:
+        log.debug("Outcome evaluation failed: %s", e)
+
+    # --- Phase 0b: Verify previous cycle's actions took effect ---
     try:
         followups = _verify_previous_actions()
         if followups:

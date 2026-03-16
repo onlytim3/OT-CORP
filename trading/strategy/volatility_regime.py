@@ -256,10 +256,10 @@ class VolatilityRegimeStrategy(Strategy):
                 directional_action = _get_directional_confirmation(coin)
                 if action != "hold" and directional_action is not None:
                     if action != directional_action:
-                        # Vol signal and direction disagree — hold
+                        # Vol signal and direction disagree — hold with low confidence
                         reason += f" [HELD: vol says {action} but direction says {directional_action}]"
                         action = "hold"
-                        strength = 0.0
+                        strength = 0.1  # Nonzero: signal exists but conflicting
 
                 signals.append(Signal(
                     strategy=self.name,

@@ -684,6 +684,28 @@ def resolve_recommendation(rec_id: int, resolution: str, outcome: str = None):
         )
 
 
+def update_recommendation_outcome(rec_id: int, outcome: str):
+    """Update a recommendation's outcome after observing results (positive/negative)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE agent_recommendations SET outcome=? WHERE id=?",
+            (outcome, rec_id),
+        )
+
+
+def get_recently_applied_recommendations(hours: int = 48) -> list:
+    """Get recommendations applied in the last N hours for outcome evaluation."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM agent_recommendations WHERE status='resolved' "
+            "AND resolution='applied' AND resolved_at >= ? AND outcome IS NULL "
+            "ORDER BY resolved_at DESC",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_recommendation_history(limit: int = 50) -> list:
     """Get recent recommendation history for learning."""
     with get_db() as conn:

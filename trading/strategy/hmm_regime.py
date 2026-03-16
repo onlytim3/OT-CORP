@@ -232,12 +232,12 @@ class HMMRegimeStrategy(Strategy):
                         data={"regime": regime_label, "regime_prob": regime_prob, "coin": coin_id},
                     ))
                 else:
-                    # sideways or unknown
+                    # sideways or unknown — use scaled probability as strength
                     signals.append(Signal(
                         strategy=self.name,
                         symbol=alpaca_symbol,
                         action="hold",
-                        strength=0.0,
+                        strength=round(regime_prob * 0.3, 3),  # 80% prob → 24% strength
                         reason=f"{coin_id} HMM sideways regime (prob {regime_prob:.0%})",
                         data={"regime": regime_label, "regime_prob": regime_prob, "coin": coin_id},
                     ))

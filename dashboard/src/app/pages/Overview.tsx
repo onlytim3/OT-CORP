@@ -16,7 +16,16 @@ export function Overview() {
   const positions = status?.positions || [];
   const summary = status?.summary;
   const mode = status?.mode || 'paper';
-  const totalPnl = positions.reduce((sum, p) => sum + (p.unrealized_pnl || 0), 0);
+  const positionPnl = positions.reduce((sum, p) => sum + (p.unrealized_pnl || 0), 0);
+  const pnlSnapshot = (status as Record<string, unknown>)?.pnl_snapshot as { portfolio_value?: number; daily_return?: number; cumulative_return?: number } | undefined;
+  // Use position P&L if available, otherwise fall back to daily_pnl cumulative return
+  const totalPnl = positionPnl !== 0 ? positionPnl
+    : pnlSnapshot?.cumulative_return && account?.portfolio_value
+      ? pnlSnapshot.cumulative_return * account.portfolio_value
+      : 0;
+  const pnlPct = positionPnl !== 0
+    ? (account?.portfolio_value ? (positionPnl / account.portfolio_value) * 100 : 0)
+    : (pnlSnapshot?.cumulative_return ? pnlSnapshot.cumulative_return * 100 : 0);
   const isMock = isUsingMockData();
 
   if (loading && !status) {
@@ -67,7 +76,7 @@ export function Overview() {
         <MetricCard
           title="Unrealized P&L"
           value={`${totalPnl >= 0 ? '+' : ''}$${totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          change={account?.portfolio_value ? Number(((totalPnl / account.portfolio_value) * 100).toFixed(2)) : undefined}
+          change={pnlPct !== 0 ? Number(pnlPct.toFixed(2)) : undefined}
           icon={totalPnl >= 0 ? TrendingUp : TrendingDown}
           iconColor={totalPnl >= 0 ? "text-[#00d4aa]" : "text-[#ff4466]"}
         />
