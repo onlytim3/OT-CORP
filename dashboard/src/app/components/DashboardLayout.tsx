@@ -105,9 +105,9 @@ export function DashboardLayout() {
   ];
 
   return (
-    <div className="flex flex-col h-screen bg-black">
+    <div className="flex flex-col h-screen">
       {/* Top Header */}
-      <header className="h-16 bg-black border-b border-white/8 flex items-center justify-between px-6">
+      <header className="h-16 bg-white/[0.03] backdrop-blur-2xl border-b border-white/[0.06] flex items-center justify-between px-6 sticky top-0 z-40">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-lg bg-[#4a9eff] border border-[#4a9eff]/50">
             <Activity className="size-6 text-black" />
@@ -142,7 +142,7 @@ export function DashboardLayout() {
 
             {/* Profile Dropdown */}
             {showProfileMenu && (
-              <div className="absolute right-0 top-12 z-[60] w-56 bg-[#0a0a0a] border border-white/10 rounded-lg shadow-2xl overflow-hidden">
+              <div className="absolute right-0 top-12 z-[60] w-56 bg-[#0a0a0a]/90 backdrop-blur-2xl border border-white/[0.1] rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
                 <div className="p-2 border-b border-white/5">
                   <p className="text-[10px] text-[#888888] uppercase tracking-wider px-2">Trading Mentality</p>
                 </div>
@@ -190,7 +190,7 @@ export function DashboardLayout() {
           </button>
 
           {/* System Status */}
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/30">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/20 backdrop-blur-sm">
             <div className="size-2 rounded-full bg-[#00d4aa] animate-pulse" />
             <span className="text-xs text-[#00d4aa] font-medium tracking-wider">ONLINE</span>
           </div>
@@ -200,7 +200,7 @@ export function DashboardLayout() {
       {/* Live Mode Confirmation Modal */}
       {showModeConfirm && (
         <div className="fixed inset-0 z-[100] flex max-sm:items-end sm:items-center justify-center bg-black/80">
-          <div className="bg-[#0a0a0a] border border-[#ff4466]/30 max-sm:rounded-t-2xl max-sm:rounded-b-none sm:rounded-lg p-5 sm:p-6 max-w-md w-full sm:mx-4">
+          <div className="bg-[#0a0a0a]/90 backdrop-blur-2xl border border-[#ff4466]/20 max-sm:rounded-t-2xl max-sm:rounded-b-none sm:rounded-xl p-5 sm:p-6 max-w-md w-full sm:mx-4 shadow-2xl shadow-black/50">
             <div className="flex items-center gap-3 mb-4">
               <div className="p-2 rounded-lg bg-[#ff4466]/15 border border-[#ff4466]/30">
                 <AlertTriangle className="size-5 sm:size-6 text-[#ff4466]" />
@@ -233,7 +233,7 @@ export function DashboardLayout() {
       {/* Greedy Profile Confirmation Modal */}
       {showGreedyConfirm && (
         <div className="fixed inset-0 z-[100] flex max-sm:items-end sm:items-center justify-center bg-black/80">
-          <div className="bg-[#0a0a0a] border border-[#ff4466]/30 max-sm:rounded-t-2xl max-sm:rounded-b-none sm:rounded-lg p-5 sm:p-6 max-w-md w-full sm:mx-4">
+          <div className="bg-[#0a0a0a]/90 backdrop-blur-2xl border border-[#ff4466]/20 max-sm:rounded-t-2xl max-sm:rounded-b-none sm:rounded-xl p-5 sm:p-6 max-w-md w-full sm:mx-4 shadow-2xl shadow-black/50">
             <div className="flex items-center gap-3 mb-4">
               <div className="p-2 rounded-lg bg-[#ff4466]/15 border border-[#ff4466]/30">
                 <Zap className="size-5 sm:size-6 text-[#ff4466]" />
@@ -274,10 +274,10 @@ export function DashboardLayout() {
       <button
         onClick={() => setChatOpen(!chatOpen)}
         className={cn(
-          "fixed bottom-24 right-4 z-50 p-4 rounded-full transition-all duration-300",
+          "fixed bottom-24 right-4 z-50 p-4 rounded-full transition-all duration-300 shadow-lg",
           chatOpen
-            ? "bg-[#ff4466] scale-90"
-            : "bg-[#4a9eff] hover:bg-[#4a9eff]/80"
+            ? "bg-[#ff4466] scale-90 shadow-[#ff4466]/20"
+            : "bg-[#4a9eff] hover:bg-[#4a9eff]/80 shadow-[#4a9eff]/20"
         )}
       >
         <MessageSquare className="size-6 text-white" />
@@ -287,7 +287,7 @@ export function DashboardLayout() {
       <ChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 h-20 bg-black border-t border-white/8 z-50">
+      <nav className="fixed bottom-0 left-0 right-0 h-20 bg-black/60 backdrop-blur-2xl border-t border-white/[0.06] z-50">
         <div className="h-full flex items-center justify-around px-4 max-w-2xl mx-auto">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;

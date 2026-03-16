@@ -21,6 +21,18 @@ function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
   );
 }
 
+/** Smart qty formatting — avoids floating point display garbage */
+function formatQty(qty: number): string {
+  if (qty === 0) return '0';
+  const abs = Math.abs(qty);
+  // Large quantities: no decimals
+  if (abs >= 100) return qty.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  // Medium quantities: up to 4 decimals
+  if (abs >= 1) return qty.toLocaleString('en-US', { maximumFractionDigits: 4 });
+  // Small quantities: up to 6 significant digits
+  return Number(qty.toPrecision(6)).toString();
+}
+
 export function Trading() {
   const { data: status } = usePolling<StatusResponse>(api.status, 10000);
   const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
@@ -59,7 +71,7 @@ export function Trading() {
                 <div className="grid grid-cols-2 gap-3 text-sm mb-4">
                   <div>
                     <p className="text-[#888888]">Qty</p>
-                    <p className="text-[#e8e8e8] font-medium">{pos.qty}</p>
+                    <p className="text-[#e8e8e8] font-medium">{formatQty(pos.qty)}</p>
                   </div>
                   <div>
                     <p className="text-[#888888]">Current</p>
@@ -158,7 +170,7 @@ export function Trading() {
                       <td className="py-3 px-4 text-center">
                         <Badge variant={t.side === 'buy' ? 'default' : 'destructive'}>{t.side.toUpperCase()}</Badge>
                       </td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{t.qty}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(t.qty)}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="py-3 px-4 text-[#888888] text-sm">{t.strategy}</td>
@@ -191,7 +203,7 @@ export function Trading() {
             <div className="grid grid-cols-2 gap-2 sm:gap-4 mt-2 sm:mt-4">
               {[
                 ['Strategy', selectedTrade.strategy],
-                ['Quantity', selectedTrade.qty],
+                ['Quantity', formatQty(selectedTrade.qty)],
                 ['Price', `$${selectedTrade.price.toFixed(2)}`],
                 ['Total', `$${selectedTrade.total.toFixed(2)}`],
                 ['P&L', selectedTrade.pnl !== null ? `${selectedTrade.pnl >= 0 ? '+' : ''}$${selectedTrade.pnl.toFixed(2)}` : 'Open'],

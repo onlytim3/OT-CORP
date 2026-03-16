@@ -1,6 +1,76 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { MessageSquare, Send, X, AlertCircle, CheckCircle2 } from "lucide-react";
 import { api, fetchAPI, type ChatMessage } from "../config/api";
+
+/** Renders simple markdown: **bold**, *italic*, `code`, - lists, newlines */
+function MarkdownText({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <div className="space-y-1">
+      {lines.map((line, i) => {
+        // List items
+        const isList = /^[-•*]\s+/.test(line);
+        const cleanLine = isList ? line.replace(/^[-•*]\s+/, '') : line;
+
+        const parts = formatInline(cleanLine);
+
+        if (isList) {
+          return <div key={i} className="flex gap-2 pl-1"><span className="text-[#4a9eff] shrink-0">•</span><span>{parts}</span></div>;
+        }
+        if (line.trim() === '') {
+          return <div key={i} className="h-1" />;
+        }
+        return <div key={i}>{parts}</div>;
+      })}
+    </div>
+  );
+}
+
+function formatInline(text: string): ReactNode {
+  const tokens: ReactNode[] = [];
+  let remaining = text;
+  let key = 0;
+
+  while (remaining.length > 0) {
+    // Code: `text`
+    const codeMatch = remaining.match(/^(.*?)`(.+?)`/s);
+    // Bold: **text**
+    const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/s);
+    // Italic: *text* (single)
+    const italicMatch = remaining.match(/^(.*?)(?<!\*)\*([^*]+?)\*(?!\*)/s);
+
+    // Find earliest match
+    const codeIdx = codeMatch ? codeMatch[1].length : Infinity;
+    const boldIdx = boldMatch ? boldMatch[1].length : Infinity;
+    const italicIdx = italicMatch ? italicMatch[1].length : Infinity;
+
+    const minIdx = Math.min(codeIdx, boldIdx, italicIdx);
+
+    if (minIdx === Infinity) {
+      // No more matches
+      tokens.push(<span key={key++}>{remaining}</span>);
+      break;
+    }
+
+    if (boldIdx <= minIdx && boldMatch) {
+      if (boldMatch[1]) tokens.push(<span key={key++}>{boldMatch[1]}</span>);
+      tokens.push(<strong key={key++} className="text-[#e8e8e8] font-semibold">{boldMatch[2]}</strong>);
+      remaining = remaining.slice(boldMatch[0].length);
+    } else if (codeIdx <= minIdx && codeMatch) {
+      if (codeMatch[1]) tokens.push(<span key={key++}>{codeMatch[1]}</span>);
+      tokens.push(<code key={key++} className="bg-white/10 px-1.5 py-0.5 rounded text-[#4a9eff] text-xs">{codeMatch[2]}</code>);
+      remaining = remaining.slice(codeMatch[0].length);
+    } else if (italicMatch) {
+      if (italicMatch[1]) tokens.push(<span key={key++}>{italicMatch[1]}</span>);
+      tokens.push(<em key={key++} className="text-[#c0c0c0] italic">{italicMatch[2]}</em>);
+      remaining = remaining.slice(italicMatch[0].length);
+    } else {
+      tokens.push(<span key={key++}>{remaining}</span>);
+      break;
+    }
+  }
+  return <>{tokens}</>;
+}
 
 export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -66,9 +136,9 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
   if (!isOpen) return null;
 
   return (
-    <div className="fixed bottom-24 right-4 w-96 max-h-[70vh] flex flex-col bg-black border border-white/8 rounded-lg z-50 overflow-hidden">
+    <div className="fixed bottom-24 right-4 w-96 max-h-[70vh] flex flex-col bg-black/70 backdrop-blur-2xl border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/8 bg-[#0a0a0a]">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-white/[0.03]">
         <div className="flex items-center gap-2">
           <MessageSquare className="size-5 text-[#4a9eff]" />
           <span className="font-semibold text-[#e8e8e8]">Trading Assistant</span>
@@ -87,7 +157,11 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
                 ? 'bg-[#4a9eff] text-white rounded-br-md'
                 : 'bg-white/5 text-[#e8e8e8] border border-white/10 rounded-bl-md'
             }`}>
-              <p className="whitespace-pre-wrap">{msg.content}</p>
+              {msg.role === 'assistant' ? (
+                <MarkdownText text={msg.content} />
+              ) : (
+                <p className="whitespace-pre-wrap">{msg.content}</p>
+              )}
               {msg.confirmation_required && msg.action_id && (
                 <div className="flex gap-2 mt-3">
                   <button
@@ -123,7 +197,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
       </div>
 
       {/* Input */}
-      <div className="px-4 py-3 border-t border-white/8 bg-black">
+      <div className="px-4 py-3 border-t border-white/[0.06] bg-white/[0.02]">
         <div className="flex items-center gap-2">
           <input
             type="text"

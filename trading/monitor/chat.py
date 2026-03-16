@@ -23,8 +23,13 @@ from trading.db.store import (
 
 
 def handle_chat(message: str) -> str:
-    """Route a user question — always use LLM if available, regex as fallback."""
+    """Route a user question — always use LLM if available, conversational fallback otherwise."""
     msg = message.lower().strip()
+
+    # Handle greetings and casual messages without needing data or LLM
+    greeting_response = _handle_greeting(msg)
+    if greeting_response:
+        return greeting_response
 
     # Step 1: Gather relevant data based on intent (fast regex matching)
     structured_data = _gather_intent_data(msg, message)
@@ -34,11 +39,104 @@ def handle_chat(message: str) -> str:
     if llm_answer:
         return llm_answer
 
-    # Step 3: If LLM unavailable, fall back to raw formatted data
+    # Step 3: If LLM unavailable, return data with conversational framing
     if structured_data:
-        return structured_data
+        return _conversational_wrap(msg, structured_data)
+
+    # Step 4: Try a general portfolio summary for unrecognized questions
+    try:
+        portfolio_summary = _portfolio_answer()
+        if portfolio_summary:
+            return (
+                f"I'm not sure exactly what you're asking about, but here's a quick overview of your system:\n\n"
+                f"{portfolio_summary}\n\n"
+                f"*Try asking about specific topics — positions, strategies, trades, risk, signals, P&L, or type \"help\" for the full list.*"
+            )
+    except Exception:
+        pass
 
     return _help_answer()
+
+
+def _handle_greeting(msg: str) -> str | None:
+    """Handle greetings and casual messages conversationally, no LLM needed."""
+    greetings = ["hello", "hi", "hey", "yo", "sup", "what's up", "whats up",
+                 "good morning", "good evening", "good afternoon", "howdy", "greetings"]
+    thanks = ["thank", "thanks", "thx", "cheers", "appreciate"]
+    goodbyes = ["bye", "goodbye", "see ya", "later", "good night", "gn"]
+
+    if any(msg.startswith(g) or msg == g for g in greetings):
+        # Gather a quick status snapshot
+        try:
+            from trading.execution.router import get_account, get_positions_from_aster
+            acct = get_account()
+            positions = get_positions_from_aster()
+            pv = acct.get("portfolio_value", 0) if acct else 0
+            n_pos = len(positions) if positions else 0
+            mode = "paper" if (acct or {}).get("paper", True) else "live"
+
+            total_pnl = sum(p.get("unrealized_pnl", 0) for p in (positions or []))
+            pnl_sign = "+" if total_pnl >= 0 else ""
+            pnl_emoji = "up" if total_pnl >= 0 else "down"
+
+            return (
+                f"Hey! Welcome to **OT-CORP Trading Command**.\n\n"
+                f"Here's your quick snapshot:\n"
+                f"- **Portfolio:** ${pv:,.2f} ({mode} mode)\n"
+                f"- **Open Positions:** {n_pos}\n"
+                f"- **Unrealized P&L:** {pnl_sign}${total_pnl:,.2f} ({pnl_emoji})\n\n"
+                f"What would you like to know? I can help with *positions, strategies, trades, risk, signals, P&L, market intelligence,* and more."
+            )
+        except Exception:
+            return (
+                "Hey! Welcome to **OT-CORP Trading Command**.\n\n"
+                "I'm your trading assistant. Ask me about:\n"
+                "- **Positions** & portfolio status\n"
+                "- **Strategies** & performance\n"
+                "- **Trades** & execution history\n"
+                "- **Risk** exposure & stops\n"
+                "- **Market intelligence** & signals\n\n"
+                "What would you like to know?"
+            )
+
+    if any(t in msg for t in thanks):
+        return "You're welcome! Let me know if you need anything else about your portfolio or trading system."
+
+    if any(g in msg for g in goodbyes):
+        return "See you later! Your trading system continues running autonomously. I'll be here when you need me."
+
+    return None
+
+
+def _conversational_wrap(msg: str, data: str) -> str:
+    """Wrap raw structured data in a conversational frame when LLM is unavailable."""
+    # Determine the topic for a natural intro
+    if any(w in msg for w in ["position", "holding"]):
+        intro = "Here's what I found about your positions:"
+    elif any(w in msg for w in ["portfolio", "account", "balance", "status", "how am i"]):
+        intro = "Here's your current portfolio status:"
+    elif any(w in msg for w in ["trade", "execution", "order", "bought", "sold"]):
+        intro = "Here's your recent trading activity:"
+    elif any(w in msg for w in ["strategy", "strat"]):
+        intro = "Here's the strategy breakdown:"
+    elif any(w in msg for w in ["pnl", "p&l", "profit", "loss", "return", "performance"]):
+        intro = "Here's your P&L summary:"
+    elif any(w in msg for w in ["signal"]):
+        intro = "Here are the current signals:"
+    elif any(w in msg for w in ["risk", "exposure", "drawdown"]):
+        intro = "Here's your risk overview:"
+    elif any(w in msg for w in ["leverage"]):
+        intro = "Here's the leverage information:"
+    elif any(w in msg for w in ["intelligence", "sentiment", "market"]):
+        intro = "Here's the latest market intelligence:"
+    elif any(w in msg for w in ["agent", "autonomous"]):
+        intro = "Here's what the autonomous agents are doing:"
+    elif any(w in msg for w in ["backtest"]):
+        intro = "Here are the backtest results:"
+    else:
+        intro = "Here's what I found:"
+
+    return f"{intro}\n\n{data}\n\n*Ask me anything else about your trading system, or type \"help\" for all available topics.*"
 
 
 def _gather_intent_data(msg: str, original: str) -> str:
@@ -132,7 +230,16 @@ def _llm_respond(message: str, structured_data: str) -> str | None:
     """Send message + gathered data to LLM for a conversational response."""
     try:
         from trading.llm.engine import ask_llm, TRADING_SYSTEM_PROMPT
-    except ImportError:
+    except ImportError as e:
+        log.debug("LLM engine not available: %s", e)
+        return None
+
+    # Check if any LLM provider is configured before doing expensive context gather
+    import os
+    has_claude = bool(os.getenv("ANTHROPIC_API_KEY", ""))
+    has_gemini = bool(os.getenv("GEMINI_API_KEY", ""))
+    if not has_claude and not has_gemini:
+        log.debug("No LLM API keys configured (ANTHROPIC_API_KEY or GEMINI_API_KEY)")
         return None
 
     # Also gather live system context
@@ -158,8 +265,9 @@ Instructions:
         result = ask_llm(TRADING_SYSTEM_PROMPT, prompt, tier="quality")
         if result and "LLM unavailable" not in result:
             return result
-    except Exception:
-        pass
+        log.warning("LLM returned unavailable response: %s", result[:100] if result else "None")
+    except Exception as e:
+        log.warning("LLM call failed: %s", e)
 
     return None
 

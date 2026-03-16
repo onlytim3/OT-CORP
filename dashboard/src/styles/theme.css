@@ -4,12 +4,12 @@
   --font-size: 16px;
 
   /* Solid Black Theme */
-  --background: #000000;
+  --background: #050510;
   --foreground: #e8e8e8;
 
-  --card: #0a0a0a;
+  --card: rgba(15, 15, 25, 0.6);
   --card-foreground: #e8e8e8;
-  --card-border: rgba(192, 192, 192, 0.15);
+  --card-border: rgba(255, 255, 255, 0.08);
 
   --popover: #0a0a0a;
   --popover-foreground: #e8e8e8;
@@ -111,8 +111,10 @@
   }
 
   body {
-    @apply bg-black text-foreground;
+    @apply text-foreground;
     font-family: 'JetBrains Mono', 'Share Tech Mono', 'SF Mono', 'Fira Code', monospace;
+    background: linear-gradient(135deg, #050510 0%, #0a0a1a 25%, #080818 50%, #0a0a1a 75%, #050510 100%);
+    min-height: 100vh;
   }
 
   html {
@@ -180,5 +182,54 @@
 
   table {
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Force Recharts transparent backgrounds */
+  .recharts-wrapper,
+  .recharts-surface,
+  .recharts-cartesian-grid,
+  .recharts-cartesian-grid-bg {
+    background: transparent !important;
+  }
+
+  .recharts-cartesian-grid-bg rect {
+    fill: transparent !important;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: rgba(15, 15, 25, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .glass-strong {
+    background: rgba(15, 15, 25, 0.8);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .glass-subtle {
+    background: rgba(15, 15, 25, 0.4);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .glass-hover:hover {
+    background: rgba(20, 20, 35, 0.7);
+    border-color: rgba(74, 158, 255, 0.15);
+    box-shadow: 0 0 20px rgba(74, 158, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  .glow-blue {
+    box-shadow: 0 0 15px rgba(74, 158, 255, 0.1), 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 15px rgba(0, 212, 170, 0.1), 0 4px 20px rgba(0, 0, 0, 0.3);
   }
 }

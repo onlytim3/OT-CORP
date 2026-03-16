@@ -267,12 +267,39 @@ def api_actions():
 @app.route("/api/trades")
 def api_trades():
     trades = get_trades(limit=50)
+
+    # Build a map of the most recent BUY price per symbol for P&L computation
+    buy_prices: dict[str, float] = {}
+    for t in reversed(trades):  # oldest first
+        if t.get("side") == "buy" and (t.get("price") or 0) > 0:
+            buy_prices[t["symbol"]] = t["price"]
+            # Also store without/with slash variant
+            sym = t["symbol"]
+            if "/" in sym:
+                buy_prices[sym.replace("/", "")] = t["price"]
+            elif len(sym) >= 6:
+                buy_prices[sym[:3] + "/" + sym[3:]] = t["price"]
+
     for t in trades:
         price = t.get("price") or 0
         close_price = t.get("close_price") or 0
         pnl = t.get("pnl")
-        if pnl is not None and price > 0:
-            t["pnl_pct"] = round(pnl / (price * abs(t.get("qty", 1))) * 100, 2)
+        qty = abs(t.get("qty", 0) or 0)
+        side = t.get("side", "")
+
+        # If sell trade has no P&L, compute from buy entry price
+        if pnl is None and side == "sell" and price > 0 and qty > 0:
+            entry = buy_prices.get(t.get("symbol", ""))
+            if entry and entry > 0:
+                pnl = round((price - entry) * qty, 2)
+                t["pnl"] = pnl
+
+        if pnl is not None and price > 0 and qty > 0:
+            entry_for_pct = buy_prices.get(t.get("symbol", ""), price)
+            if entry_for_pct > 0:
+                t["pnl_pct"] = round((price - entry_for_pct) / entry_for_pct * 100, 2) if side == "sell" else round(pnl / (entry_for_pct * qty) * 100, 2)
+            else:
+                t["pnl_pct"] = round(pnl / (price * qty) * 100, 2)
         elif close_price > 0 and price > 0:
             t["pnl_pct"] = round((close_price - price) / price * 100, 2)
         else:
@@ -698,24 +725,68 @@ def api_strategies():
             strat_data[name]["holds"] += 1
 
     # Trade counts and P&L per strategy
+    # Helper: resolve trade strategy to contributing enabled strategies
+    enabled_names = set(enabled.keys())
+
+    def _resolve_strategies(trade_strategy: str, symbol: str = "") -> list[str]:
+        """Map a trade's strategy to one or more enabled strategy names.
+
+        Handles: direct match, confluence 'a+b+c', 'aggregator' (lookup signals),
+        'profit_mgmt_*' and 'stop_loss' (lookup opening trade for same symbol).
+        """
+        if not trade_strategy:
+            return []
+        # Direct match
+        if trade_strategy in enabled_names:
+            return [trade_strategy]
+        # Confluence: kalman_trend+hmm_regime → [kalman_trend, hmm_regime]
+        if "+" in trade_strategy:
+            parts = [p.strip() for p in trade_strategy.split("+")]
+            return [p for p in parts if p in enabled_names] or parts[:1]
+        # aggregator: try to find what signals triggered this trade
+        if trade_strategy == "aggregator" and symbol:
+            matched = set()
+            for s in signals:
+                if s.get("symbol") == symbol:
+                    sn = s["strategy"]
+                    if sn in enabled_names:
+                        matched.add(sn)
+                    elif "+" in sn:
+                        for p in sn.split("+"):
+                            if p.strip() in enabled_names:
+                                matched.add(p.strip())
+            return list(matched) if matched else ["aggregator"]
+        # profit_mgmt_*, stop_loss: attribute to original trade's strategy for same symbol
+        if (trade_strategy.startswith("profit_mgmt_") or trade_strategy == "stop_loss") and symbol:
+            # Find the buy trade for this symbol to get its strategy
+            for prev_t in trades:
+                if prev_t.get("symbol") == symbol and prev_t.get("side") == "buy":
+                    prev_strat = prev_t.get("strategy", "")
+                    if prev_strat and prev_strat != trade_strategy:
+                        return _resolve_strategies(prev_strat, symbol)
+        return [trade_strategy]
+
     trades = get_trades(limit=500)
     for t in trades:
-        name = t.get("strategy", "")
-        if not name:
+        raw_name = t.get("strategy", "")
+        if not raw_name:
             continue
-        if name not in strat_data:
-            strat_data[name] = {"signals": 0, "buys": 0, "sells": 0, "holds": 0}
-        strat_data[name].setdefault("trades", 0)
-        strat_data[name]["trades"] = strat_data[name].get("trades", 0) + 1
-        if t.get("pnl") is not None:
-            strat_data[name].setdefault("total_pnl", 0)
-            strat_data[name]["total_pnl"] = strat_data[name].get("total_pnl", 0) + (t["pnl"] or 0)
-        if t.get("closed_at"):
-            strat_data[name].setdefault("closed", 0)
-            strat_data[name]["closed"] = strat_data[name].get("closed", 0) + 1
-            if (t.get("pnl") or 0) > 0:
-                strat_data[name].setdefault("wins", 0)
-                strat_data[name]["wins"] = strat_data[name].get("wins", 0) + 1
+        resolved = _resolve_strategies(raw_name, t.get("symbol", ""))
+        pnl_share = (t.get("pnl") or 0) / max(len(resolved), 1)
+        for name in resolved:
+            if name not in strat_data:
+                strat_data[name] = {"signals": 0, "buys": 0, "sells": 0, "holds": 0}
+            strat_data[name].setdefault("trades", 0)
+            strat_data[name]["trades"] = strat_data[name].get("trades", 0) + 1
+            if t.get("pnl") is not None:
+                strat_data[name].setdefault("total_pnl", 0)
+                strat_data[name]["total_pnl"] = strat_data[name].get("total_pnl", 0) + pnl_share
+            if t.get("closed_at"):
+                strat_data[name].setdefault("closed", 0)
+                strat_data[name]["closed"] = strat_data[name].get("closed", 0) + 1
+                if pnl_share > 0:
+                    strat_data[name].setdefault("wins", 0)
+                    strat_data[name]["wins"] = strat_data[name].get("wins", 0) + 1
 
     # Add unrealized P&L from open positions
     positions = _safe_positions()

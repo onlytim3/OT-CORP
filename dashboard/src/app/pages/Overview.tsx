@@ -6,6 +6,14 @@ import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, Re
 import { useState } from "react";
 import { api, usePolling, isUsingMockData, type StatusResponse, type ActionItem, type AggregatedLeverage, type SectorExposure } from "../config/api";
 
+function formatQty(qty: number): string {
+  if (qty === 0) return '0';
+  const abs = Math.abs(qty);
+  if (abs >= 100) return qty.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (abs >= 1) return qty.toLocaleString('en-US', { maximumFractionDigits: 4 });
+  return Number(qty.toPrecision(6)).toString();
+}
+
 export function Overview() {
   const { data: status, loading } = usePolling<StatusResponse>(api.status, 10000);
   const { data: actions } = usePolling<ActionItem[]>(api.actions, 15000);
@@ -41,7 +49,7 @@ export function Overview() {
   return (
     <div className="p-6 space-y-6">
       {isMock && (
-        <div className="bg-[#4a9eff]/10 border border-[#4a9eff]/30 rounded-lg p-4">
+        <div className="bg-[#4a9eff]/10 border border-[#4a9eff]/20 rounded-xl p-4 backdrop-blur-sm">
           <div className="flex items-center gap-2">
             <AlertCircle className="size-5 text-[#4a9eff]" />
             <div>
@@ -197,7 +205,7 @@ export function Overview() {
                   {positions.map((pos, idx) => (
                     <tr key={idx} onClick={() => setSelectedPosition(pos)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
                       <td className="py-3 px-4 font-medium text-[#e8e8e8]">{pos.symbol}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{pos.qty}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className={`text-right py-3 px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
