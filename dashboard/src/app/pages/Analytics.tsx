@@ -32,7 +32,9 @@ function FearGreedGauge({ value, label }: { value: number; label: string }) {
   );
 }
 
-const tooltipStyle = { backgroundColor: '#1a1a1a', border: '1px solid rgba(192,192,192,0.2)', borderRadius: '8px', color: '#e8e8e8' };
+const tooltipStyle = { backgroundColor: '#1a1a1a', border: '1px solid rgba(192,192,192,0.2)', borderRadius: '8px', color: '#ffffff' };
+const tooltipLabelStyle = { color: '#ffffff' };
+const tooltipItemStyle = { color: '#ffffff' };
 
 export function Analytics() {
   const { data: intelligence } = usePolling<Intelligence>(api.intelligence, 30000);
@@ -211,7 +213,7 @@ export function Analytics() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.08)" />
                       <XAxis dataKey="date" stroke="#888888" tick={{ fontSize: 11 }} />
                       <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
-                      <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`$${v.toFixed(2)}`, 'Portfolio']} />
+                      <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={false} formatter={(v: number) => [`$${v.toFixed(2)}`, 'Portfolio']} />
                       <Area type="monotone" dataKey="value" stroke="#4a9eff" fill="url(#valueGrad)" strokeWidth={2} />
                     </AreaChart>
                   </ResponsiveContainer>
@@ -232,7 +234,7 @@ export function Analytics() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.08)" />
                       <XAxis dataKey="date" stroke="#888888" tick={{ fontSize: 11 }} />
                       <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-                      <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v.toFixed(2)}%`, 'Cumulative']} />
+                      <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={false} formatter={(v: number) => [`${v.toFixed(2)}%`, 'Cumulative']} />
                       <ReferenceLine y={0} stroke="rgba(192,192,192,0.2)" />
                       <Line type="monotone" dataKey="cumulative" stroke="#00d4aa" strokeWidth={2} dot={false} />
                     </LineChart>
@@ -284,13 +286,13 @@ export function Analytics() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.08)" />
                       <XAxis dataKey={periodTab === 'daily' ? 'date' : 'period'} stroke="#888888" tick={{ fontSize: 10 }} />
                       <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-                      <Tooltip contentStyle={tooltipStyle}
+                      <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={false}
                         formatter={(v: number, name: string) => [
                           name === 'return_pct' ? `${v.toFixed(2)}%` : v,
                           name === 'return_pct' ? 'Return' : 'Trades'
                         ]} />
                       <ReferenceLine y={0} stroke="rgba(192,192,192,0.3)" />
-                      <Bar dataKey="return_pct" radius={[4, 4, 0, 0]}>
+                      <Bar dataKey="return_pct" radius={[4, 4, 0, 0]} activeBar={false}>
                         {currentPeriodData.map((entry, i) => (
                           <Cell key={i} fill={entry.return_pct >= 0 ? '#00d4aa' : '#ff4466'} fillOpacity={0.8} />
                         ))}
@@ -377,9 +379,9 @@ export function Analytics() {
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.1)" />
                     <XAxis type="number" stroke="#888888" />
                     <YAxis type="category" dataKey="shortName" stroke="#888888" width={100} tick={{ fontSize: 12 }} />
-                    <Tooltip contentStyle={tooltipStyle}
+                    <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={false}
                       formatter={(value: number) => [`$${value.toFixed(2)}`, 'P&L']} />
-                    <Bar dataKey="pnl" radius={[0, 8, 8, 0]}>
+                    <Bar dataKey="pnl" radius={[0, 8, 8, 0]} activeBar={false}>
                       {strategyChartData.map((entry, i) => (
                         <Cell key={i} fill={entry.pnl >= 0 ? '#00d4aa' : '#ff4466'} />
                       ))}
@@ -533,9 +535,9 @@ export function Analytics() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.08)" />
                       <XAxis dataKey="hour" stroke="#888888" tick={{ fontSize: 10 }} />
                       <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
-                      <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`$${v.toFixed(2)}`, 'P&L']} />
+                      <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={false} formatter={(v: number) => [`$${v.toFixed(2)}`, 'P&L']} />
                       <ReferenceLine y={0} stroke="rgba(192,192,192,0.3)" />
-                      <Bar dataKey="pnl" radius={[4, 4, 0, 0]}>
+                      <Bar dataKey="pnl" radius={[4, 4, 0, 0]} activeBar={false}>
                         {chartData.map((entry, i) => (
                           <Cell key={i} fill={entry.pnl >= 0 ? '#00d4aa' : '#ff4466'} fillOpacity={0.8} />
                         ))}

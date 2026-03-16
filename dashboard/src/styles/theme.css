@@ -195,6 +195,19 @@
   .recharts-cartesian-grid-bg rect {
     fill: transparent !important;
   }
+
+  /* Remove the white rectangle highlight that covers bars on hover */
+  .recharts-tooltip-cursor {
+    fill: transparent !important;
+    stroke: transparent !important;
+  }
+
+  /* Remove active bar highlight on click */
+  .recharts-active-bar,
+  .recharts-bar-rectangle:active,
+  .recharts-rectangle.recharts-tooltip-cursor {
+    fill: transparent !important;
+  }
 }
 
 @layer utilities {
