@@ -5,9 +5,13 @@ import {
   BarChart, Bar, LineChart, Line, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
-import { Brain, TrendingUp, Shield, Gauge, Calendar, DollarSign, Activity } from "lucide-react";
+import { Brain, TrendingUp, Shield, Gauge, Calendar, DollarSign, Activity, Filter, Target, Clock, Crosshair, BarChart3 } from "lucide-react";
 import { useState } from "react";
-import { api, usePolling, type Intelligence, type Strategy, type StatusResponse, type PnlHistory } from "../config/api";
+import {
+  api, usePolling,
+  type Intelligence, type Strategy, type StatusResponse, type PnlHistory,
+  type FillQuality, type StrategyAttribution, type FunnelData, type TimePnl,
+} from "../config/api";
 
 function FearGreedGauge({ value, label }: { value: number; label: string }) {
   const color = value <= 25 ? '#ff4466' : value <= 45 ? '#ffa500' : value <= 55 ? '#c0c0c0' : value <= 75 ? '#00d4aa' : '#00d4aa';
@@ -35,6 +39,11 @@ export function Analytics() {
   const { data: strategies } = usePolling<Strategy[]>(api.strategies, 30000);
   const { data: status } = usePolling<StatusResponse>(api.status, 15000);
   const { data: pnlHistory } = usePolling<PnlHistory>(api.pnlHistory, 60000);
+  const { data: corrData } = usePolling<{matrix: Record<string, Record<string, number>>, alerts: string[]}>(api.correlationMatrix, 60000);
+  const { data: funnelData } = usePolling<FunnelData[]>(api.funnel, 30000);
+  const { data: timePnl } = usePolling<TimePnl>(api.timePnl, 60000);
+  const { data: fills } = usePolling<FillQuality[]>(api.fillAnalysis, 30000);
+  const { data: attribution } = usePolling<StrategyAttribution[]>(api.attribution, 60000);
   const [periodTab, setPeriodTab] = useState<'daily' | 'weekly' | 'monthly'>('daily');
 
   const fearGreed = intelligence?.fear_greed;
@@ -173,6 +182,9 @@ export function Analytics() {
           <TabsTrigger value="strategies">Strategies</TabsTrigger>
           <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
           <TabsTrigger value="regime">Regime Signals</TabsTrigger>
+          <TabsTrigger value="funnel">Signal Funnel</TabsTrigger>
+          <TabsTrigger value="fills">Fill Quality</TabsTrigger>
+          <TabsTrigger value="correlation">Correlation</TabsTrigger>
         </TabsList>
 
         {/* P&L Performance Tab */}
@@ -394,6 +406,275 @@ export function Analytics() {
                   })}
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Signal-to-Execution Funnel Tab */}
+        <TabsContent value="funnel" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Filter className="size-5 text-[#4a9eff]" />
+                Signal-to-Execution Funnel
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const latest = funnelData && funnelData.length > 0 ? funnelData[funnelData.length - 1] : null;
+                if (!latest) {
+                  return <p className="text-[#888888] text-center py-8">No funnel data available</p>;
+                }
+                const stages: { label: string; key: keyof FunnelData; color: string }[] = [
+                  { label: 'Generated', key: 'generated', color: '#4a9eff' },
+                  { label: 'Actionable', key: 'actionable', color: '#6bb5ff' },
+                  { label: 'Deduped', key: 'deduped', color: '#ffa500' },
+                  { label: 'Risk Passed', key: 'risk_passed', color: '#c0c0c0' },
+                  { label: 'Executed', key: 'executed', color: '#00d4aa' },
+                  { label: 'Filled', key: 'filled', color: '#00b894' },
+                ];
+                const maxVal = Math.max(latest.generated || 1, 1);
+                return (
+                  <div className="space-y-3">
+                    {stages.map(({ label, key, color }) => {
+                      const val = Number(latest[key]) || 0;
+                      const pct = (val / maxVal) * 100;
+                      return (
+                        <div key={key} className="flex items-center gap-4">
+                          <span className="text-sm text-[#888888] w-28 text-right shrink-0">{label}</span>
+                          <div className="flex-1 h-8 bg-white/5 rounded-lg overflow-hidden relative">
+                            <div className="h-full rounded-lg transition-all" style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: color, opacity: 0.8 }} />
+                            <span className="absolute inset-y-0 right-3 flex items-center text-sm font-medium text-[#e8e8e8]">{val}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </CardContent>
+          </Card>
+
+          {/* Time-of-Day P&L */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Clock className="size-5 text-[#ffa500]" />
+                Time-of-Day P&L
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const hourly = timePnl?.hourly;
+                if (!hourly || Object.keys(hourly).length === 0) {
+                  return <p className="text-[#888888] text-center py-8">No hourly P&L data yet</p>;
+                }
+                const chartData = Object.entries(hourly)
+                  .map(([h, pnl]) => ({ hour: `${String(h).padStart(2, '0')}:00`, pnl: Number(pnl) }))
+                  .sort((a, b) => a.hour.localeCompare(b.hour));
+                return (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.08)" />
+                      <XAxis dataKey="hour" stroke="#888888" tick={{ fontSize: 10 }} />
+                      <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
+                      <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`$${v.toFixed(2)}`, 'P&L']} />
+                      <ReferenceLine y={0} stroke="rgba(192,192,192,0.3)" />
+                      <Bar dataKey="pnl" radius={[4, 4, 0, 0]}>
+                        {chartData.map((entry, i) => (
+                          <Cell key={i} fill={entry.pnl >= 0 ? '#00d4aa' : '#ff4466'} fillOpacity={0.8} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                );
+              })()}
+            </CardContent>
+          </Card>
+
+          {/* Strategy Attribution */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="size-5 text-[#c0c0c0]" />
+                Strategy Attribution
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(!attribution || attribution.length === 0) ? (
+                <p className="text-[#888888] text-center py-8">No attribution data available</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-white/5">
+                        <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total P&L</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Trades</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Avg Weight</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attribution.sort((a, b) => b.total_pnl - a.total_pnl).map((a) => (
+                        <tr key={a.strategy} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                          <td className="py-3 px-4 font-medium text-[#e8e8e8]">{a.strategy}</td>
+                          <td className={`text-right py-3 px-4 font-medium ${a.total_pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                            {a.total_pnl >= 0 ? '+' : ''}${a.total_pnl.toFixed(2)}
+                          </td>
+                          <td className="text-right py-3 px-4 text-[#c0c0c0]">{a.trade_count}</td>
+                          <td className="text-right py-3 px-4 text-[#c0c0c0]">{(a.avg_weight * 100).toFixed(1)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Fill Quality Tab */}
+        <TabsContent value="fills" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Crosshair className="size-5 text-[#ff4466]" />
+                Fill Quality Analysis
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(!fills || fills.length === 0) ? (
+                <p className="text-[#888888] text-center py-8">No fill data available</p>
+              ) : (
+                <>
+                  {/* Summary metrics */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                      <p className="text-xs text-[#888888]">Total Fills</p>
+                      <p className="text-lg font-bold text-[#e8e8e8]">{fills.length}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                      <p className="text-xs text-[#888888]">Avg Slippage</p>
+                      <p className="text-lg font-bold text-[#ffa500]">
+                        {(fills.reduce((s, f) => s + f.slippage_bps, 0) / fills.length).toFixed(1)} bps
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                      <p className="text-xs text-[#888888]">Worst Slippage</p>
+                      <p className="text-lg font-bold text-[#ff4466]">
+                        {Math.max(...fills.map(f => f.slippage_bps)).toFixed(1)} bps
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                      <p className="text-xs text-[#888888]">Best Slippage</p>
+                      <p className="text-lg font-bold text-[#00d4aa]">
+                        {Math.min(...fills.map(f => f.slippage_bps)).toFixed(1)} bps
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Worst fills table */}
+                  <h4 className="text-sm font-medium text-[#888888] mb-3">Recent Fills (sorted by slippage)</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-white/5">
+                          <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
+                          <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Side</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Mid Price</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Fill Price</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Slippage</th>
+                          <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Notional</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...fills].sort((a, b) => b.slippage_bps - a.slippage_bps).slice(0, 15).map((f) => (
+                          <tr key={f.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                            <td className="py-3 px-4 font-medium text-[#e8e8e8]">{f.symbol}</td>
+                            <td className="py-3 px-4 text-center">
+                              <Badge variant={f.side === 'buy' ? 'default' : 'destructive'}>{f.side.toUpperCase()}</Badge>
+                            </td>
+                            <td className="text-right py-3 px-4 text-[#c0c0c0]">${f.mid_price.toFixed(2)}</td>
+                            <td className="text-right py-3 px-4 text-[#c0c0c0]">${f.fill_price.toFixed(2)}</td>
+                            <td className={`text-right py-3 px-4 font-medium ${f.slippage_bps > 10 ? 'text-[#ff4466]' : f.slippage_bps > 5 ? 'text-[#ffa500]' : 'text-[#00d4aa]'}`}>
+                              {f.slippage_bps.toFixed(1)} bps
+                            </td>
+                            <td className="text-right py-3 px-4 text-[#c0c0c0]">${f.notional.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Correlation Heatmap Tab */}
+        <TabsContent value="correlation" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Target className="size-5 text-[#ffa500]" />
+                Strategy Correlation Heatmap
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const matrix = corrData?.matrix;
+                const alerts = corrData?.alerts || [];
+                if (!matrix || Object.keys(matrix).length === 0) {
+                  return <p className="text-[#888888] text-center py-8">No correlation data available</p>;
+                }
+                const strats = Object.keys(matrix);
+                const corrColor = (v: number): string => {
+                  const abs = Math.abs(v);
+                  if (abs > 0.8) return 'bg-[#ff4466]/60 text-[#ff4466]';
+                  if (abs > 0.5) return 'bg-[#ffa500]/30 text-[#ffa500]';
+                  return 'bg-[#00d4aa]/20 text-[#00d4aa]';
+                };
+                return (
+                  <div className="space-y-4">
+                    {alerts.length > 0 && (
+                      <div className="space-y-2">
+                        {alerts.map((a, i) => (
+                          <div key={i} className="p-2 rounded-lg bg-[#ff4466]/10 border border-[#ff4466]/30 text-sm text-[#ff4466]">{a}</div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr>
+                            <th className="py-2 px-3 text-left text-[#888888]" />
+                            {strats.map(s => (
+                              <th key={s} className="py-2 px-3 text-center text-[#888888] font-medium">{s.length > 10 ? s.slice(0, 10) + '..' : s}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {strats.map(row => (
+                            <tr key={row} className="border-b border-white/5">
+                              <td className="py-2 px-3 font-medium text-[#e8e8e8]">{row.length > 10 ? row.slice(0, 10) + '..' : row}</td>
+                              {strats.map(col => {
+                                const val = matrix[row]?.[col] ?? 0;
+                                return (
+                                  <td key={col} className="py-2 px-3 text-center">
+                                    <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${row === col ? 'text-[#888888]' : corrColor(val)}`}>
+                                      {row === col ? '-' : val.toFixed(2)}
+                                    </span>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>

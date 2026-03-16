@@ -132,8 +132,14 @@ def _get_positions():
     return get_positions_from_aster()
 
 
-def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None):
+def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None, leverage=1):
     """Execute order via AsterDex perpetual futures."""
+    if leverage > 1:
+        try:
+            from trading.execution.aster_client import aster_set_leverage
+            aster_set_leverage(symbol, leverage)
+        except Exception as e:
+            log.warning("Failed to set leverage %dx for %s: %s", leverage, symbol, e)
     from trading.execution.router import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty,
                         stop_loss_price=stop_loss_price)
@@ -182,6 +188,7 @@ def run_trading_cycle():
 
     log_action("strategy_run", "cycle_start", details=f"Mode: {_cfg.TRADING_MODE}")
     log.info("Trading cycle started")
+    _cycle_start_time = time.monotonic()
     console.print(f"\n[bold cyan]{'='*60}[/]")
     console.print(f"[bold]Trading cycle started -- {_now_str()}[/bold]")
     console.print(f"[bold cyan]{'='*60}[/]")
@@ -341,6 +348,8 @@ def run_trading_cycle():
         positions_for_gate = _get_positions()
         held_symbols = {p["symbol"] for p in positions_for_gate}
 
+        actionable_count = sum(1 for s in consolidated if s.is_actionable)
+
         for signal in consolidated:
             if not signal.is_actionable:
                 continue
@@ -489,10 +498,17 @@ def run_trading_cycle():
                 },
             )
 
+            # Inject leverage from config
+            from trading.config import get_leverage
+            base_strategy = signal.strategy.split("+")[0]
+            lev = get_leverage(base_strategy)
+            signal.data = signal.data or {}
+            signal.data["leverage"] = lev
+
             # Execute (with error handling for insufficient funds, etc.)
             try:
                 order = _execute_order(signal.symbol, signal.action, notional=order_value,
-                                       stop_loss_price=stop_loss_price)
+                                       stop_loss_price=stop_loss_price, leverage=lev)
             except Exception as exec_err:
                 log_action(
                     "error", "order_failed",
@@ -524,6 +540,75 @@ def run_trading_cycle():
 
                 qty_f = float(filled_qty) if filled_qty else 0
                 price_f = float(filled_price) if filled_price else 0
+
+                # -------------------------------------------------------
+                # Partial fill handling
+                # -------------------------------------------------------
+                requested_qty = float(order.get("qty", 0))
+                fill_ratio = (qty_f / requested_qty) if requested_qty > 0 else 1.0
+
+                if 0 < fill_ratio < 0.80 and requested_qty > 0:
+                    # Partial fill < 80%: cancel remainder, accept what we got
+                    log.warning(
+                        "Partial fill for %s: %.1f%% filled (%.6f / %.6f) "
+                        "-- accepting partial, cancelling remainder",
+                        signal.symbol, fill_ratio * 100, qty_f, requested_qty,
+                    )
+                    try:
+                        from trading.execution.aster_client import aster_cancel_order
+                        from trading.execution.router import _to_aster
+                        aster_order_id = order.get("aster_order_id") or order.get("id")
+                        aster_cancel_order(
+                            _to_aster(signal.symbol),
+                            order_id=int(aster_order_id),
+                        )
+                    except Exception as cancel_err:
+                        log.debug("Cancel remainder for %s: %s", signal.symbol, cancel_err)
+
+                    log_action(
+                        "trade", "partial_fill",
+                        symbol=signal.symbol,
+                        details=f"Filled {fill_ratio:.0%} ({qty_f:.6f}/{requested_qty:.6f})",
+                        data={
+                            "filled_qty": qty_f,
+                            "requested_qty": requested_qty,
+                            "fill_ratio": fill_ratio,
+                        },
+                    )
+                elif 0.80 <= fill_ratio < 1.0 and requested_qty > 0:
+                    # Partial fill >= 80%: accept and adjust SL for actual qty
+                    log.info(
+                        "Near-complete fill for %s: %.1f%% -- accepting with adjusted qty",
+                        signal.symbol, fill_ratio * 100,
+                    )
+                    if stop_loss_price and stop_loss_price > 0 and qty_f < requested_qty:
+                        log.info(
+                            "SL adjusted for actual fill qty: %.6f (was %.6f)",
+                            qty_f, requested_qty,
+                        )
+
+                # Record fill quality for slippage analysis
+                try:
+                    from trading.execution.fill_analysis import record_fill
+                    from trading.execution.router import get_crypto_quote
+                    mid_price = price_f  # best available fallback
+                    try:
+                        quote = get_crypto_quote(signal.symbol)
+                        if quote.get("mid", 0) > 0:
+                            mid_price = quote["mid"]
+                    except Exception:
+                        pass
+                    if qty_f > 0 and price_f > 0:
+                        record_fill(
+                            symbol=signal.symbol,
+                            mid_at_signal=mid_price,
+                            fill_price=price_f,
+                            qty=qty_f,
+                            side=signal.action,
+                            notional=price_f * qty_f,
+                        )
+                except Exception as fill_err:
+                    log.debug("Fill analysis recording failed: %s", fill_err)
 
                 trade_id = insert_trade(
                     symbol=signal.symbol,
@@ -662,6 +747,29 @@ def run_trading_cycle():
         _notify_safe(notify_cycle_summary, signal_count, executed_count, blocked_count)
 
         # ---------------------------------------------------------------
+        # Signal-to-execution funnel (Phase 5.3 monitoring)
+        # ---------------------------------------------------------------
+        try:
+            import json as _json
+            _cycle_elapsed = time.monotonic() - _cycle_start_time
+            funnel_data = {
+                "generated": signal_count,
+                "consolidated": len(consolidated),
+                "actionable": actionable_count,
+                "risk_passed": actionable_count - blocked_count,
+                "executed": executed_count,
+                "blocked": blocked_count,
+                "cycle_time_s": round(_cycle_elapsed, 2),
+            }
+            log_action(
+                "funnel", "cycle_funnel",
+                details=f"Gen:{signal_count} Con:{len(consolidated)} Act:{actionable_count} Exec:{executed_count}",
+                data=funnel_data,
+            )
+        except Exception as _funnel_err:
+            log.debug("Funnel tracking failed: %s", _funnel_err)
+
+        # ---------------------------------------------------------------
         # Phase 7: Autonomous improvement cycle
         # ---------------------------------------------------------------
         # Agents analyze performance, risk, regime, and research gaps.
@@ -731,6 +839,45 @@ def run_trading_cycle():
             _notify_safe(notify_error, str(e), "cycle_crash")
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Scale into winners — add to winning positions
+# ---------------------------------------------------------------------------
+
+def _check_scale_in_winners(positions, portfolio_value):
+    """Scale into winning positions."""
+    from trading.config import get_leverage, RISK
+    from trading.db.store import get_setting, set_setting, log_action
+    import json
+
+    max_pos_pct = RISK.get("max_position_pct", 0.15)
+    scaled = []
+    for pos in (positions or []):
+        pnl_pct = (pos.get("unrealized_pnlpc", 0) or 0)
+        if pnl_pct < 0.05:  # Need >5% unrealized gain
+            continue
+        symbol = pos.get("symbol", "")
+        # Check if already scaled this cycle
+        key = f"scale_in_{symbol}"
+        last = get_setting(key)
+        if last:
+            try:
+                last_data = json.loads(last)
+                from datetime import datetime, timezone, timedelta
+                if datetime.fromisoformat(last_data.get("timestamp","")) > datetime.now(timezone.utc) - timedelta(hours=4):
+                    continue
+            except Exception:
+                pass
+        current_pct = abs(pos.get("market_value", 0)) / portfolio_value if portfolio_value else 0
+        addon_pct = min(0.03, max_pos_pct - current_pct)  # 3% or remaining room
+        if addon_pct < 0.005:
+            continue
+        addon_value = portfolio_value * addon_pct
+        scaled.append({"symbol": symbol, "addon_value": addon_value, "current_pnl_pct": pnl_pct})
+        set_setting(key, json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}))
+        log_action("scale_in", f"Scale into winner {symbol} (+${addon_value:.2f})", symbol=symbol)
+    return scaled
 
 
 # ---------------------------------------------------------------------------

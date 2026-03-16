@@ -1228,6 +1228,208 @@ def api_volume_all():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/funnel")
+def api_funnel():
+    """Signal-to-execution funnel data from recent cycles."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT timestamp, data FROM action_log "
+                "WHERE category='funnel' ORDER BY timestamp DESC LIMIT 50"
+            ).fetchall()
+        import json as _json
+        funnels = []
+        for r in rows:
+            entry = {"timestamp": r["timestamp"]}
+            if r["data"]:
+                try:
+                    entry.update(_json.loads(r["data"]))
+                except Exception:
+                    pass
+            funnels.append(entry)
+        return jsonify(funnels)
+    except Exception as e:
+        log.exception("Funnel API failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/time-pnl")
+def api_time_pnl():
+    """P&L breakdown by hour of day and day of week."""
+    try:
+        from trading.learning.time_analysis import get_hourly_pnl, get_daily_pnl_by_dow
+        return jsonify({
+            "hourly": get_hourly_pnl(),
+            "daily": get_daily_pnl_by_dow(),
+        })
+    except Exception as e:
+        log.exception("Time P&L API failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/correlation-matrix")
+def api_correlation_matrix():
+    """Strategy signal correlation matrix and alerts."""
+    try:
+        from trading.learning.correlation_matrix import (
+            compute_correlation_matrix, check_correlation_alerts,
+        )
+        matrix = compute_correlation_matrix()
+        alerts = check_correlation_alerts(matrix)
+        return jsonify({"matrix": matrix, "alerts": alerts})
+    except Exception as e:
+        log.exception("Correlation matrix API failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/fill-analysis")
+def api_fill_analysis():
+    """Fill quality and slippage data."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM fill_quality ORDER BY timestamp DESC LIMIT 100"
+            ).fetchall()
+        return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        log.warning(f"Fill analysis API: {e}")
+        return jsonify([])
+
+
+@app.route("/api/attribution")
+def api_attribution():
+    """Strategy P&L attribution data."""
+    try:
+        from trading.learning.attribution import get_attribution_summary
+        data = get_attribution_summary(days=30)
+        return jsonify(data)
+    except Exception as e:
+        log.warning(f"Attribution API: {e}")
+        return jsonify([])
+
+
+@app.route("/api/margin")
+def api_margin():
+    """Margin health for all leveraged positions."""
+    try:
+        positions = get_positions_from_alpaca()
+        result = []
+        for pos in positions:
+            leverage = pos.get("leverage", 1)
+            if leverage <= 1:
+                continue
+            entry = pos.get("entry_price") or pos.get("avg_cost", 0)
+            mark = pos.get("current_price", entry)
+            side = pos.get("side", "LONG").upper()
+            liq_dist = 1.0 / leverage
+            if side == "LONG":
+                liq_price = entry * (1 - liq_dist)
+                margin_dist = (mark - liq_price) / mark if mark else 1.0
+            else:
+                liq_price = entry * (1 + liq_dist)
+                margin_dist = (liq_price - mark) / mark if mark else 1.0
+            status = "safe"
+            if margin_dist < 0.05:
+                status = "critical"
+            elif margin_dist < 0.10:
+                status = "danger"
+            elif margin_dist < 0.20:
+                status = "warning"
+            result.append({
+                "symbol": pos.get("symbol", "?"),
+                "leverage": leverage,
+                "entry_price": round(entry, 2),
+                "mark_price": round(mark, 2),
+                "liq_price": round(liq_price, 2),
+                "margin_distance": round(margin_dist, 4),
+                "status": status,
+            })
+        return jsonify(result)
+    except Exception as e:
+        log.warning(f"Margin API: {e}")
+        return jsonify([])
+
+
+@app.route("/api/leverage")
+def api_leverage():
+    """Leverage per position and aggregate."""
+    try:
+        account = _safe_account()
+        portfolio_value = account.get("portfolio_value", 0)
+        positions = get_positions_from_alpaca()
+        total_notional = 0
+        pos_data = []
+        for pos in positions:
+            lev = pos.get("leverage", 1)
+            mv = abs(pos.get("market_value", 0))
+            notional = mv * lev
+            total_notional += notional
+            pos_data.append({
+                "symbol": pos.get("symbol", "?"),
+                "leverage": lev,
+                "notional": round(mv, 2),
+                "effective_exposure": round(notional, 2),
+            })
+        return jsonify({
+            "total_notional": round(total_notional, 2),
+            "portfolio_value": round(portfolio_value, 2),
+            "aggregate_leverage": round(total_notional / portfolio_value, 2) if portfolio_value else 0,
+            "positions": pos_data,
+        })
+    except Exception as e:
+        log.warning(f"Leverage API: {e}")
+        return jsonify({"total_notional": 0, "portfolio_value": 0, "aggregate_leverage": 0, "positions": []})
+
+
+@app.route("/api/sectors")
+def api_sectors():
+    """Sector exposure breakdown."""
+    try:
+        positions = get_positions_from_alpaca()
+        account = _safe_account()
+        portfolio_value = account.get("portfolio_value", 0)
+
+        sector_map = {
+            "l1": {"BTC", "ETH"},
+            "alts": {"SOL", "AVAX", "DOT", "LINK", "ADA", "NEAR", "SUI", "APT"},
+            "meme": {"DOGE", "SHIB", "PEPE", "BONK", "WIF", "TRUMP"},
+            "defi": {"UNI", "AAVE", "INJ"},
+            "ai": {"FET", "RENDER", "TAO", "WLD"},
+            "stocks": {"AAPL", "TSLA", "NVDA", "GOOGL", "MSFT", "AMZN", "META"},
+            "commodities": {"GOLD", "SILVER", "OIL", "XAU", "XAG"},
+        }
+        sector_limits = {"l1": 0.50, "alts": 0.20, "defi": 0.25, "meme": 0.10,
+                        "ai": 0.15, "stocks": 0.20, "commodities": 0.15}
+
+        sectors: dict = {}
+        for pos in positions:
+            sym = pos.get("symbol", "").upper().replace("USDT", "").replace("USD", "").replace("/", "")
+            found_sector = "other"
+            for sector, symbols in sector_map.items():
+                if sym in symbols:
+                    found_sector = sector
+                    break
+            if found_sector not in sectors:
+                sectors[found_sector] = {"exposure": 0, "positions": []}
+            sectors[found_sector]["exposure"] += abs(pos.get("market_value", 0))
+            sectors[found_sector]["positions"].append(pos.get("symbol", "?"))
+
+        result = []
+        for sector, data in sectors.items():
+            exp_pct = data["exposure"] / portfolio_value if portfolio_value else 0
+            result.append({
+                "sector": sector,
+                "exposure": round(data["exposure"], 2),
+                "exposure_pct": round(exp_pct * 100, 1),
+                "limit_pct": round(sector_limits.get(sector, 100) * 100, 0),
+                "positions": data["positions"],
+            })
+        return jsonify(sorted(result, key=lambda x: x["exposure"], reverse=True))
+    except Exception as e:
+        log.warning(f"Sectors API: {e}")
+        return jsonify([])
+
+
 def start_dashboard(host="127.0.0.1", port=None, debug=False):
     """Start the web dashboard server."""
     if port is None:

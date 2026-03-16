@@ -62,7 +62,7 @@ RISK = {
     "stop_loss_pct": 0.07,          # 7% stop loss
     "max_daily_loss_pct": 0.05,     # 5% max daily loss
     "max_drawdown_pct": 0.20,       # 20% max total drawdown → halt trading
-    "min_cash_reserve_pct": 0.15,   # Keep 15% in cash (more strategies need buffer)
+    "min_cash_reserve_pct": 0.05,   # Keep 5% in cash (aggressive deployment)
     "max_trades_per_day": 25,       # 20+ active strategies
     "min_volume_ratio": 0.30,       # Block entries when volume < 30% of 7d average
     "volume_exit_ratio": 0.20,      # Exit positions when volume < 20% of 7d average
@@ -132,10 +132,22 @@ STRATEGY_ENABLED = {
     "multi_factor_rank": True,
     "volatility_regime": True,
     "meme_momentum": True,
+    # On-chain & funding
+    "onchain_flow": True,
+    "funding_forecast": True,
     # Disabled
     "dxy_dollar": False,            # Disabled: requires Alpaca ETF access
     "garch_volatility": False,       # Disabled: vol regimes don't predict direction
     "breakout_detection": False,     # Disabled: too many false breakouts
+}
+
+# --- Strategy Regime Requirements ---
+# Strategies that should only run in specific market regimes
+STRATEGY_REGIME_REQUIREMENTS = {
+    "regime_mean_reversion": ["sideways"],
+    "kalman_trend": ["bull", "bear"],
+    "meme_momentum": ["bull"],
+    "pairs_trading": ["sideways", "bear"],
 }
 
 # --- Data Sources ---
@@ -478,11 +490,15 @@ LEVERAGE_MODERATE = {
 
 # Aggressive: high returns for high risk tolerance
 LEVERAGE_AGGRESSIVE = {
-    "default": 2,
-    "kalman_trend": 5,       # Sharpe 3.49, zero DD at 5x
-    "whale_flow": 3,         # Some evidence for 7x but risky
-    "taker_divergence": 1,   # NEVER leverage — loses 93% at 3x
-    "cross_basis_rv": 1,     # NEVER leverage — liquidation-prone
+    "default": 2, "kalman_trend": 5, "hmm_regime": 3, "whale_flow": 3,
+    "funding_arb": 3, "pairs_trading": 2, "taker_divergence": 1,
+    "cross_basis_rv": 1, "meme_momentum": 1, "basis_zscore": 2,
+    "regime_mean_reversion": 2, "factor_crypto": 2, "funding_term_structure": 3,
+    "oi_price_divergence": 2, "microstructure_composite": 2,
+    "cross_asset_momentum": 2, "gold_crypto_hedge": 2,
+    "equity_crypto_correlation": 2, "multi_factor_rank": 2,
+    "volatility_regime": 2, "rsi_divergence": 2,
+    "onchain_flow": 2, "funding_forecast": 3,
 }
 
 # Greedy: maximum returns, accepts heavy losses and liquidations
@@ -496,7 +512,7 @@ LEVERAGE_GREEDY = {
 }
 
 # Active leverage profile (change this to switch)
-LEVERAGE_PROFILE = os.getenv("LEVERAGE_PROFILE", "conservative")  # conservative|moderate|aggressive|greedy
+LEVERAGE_PROFILE = os.getenv("LEVERAGE_PROFILE", "aggressive")  # conservative|moderate|aggressive|greedy
 
 def get_leverage(strategy_name: str) -> int:
     """Get leverage multiplier for a strategy based on active profile."""

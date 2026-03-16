@@ -1,9 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { TrendingUp, TrendingDown, DollarSign, Volume2, RefreshCw, ArrowUpDown } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, Volume2, RefreshCw, ArrowUpDown, ShieldAlert } from "lucide-react";
 import { useState } from "react";
-import { api, usePolling, type StatusResponse, type Trade, type Strategy, type VolumeAnalysis } from "../config/api";
+import { api, usePolling, type StatusResponse, type Trade, type Strategy, type VolumeAnalysis, type MarginHealth } from "../config/api";
 
 function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
   const pct = Math.min(ratio * 100, 200);
@@ -26,6 +26,7 @@ export function Trading() {
   const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
   const { data: strategies } = usePolling<Strategy[]>(api.strategies, 30000);
   const { data: volumes } = usePolling<VolumeAnalysis[]>(api.volume, 30000);
+  const { data: marginData } = usePolling<MarginHealth[]>(api.margin, 15000);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
   const positions = status?.positions || [];
@@ -85,6 +86,39 @@ export function Trading() {
                     </div>
                   </div>
                 )}
+                {(() => {
+                  const mg = marginData?.find(m => m.symbol === pos.symbol);
+                  if (!mg) return null;
+                  const marginColor = mg.margin_distance > 0.2 ? 'bg-[#00d4aa]/15 text-[#00d4aa] border-[#00d4aa]/30'
+                    : mg.margin_distance > 0.1 ? 'bg-[#ffa500]/15 text-[#ffa500] border-[#ffa500]/30'
+                    : 'bg-[#ff4466]/15 text-[#ff4466] border-[#ff4466]/30';
+                  const statusIcon = mg.status === 'critical' || mg.status === 'danger' ? '!' : mg.status === 'warning' ? '~' : '';
+                  return (
+                    <div className="border-t border-white/5 pt-3 space-y-2">
+                      <div className="flex items-center gap-1 text-xs text-[#888888]">
+                        <ShieldAlert className="size-3" />
+                        Leverage &amp; Margin
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-[#888888]">Leverage</span>
+                        <span className="text-sm font-medium text-[#e8e8e8]">{mg.leverage.toFixed(1)}x</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-[#888888]">Margin Distance</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${marginColor}`}>
+                          {statusIcon && <span className="mr-1">{statusIcon}</span>}
+                          {(mg.margin_distance * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      {mg.liq_price > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-[#888888]">Liq. Price</span>
+                          <span className="text-xs text-[#ff4466]">${mg.liq_price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           );

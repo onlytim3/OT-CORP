@@ -207,6 +207,36 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_vol_profile_hour
                 ON volume_profiles(hour_of_day);
 
+            CREATE TABLE IF NOT EXISTS fill_quality (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                mid_price REAL NOT NULL,
+                fill_price REAL NOT NULL,
+                slippage_bps REAL NOT NULL,
+                notional REAL,
+                volume_ratio REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_attribution (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                trade_id INTEGER NOT NULL,
+                strategy TEXT NOT NULL,
+                attributed_pnl REAL NOT NULL,
+                strength_weight REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS scheduled_commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                command TEXT NOT NULL,
+                schedule TEXT NOT NULL,
+                next_run TEXT,
+                created_at TEXT NOT NULL,
+                active INTEGER DEFAULT 1
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -265,6 +295,9 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_results(strategy);
             CREATE INDEX IF NOT EXISTS idx_backtest_timestamp ON backtest_results(timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_fill_quality_symbol ON fill_quality(symbol);
+            CREATE INDEX IF NOT EXISTS idx_fill_quality_timestamp ON fill_quality(timestamp);
         """)
 
 

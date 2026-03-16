@@ -9,6 +9,8 @@ the router converts to AsterDex format (BTCUSDT) before execution.
 """
 
 import logging
+import os
+import time as _time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -17,6 +19,11 @@ from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
 from trading.data.aster import alpaca_to_aster, aster_to_alpaca
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Execution quality configuration
+# ---------------------------------------------------------------------------
+USE_LIMIT_ORDERS = os.getenv("USE_LIMIT_ORDERS", "true").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Symbol mapping
@@ -198,6 +205,204 @@ def get_positions_from_aster() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Limit order support
+# ---------------------------------------------------------------------------
+
+def place_limit_order(
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float,
+    tif: str = "GTC",
+    leverage: int = 1,
+    stop_loss_price: Optional[float] = None,
+) -> dict:
+    """Place a limit order on AsterDex.
+
+    Args:
+        symbol: Alpaca-style or AsterDex symbol.
+        side: 'buy' or 'sell'.
+        qty: Order quantity.
+        price: Limit price.
+        tif: Time in force (GTC, IOC, FOK). Default GTC.
+        leverage: Leverage multiplier.
+        stop_loss_price: Optional stop-loss price.
+
+    Returns:
+        Alpaca-compatible order result dict.
+    """
+    return submit_order(
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        order_type="LIMIT",
+        limit_price=price,
+        time_in_force=tif,
+        leverage=leverage,
+        stop_loss_price=stop_loss_price,
+    )
+
+
+def place_limit_with_fallback(
+    symbol: str,
+    side: str,
+    qty: float,
+    limit_price: Optional[float] = None,
+    timeout: int = 120,
+    leverage: int = 1,
+    stop_loss_price: Optional[float] = None,
+) -> dict:
+    """Place a limit order, poll for fill, fall back to market if unfilled.
+
+    If no limit_price is given, computes one from the current book:
+      - Buys: mid + 1bps
+      - Sells: mid - 1bps
+
+    Args:
+        symbol: Trading symbol.
+        side: 'buy' or 'sell'.
+        qty: Order quantity.
+        limit_price: Explicit limit price (optional, auto-computed if None).
+        timeout: Seconds to wait for fill before market fallback.
+        leverage: Leverage multiplier.
+        stop_loss_price: Optional stop-loss price.
+
+    Returns:
+        Alpaca-compatible order result dict (from limit or market fallback).
+    """
+    from trading.execution.aster_client import (
+        get_aster_book_ticker,
+        aster_cancel_order,
+    )
+
+    aster_sym = _to_aster(symbol)
+
+    # Auto-compute limit price from book if not provided
+    if limit_price is None:
+        try:
+            book = get_aster_book_ticker(aster_sym)
+            bid = float(book.get("bidPrice", 0))
+            ask = float(book.get("askPrice", 0))
+            if bid > 0 and ask > 0:
+                mid = (bid + ask) / 2.0
+                # 1 basis point offset for aggressive fill
+                if side.lower() == "buy":
+                    limit_price = mid * 1.0001  # mid + 1bps
+                else:
+                    limit_price = mid * 0.9999  # mid - 1bps
+            else:
+                log.warning("Cannot compute limit price for %s, using market order", symbol)
+                return submit_order(
+                    symbol=symbol, side=side, qty=qty,
+                    leverage=leverage, stop_loss_price=stop_loss_price,
+                )
+        except Exception as e:
+            log.warning("Book ticker failed for %s, using market order: %s", symbol, e)
+            return submit_order(
+                symbol=symbol, side=side, qty=qty,
+                leverage=leverage, stop_loss_price=stop_loss_price,
+            )
+
+    # Place the limit order (without SL -- SL goes on fallback/final fill)
+    log.info("Limit order: %s %s %.6f @ $%.4f (timeout=%ds)",
+             side.upper(), symbol, qty, limit_price, timeout)
+    order = submit_order(
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        order_type="LIMIT",
+        limit_price=limit_price,
+        time_in_force="GTC",
+        leverage=leverage,
+    )
+
+    if order.get("status") in ("rejected", "error"):
+        return order
+
+    # Poll for fill
+    order_id = order.get("aster_order_id") or order.get("id")
+    poll_interval = 5
+    elapsed = 0
+    while elapsed < timeout:
+        _time.sleep(poll_interval)
+        elapsed += poll_interval
+        try:
+            status = get_order_status(str(order_id), symbol=symbol)
+            if status.get("status") == "filled":
+                log.info("Limit order filled: %s %s @ $%.4f",
+                         side.upper(), symbol,
+                         status.get("filled_avg_price", 0))
+                # Place SL now that we're filled
+                if stop_loss_price and stop_loss_price > 0:
+                    _place_stop_loss(aster_sym, side, qty, stop_loss_price)
+                return status
+            if status.get("status") in ("canceled", "rejected", "expired"):
+                log.warning("Limit order %s for %s -- falling back to market",
+                            status["status"], symbol)
+                break
+        except Exception as e:
+            log.debug("Poll error for order %s: %s", order_id, e)
+
+    # Timeout or cancelled -- cancel remaining and fall back to market
+    try:
+        aster_cancel_order(aster_sym, order_id=int(order_id))
+        log.info("Cancelled unfilled limit order %s for %s", order_id, symbol)
+    except Exception as e:
+        log.debug("Cancel attempt for %s: %s", order_id, e)
+
+    # Check how much was partially filled
+    try:
+        final_status = get_order_status(str(order_id), symbol=symbol)
+        filled_so_far = float(final_status.get("filled_qty", 0))
+    except Exception:
+        filled_so_far = 0
+
+    remaining_qty = qty - filled_so_far
+    if remaining_qty > 0:
+        log.info("Market fallback for %s: %.6f remaining of %.6f",
+                 symbol, remaining_qty, qty)
+        fallback = submit_order(
+            symbol=symbol, side=side, qty=remaining_qty,
+            leverage=leverage, stop_loss_price=stop_loss_price,
+        )
+        # Merge results
+        total_filled = filled_so_far + float(fallback.get("filled_qty", 0))
+        if total_filled > 0:
+            avg_price = (
+                (filled_so_far * float(final_status.get("filled_avg_price", 0)))
+                + (float(fallback.get("filled_qty", 0)) * float(fallback.get("filled_avg_price", 0)))
+            ) / total_filled
+        else:
+            avg_price = float(fallback.get("filled_avg_price", 0))
+        fallback["filled_qty"] = total_filled
+        fallback["filled_avg_price"] = avg_price
+        fallback["qty"] = qty
+        return fallback
+
+    # Fully filled during cancel/poll window
+    if stop_loss_price and stop_loss_price > 0:
+        _place_stop_loss(aster_sym, side, qty, stop_loss_price)
+    return final_status
+
+
+def _place_stop_loss(aster_sym: str, side: str, qty: float, stop_loss_price: float):
+    """Place a server-side stop-loss order."""
+    try:
+        from trading.execution.aster_client import aster_submit_order as _aster_order
+        stop_side = "SELL" if side.lower() == "buy" else "BUY"
+        _aster_order(
+            symbol=aster_sym,
+            side=stop_side,
+            order_type="STOP_MARKET",
+            quantity=qty,
+            stop_price=stop_loss_price,
+        )
+        log.info("Stop-loss placed: %s %s @ $%.2f", stop_side, aster_sym, stop_loss_price)
+    except Exception as e:
+        log.warning("Failed to place stop-loss for %s: %s", aster_sym, e)
+
+
+# ---------------------------------------------------------------------------
 # Order execution
 # ---------------------------------------------------------------------------
 
@@ -209,8 +414,14 @@ def submit_order(
     order_type: str = "MARKET",
     leverage: int = 1,
     stop_loss_price: Optional[float] = None,
+    limit_price: Optional[float] = None,
+    time_in_force: str = "GTC",
 ) -> dict:
-    """Submit an order — paper mode simulates locally, live mode hits AsterDex.
+    """Submit an order -- paper mode simulates locally, live mode hits AsterDex.
+
+    When USE_LIMIT_ORDERS is enabled and order_type is MARKET, the order
+    is automatically upgraded to a limit-with-fallback. Large orders
+    (>5% of 1h volume) are routed through TWAP.
 
     Args:
         symbol: Alpaca-style symbol (BTC/USD) or AsterDex (BTCUSDT).
@@ -219,11 +430,14 @@ def submit_order(
         qty: Exact quantity (overrides notional if both provided).
         order_type: MARKET or LIMIT (default MARKET).
         leverage: Leverage multiplier (default 1x).
+        stop_loss_price: Optional stop-loss trigger price.
+        limit_price: Limit price (required when order_type is LIMIT).
+        time_in_force: GTC, IOC, FOK (default GTC, used for LIMIT orders).
 
     Returns dict matching Alpaca order response format:
         id, status, symbol, side, qty, filled_qty, filled_avg_price, etc.
     """
-    # Check if paper mode — simulate locally
+    # Check if paper mode -- simulate locally
     from trading.config import TRADING_MODE
     from trading.db.store import get_setting
     mode = get_setting("trading_mode", TRADING_MODE)
@@ -231,6 +445,63 @@ def submit_order(
         log.debug("Paper mode order: %s %s notional=%s", side, symbol, notional)
         return _paper_submit_order(symbol, side, notional=notional, qty=qty,
                                    stop_loss_price=stop_loss_price)
+
+    # -------------------------------------------------------------------
+    # Smart execution: TWAP for large orders, limit orders when enabled
+    # Only applies to MARKET orders (LIMIT orders pass through directly)
+    # -------------------------------------------------------------------
+    if order_type == "MARKET" and USE_LIMIT_ORDERS:
+        # Check if order is large enough for TWAP
+        effective_notional = notional or 0
+        if effective_notional > 0:
+            try:
+                from trading.execution.twap import should_use_twap, execute_twap
+                if should_use_twap(effective_notional, symbol):
+                    # Need qty for TWAP -- compute from notional
+                    from trading.execution.aster_client import get_aster_mark_prices as _gmp
+                    _aster = _to_aster(symbol)
+                    _md = _gmp(_aster)
+                    _mp = _md.get("markPrice", 0)
+                    if _mp > 0:
+                        twap_qty = qty if qty else (effective_notional / _mp)
+                        twap_qty = _round_qty(_aster, twap_qty)
+                        if twap_qty > 0:
+                            log.info("Routing %s %s to TWAP (notional=$%.2f)",
+                                     side, symbol, effective_notional)
+                            return execute_twap(
+                                symbol=symbol,
+                                side=side,
+                                total_qty=twap_qty,
+                                stop_loss_price=stop_loss_price,
+                                leverage=leverage,
+                            )
+            except Exception as e:
+                log.debug("TWAP check/execution failed, continuing normally: %s", e)
+
+        # Not large enough for TWAP -- use limit-with-fallback
+        # Need to resolve qty from notional if not provided
+        resolved_qty = qty
+        if resolved_qty is None and notional and notional > 0:
+            try:
+                from trading.execution.aster_client import get_aster_mark_prices as _gmp2
+                _aster2 = _to_aster(symbol)
+                _md2 = _gmp2(_aster2)
+                _mp2 = _md2.get("markPrice", 0)
+                if _mp2 > 0:
+                    resolved_qty = _round_qty(_aster2, notional / _mp2)
+            except Exception:
+                pass
+
+        if resolved_qty and resolved_qty > 0:
+            log.debug("Upgrading MARKET to limit-with-fallback for %s", symbol)
+            return place_limit_with_fallback(
+                symbol=symbol,
+                side=side,
+                qty=resolved_qty,
+                leverage=leverage,
+                stop_loss_price=stop_loss_price,
+            )
+        # Fall through to standard MARKET if qty resolution failed
 
     from trading.execution.aster_client import (
         aster_submit_order,
@@ -364,12 +635,16 @@ def submit_order(
              side_upper, aster_sym, qty, order_type, notional or 0)
 
     try:
-        result = aster_submit_order(
-            symbol=aster_sym,
-            side=side_upper,
-            order_type=order_type,
-            quantity=qty,
-        )
+        submit_kwargs = {
+            "symbol": aster_sym,
+            "side": side_upper,
+            "order_type": order_type,
+            "quantity": qty,
+        }
+        if order_type == "LIMIT" and limit_price is not None:
+            submit_kwargs["price"] = limit_price
+            submit_kwargs["time_in_force"] = time_in_force
+        result = aster_submit_order(**submit_kwargs)
 
         # Translate response to Alpaca-compatible format
         status = result.get("status", "UNKNOWN").lower()

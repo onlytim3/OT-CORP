@@ -23,6 +23,15 @@ export const api = {
   volumeSymbol: (symbol: string) => `${API_BASE_URL}/api/volume/${symbol}`,
   chat: `${API_BASE_URL}/api/chat`,
   chatConfirm: `${API_BASE_URL}/api/chat/confirm`,
+  // Phase 8: New endpoints
+  fillAnalysis: `${API_BASE_URL}/api/fill-analysis`,
+  attribution: `${API_BASE_URL}/api/attribution`,
+  correlationMatrix: `${API_BASE_URL}/api/correlation-matrix`,
+  funnel: `${API_BASE_URL}/api/funnel`,
+  margin: `${API_BASE_URL}/api/margin`,
+  timePnl: `${API_BASE_URL}/api/time-pnl`,
+  leverage: `${API_BASE_URL}/api/leverage`,
+  sectors: `${API_BASE_URL}/api/sectors`,
 };
 
 // --- Types ---
@@ -173,6 +182,79 @@ export interface ChatMessage {
   confirmation_required?: boolean;
 }
 
+// Phase 8: New interfaces
+export interface FillQuality {
+  id: number;
+  timestamp: string;
+  symbol: string;
+  side: string;
+  mid_price: number;
+  fill_price: number;
+  slippage_bps: number;
+  notional: number;
+  volume_ratio: number;
+}
+
+export interface StrategyAttribution {
+  strategy: string;
+  total_pnl: number;
+  trade_count: number;
+  avg_weight: number;
+}
+
+export interface CorrelationEntry {
+  strategy1: string;
+  strategy2: string;
+  correlation: number;
+}
+
+export interface FunnelData {
+  generated: number;
+  actionable: number;
+  deduped: number;
+  risk_passed: number;
+  executed: number;
+  filled: number;
+  timestamp: string;
+}
+
+export interface MarginHealth {
+  symbol: string;
+  leverage: number;
+  entry_price: number;
+  mark_price: number;
+  liq_price: number;
+  margin_distance: number;
+  status: 'safe' | 'warning' | 'danger' | 'critical';
+}
+
+export interface TimePnl {
+  hourly: Record<number, number>;
+  daily: Record<number, number>;
+}
+
+export interface LeverageInfo {
+  symbol: string;
+  leverage: number;
+  notional: number;
+  effective_exposure: number;
+}
+
+export interface AggregatedLeverage {
+  total_notional: number;
+  portfolio_value: number;
+  aggregate_leverage: number;
+  positions: LeverageInfo[];
+}
+
+export interface SectorExposure {
+  sector: string;
+  exposure: number;
+  exposure_pct: number;
+  limit_pct: number;
+  positions: string[];
+}
+
 // --- Fetch helper ---
 
 let connectionFailed = false;
@@ -253,5 +335,13 @@ function getMockDataForUrl<T>(url: string): T {
   if (url.includes('/api/agents')) return { pending: [], recent: [], activity: [], agent_stats: [] } as T;
   if (url.includes('/api/volume')) return [] as T;
   if (url.includes('/api/mode')) return { mode: 'paper' } as T;
+  if (url.includes('/api/fill-analysis')) return [] as T;
+  if (url.includes('/api/attribution')) return [] as T;
+  if (url.includes('/api/correlation-matrix')) return {} as T;
+  if (url.includes('/api/funnel')) return [] as T;
+  if (url.includes('/api/margin')) return [] as T;
+  if (url.includes('/api/time-pnl')) return { hourly: {}, daily: {} } as T;
+  if (url.includes('/api/leverage')) return { total_notional: 0, portfolio_value: 1000, aggregate_leverage: 1, positions: [] } as T;
+  if (url.includes('/api/sectors')) return [] as T;
   return {} as T;
 }

@@ -62,12 +62,12 @@ DEFAULT_BUDGET = 0.03  # Fallback for unknown strategies
 
 # How much to boost per additional confirming strategy
 CONFLUENCE_MULTIPLIERS = {
-    1: 0.6,    # Single strategy — reduced conviction, below base
+    1: 0.4,    # Single strategy — reduced conviction
     2: 1.0,    # Two strategies agree — base allocation
-    3: 1.4,    # Three agree — strong confluence
-    4: 1.7,    # Four agree — very strong confluence
+    3: 1.8,    # Three agree — strong confluence
+    4: 2.5,    # Four agree — very strong confluence
 }
-CONFLUENCE_MAX_MULT = 2.0  # Cap for 5+ strategies confirming
+CONFLUENCE_MAX_MULT = 3.0  # Cap for 5+ strategies confirming
 
 # Regime alignment boost
 REGIME_ALIGNMENT_BOOST = 1.25   # Intelligence briefing confirms direction
@@ -325,6 +325,56 @@ def clear_allocation_cache():
 
 
 # ---------------------------------------------------------------------------
+# Correlation group penalty — reduce sizing when group is already heavy
+# ---------------------------------------------------------------------------
+
+def _correlation_group_multiplier(signal, positions, portfolio_value):
+    try:
+        from trading.risk.manager import CORRELATION_GROUPS
+    except ImportError:
+        return 1.0
+    strategy = signal.strategy.split("+")[0] if hasattr(signal, 'strategy') else ""
+    my_group = None
+    for group, strats in CORRELATION_GROUPS.items():
+        if strategy in strats:
+            my_group = group
+            break
+    if not my_group:
+        return 1.0
+    group_strats = CORRELATION_GROUPS[my_group]
+    group_exposure = 0
+    for pos in (positions or []):
+        if any(s in (pos.get("strategy","") or "") for s in group_strats):
+            group_exposure += abs(pos.get("market_value", 0))
+    if portfolio_value <= 0:
+        return 1.0
+    return max(0.5, 1.0 - (group_exposure / portfolio_value) / 0.50 * 0.5)
+
+
+# ---------------------------------------------------------------------------
+# Drawdown multiplier — reduce sizing during drawdowns
+# ---------------------------------------------------------------------------
+
+def _drawdown_multiplier(portfolio_value):
+    try:
+        from trading.db.store import get_daily_pnl
+        pnl_data = get_daily_pnl(limit=90)
+        if not pnl_data:
+            return 1.0
+        peak = max(d.get("portfolio_value", 0) for d in pnl_data)
+        if peak <= 0:
+            return 1.0
+        drawdown = (peak - portfolio_value) / peak
+        if drawdown <= 0.05: return 1.0
+        elif drawdown <= 0.10: return 0.75
+        elif drawdown <= 0.15: return 0.5
+        elif drawdown <= 0.20: return 0.25
+        else: return 0.0  # halt
+    except Exception:
+        return 1.0
+
+
+# ---------------------------------------------------------------------------
 # Main sizing function
 # ---------------------------------------------------------------------------
 
@@ -438,6 +488,23 @@ def calculate_order_size(
     else:
         volume_mult = 1.0
 
+    # --- Correlation group penalty ---
+    corr_mult = _correlation_group_multiplier(signal, positions, portfolio_value)
+    dd_mult = _drawdown_multiplier(portfolio_value)
+    order_value *= corr_mult * dd_mult
+
+    # --- Liquidation-aware sizing ---
+    leverage = 1
+    if hasattr(signal, 'data') and isinstance(signal.data, dict):
+        leverage = signal.data.get("leverage", 1)
+    if leverage > 1:
+        liq_distance = 1.0 / leverage
+        buffer_required = liq_distance * 0.8  # 20% buffer
+        # Reduce size if stop would be within liquidation zone
+        if order_value > 0 and buffer_required > 0:
+            max_safe_size = order_value * min(1.0, buffer_required / 0.07)
+            order_value = min(order_value, max_safe_size)
+
     # Hard cap
     order_value = min(order_value, max_per_position)
 
@@ -447,10 +514,10 @@ def calculate_order_size(
 
     log.info(
         "Dynamic sizing %s %s: base=$%.0f × confluence=%.1f × regime=%.2f "
-        "× perf=%.2f × vol=%.1f × volume=%.2f × strength=%.2f → $%.2f",
+        "× perf=%.2f × vol=%.1f × volume=%.2f × corr=%.2f × dd=%.2f × strength=%.2f → $%.2f",
         signal.action, signal.symbol, per_signal,
         confluence_mult, regime_mult, perf_mult, vol_mult, volume_mult,
-        signal.strength, order_value,
+        corr_mult, dd_mult, signal.strength, order_value,
     )
 
     return round(order_value, 2)

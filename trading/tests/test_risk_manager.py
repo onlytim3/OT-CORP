@@ -124,7 +124,10 @@ class TestCorrelationGroup(unittest.TestCase):
         ]
         with patch("trading.risk.manager.get_positions", return_value=existing), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=[]):
+             patch("trading.risk.manager.get_trades", return_value=[]), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("LTC/USD", "buy"), 10000)
         self.assertFalse(result.allowed)
         self.assertIn("correlated", result.reason.lower())
@@ -134,13 +137,16 @@ class TestCashReserve(unittest.TestCase):
     def test_cash_reserve_enforced(self):
         rm = RiskManager(100000, account={
             "trading_blocked": False, "status": "ACTIVE",
-            "buying_power": 15000, "cash": 15000,
+            "buying_power": 8000, "cash": 8000,
         })
-        # 15K cash, min reserve = 10K, buying 8K would leave 7K < 10K
+        # 8K cash, min reserve = 5K (5% of 100K), buying 5K would leave 3K < 5K
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=[]):
-            result = rm.check_trade(_make_signal("BTC/USD", "buy"), 8000)
+             patch("trading.risk.manager.get_trades", return_value=[]), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
+            result = rm.check_trade(_make_signal("BTC/USD", "buy"), 5000)
         self.assertFalse(result.allowed)
         self.assertIn("cash", result.reason.lower())
 
@@ -149,7 +155,7 @@ class TestTradeCount(unittest.TestCase):
     def test_max_trades_per_day(self):
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        trades = [{"timestamp": f"{today}T{i:02d}:00:00"} for i in range(10)]
+        trades = [{"timestamp": f"{today}T{i:02d}:{j:02d}:00"} for i in range(24) for j in range(0, 60, 20)]  # 72 trades
 
         rm = RiskManager(100000, account={
             "trading_blocked": False, "status": "ACTIVE",
@@ -157,7 +163,10 @@ class TestTradeCount(unittest.TestCase):
         })
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=trades):
+             patch("trading.risk.manager.get_trades", return_value=trades), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("BTC/USD", "buy"), 5000)
         self.assertFalse(result.allowed)
         self.assertIn("trades today", result.reason.lower())

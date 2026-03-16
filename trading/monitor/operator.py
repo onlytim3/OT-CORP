@@ -444,6 +444,26 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
     if re.search(r"\b(search\s+knowledge|what\s+does\s+the\s+research|knowledge\s+base)\b", lower):
         return _read_knowledge_search(msg, lower)
 
+    # 21. Backtest command
+    if re.search(r"\bbacktest\b", lower):
+        return _intent_backtest(msg, lower)
+
+    # 22. What-if scenario analysis
+    if re.search(r"\bwhat\s+if\b", lower):
+        return _intent_what_if(msg, lower)
+
+    # 23. Portfolio rebalancing
+    if re.search(r"\brebalance\b", lower):
+        return _intent_rebalance(msg, lower)
+
+    # 24. Scheduled commands
+    if re.search(r"\b(schedule|every\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|hour))\b", lower):
+        return _intent_schedule_command(msg, lower)
+
+    # 25. Multi-step workflows (take profit, close losing, etc.)
+    if re.search(r"\b(take\s+profit|close\s+all|close\s+losing|close\s+winning|flatten)\b", lower):
+        return _intent_batch_workflow(msg, lower)
+
     # Not an operator message — fall through to chat.py
     return None
 
@@ -1588,6 +1608,557 @@ def _read_export_summary(msg: str, lower: str) -> dict:
                     f"{t.get('status', '')} |")
 
     return {"answer": "\n".join(lines)}
+
+
+# ============================================================================
+# PHASE 6: ADVANCED OPERATOR COMMANDS
+# ============================================================================
+
+def _intent_backtest(msg: str, lower: str) -> dict:
+    """Natural language backtesting: 'backtest kalman_trend on 90 days'."""
+    strategy = _extract_strategy_from_msg(msg)
+    if not strategy:
+        from trading.config import STRATEGY_ENABLED
+        return {"answer": "Please specify a strategy to backtest. "
+                         f"Available: {', '.join(sorted(STRATEGY_ENABLED.keys()))}"}
+
+    # Parse days
+    days = 30  # default
+    m = re.search(r"(\d+)\s*days?", lower)
+    if m:
+        days = int(m.group(1))
+    elif "3 months" in lower or "90" in lower:
+        days = 90
+    elif "6 months" in lower or "180" in lower:
+        days = 180
+    elif "1 year" in lower or "365" in lower:
+        days = 365
+
+    # Parse leverage override
+    leverage = None
+    m = re.search(r"(\d+)x\s*leverage", lower)
+    if m:
+        leverage = int(m.group(1))
+    elif re.search(r"with\s+(\d+)x", lower):
+        leverage = int(re.search(r"with\s+(\d+)x", lower).group(1))
+
+    desc = f"Backtest **{strategy}** over {days} days"
+    if leverage:
+        desc += f" with {leverage}x leverage"
+
+    def execute():
+        try:
+            from trading.backtest.engine import Backtester
+            bt = Backtester()
+            result = bt.run(strategy_name=strategy, days=days, leverage=leverage or 1)
+            if result:
+                total_return = result.get("total_return", 0)
+                sharpe = result.get("sharpe_ratio", 0)
+                max_dd = result.get("max_drawdown", 0)
+                win_rate = result.get("win_rate", 0)
+                trades = result.get("total_trades", 0)
+                lines = [f"**Backtest Results: {strategy}** ({days} days)\n"]
+                lines.append(f"- Return: {total_return:+.2f}%")
+                lines.append(f"- Sharpe Ratio: {sharpe:.2f}")
+                lines.append(f"- Max Drawdown: {max_dd:.2f}%")
+                lines.append(f"- Win Rate: {win_rate:.1f}%")
+                lines.append(f"- Total Trades: {trades}")
+                if leverage:
+                    lines.append(f"- Leverage: {leverage}x")
+                verdict = "ADOPT" if sharpe > 0.5 and win_rate > 50 and max_dd < 20 else \
+                          "REVIEW" if sharpe > 0 else "AVOID"
+                lines.append(f"\n**Verdict**: {verdict}")
+                return "\n".join(lines)
+            return f"Backtest for {strategy} completed but returned no data."
+        except ImportError:
+            return f"Backtester module not available. Cannot run backtest for {strategy}."
+        except Exception as e:
+            return f"Backtest failed: {e}"
+
+    return _queue_action("backtest", desc, execute)
+
+
+def _intent_what_if(msg: str, lower: str) -> dict:
+    """What-if scenario analysis: 'what if I disabled whale_flow'."""
+    from trading.db.store import get_db
+    from datetime import timedelta
+
+    strategy = _extract_strategy_from_msg(msg)
+
+    # "what if I disabled X" or "what if X was disabled"
+    if strategy and re.search(r"\b(disab|remov|without)\b", lower):
+        desc = f"What-if analysis: without **{strategy}** (last 30 days)"
+
+        def execute():
+            with get_db() as conn:
+                # Get all trades involving this strategy
+                trades = conn.execute(
+                    "SELECT * FROM trades WHERE strategy LIKE ? ORDER BY timestamp DESC",
+                    (f"%{strategy}%",)
+                ).fetchall()
+                trades = [dict(t) for t in trades]
+
+                if not trades:
+                    return f"No trades from **{strategy}** found. Impact would be zero."
+
+                total_value = sum(t.get("total", 0) for t in trades)
+                buy_count = sum(1 for t in trades if t.get("side") == "buy")
+                sell_count = len(trades) - buy_count
+
+                # Check signals that led to aggregated trades
+                signals_count = conn.execute(
+                    "SELECT COUNT(*) FROM signals WHERE strategy = ?", (strategy,)
+                ).fetchone()[0]
+
+                lines = [f"**What-If: Without {strategy}**\n"]
+                lines.append(f"In the last 30 days, **{strategy}** contributed to:")
+                lines.append(f"- {len(trades)} trades ({buy_count} buys, {sell_count} sells)")
+                lines.append(f"- ${total_value:,.2f} total traded volume")
+                lines.append(f"- {signals_count} signals generated")
+                lines.append(f"\n**Estimated impact**: Removing this strategy would have "
+                           f"eliminated {len(trades)} trades and ${total_value:,.2f} in volume.")
+                lines.append(f"\nNote: Aggregated signals from other strategies may have still "
+                           f"triggered some of these trades independently.")
+                return "\n".join(lines)
+
+        return _queue_action("what_if", desc, execute)
+
+    # "what if leverage was 5x on kalman"
+    if strategy and re.search(r"\b(\d+)x\b", lower):
+        lev_match = re.search(r"\b(\d+)x\b", lower)
+        leverage = int(lev_match.group(1)) if lev_match else 2
+
+        desc = f"What-if analysis: **{strategy}** with {leverage}x leverage"
+
+        def execute():
+            from trading.config import get_leverage
+            current_lev = get_leverage(strategy)
+            if current_lev == leverage:
+                return f"{strategy} is already at {leverage}x leverage."
+            ratio = leverage / max(current_lev, 1)
+            lines = [f"**What-If: {strategy} at {leverage}x (currently {current_lev}x)**\n"]
+            lines.append(f"- P&L impact: returns would scale by ~{ratio:.1f}x")
+            lines.append(f"- Risk impact: drawdowns would also scale by ~{ratio:.1f}x")
+            lines.append(f"- Liquidation risk: {'HIGHER' if leverage > 3 else 'moderate'}")
+            if leverage > 5:
+                lines.append(f"\n⚠️ {leverage}x leverage is extremely risky. "
+                           f"Liquidation distance would be only {100/leverage:.0f}%.")
+            return "\n".join(lines)
+
+        return _queue_action("what_if", desc, execute)
+
+    return {"answer": "What-if scenarios supported:\n"
+                     "- 'what if I disabled [strategy]'\n"
+                     "- 'what if [strategy] used 5x leverage'\n"
+                     "\nPlease specify a scenario."}
+
+
+def _intent_rebalance(msg: str, lower: str) -> dict:
+    """Portfolio rebalancing: 'rebalance to equal weight' or 'reduce meme exposure'."""
+    from trading.execution.router import get_positions_from_aster, get_account
+
+    positions = get_positions_from_aster()
+    if not positions:
+        return {"answer": "No open positions to rebalance."}
+
+    account = get_account()
+    portfolio_value = account.get("portfolio_value", 0)
+
+    if "equal" in lower or "even" in lower:
+        # Equal weight rebalancing
+        n = len(positions)
+        target_pct = 1.0 / n if n > 0 else 0
+        target_value = portfolio_value * target_pct
+
+        lines = [f"**Rebalance to Equal Weight** ({n} positions)\n"]
+        trades_needed = []
+        for p in positions:
+            current_value = abs(p.get("market_value", 0))
+            diff = target_value - current_value
+            diff_pct = (diff / current_value * 100) if current_value else 0
+            symbol = p.get("symbol", "?")
+            action = "BUY" if diff > 0 else "SELL"
+            lines.append(f"- {symbol}: ${current_value:,.2f} → ${target_value:,.2f} "
+                        f"({action} ${abs(diff):,.2f}, {diff_pct:+.0f}%)")
+            if abs(diff) > 10:  # Only if > $10
+                trades_needed.append({"symbol": symbol, "action": action, "amount": abs(diff)})
+
+        desc = "\n".join(lines)
+
+        def execute():
+            from trading.db.store import log_action
+            log_action("operator", "rebalance_preview",
+                      details=f"Equal weight rebalance preview: {len(trades_needed)} trades needed")
+            result_lines = [f"**Rebalance Preview** — {len(trades_needed)} trades needed:\n"]
+            for t in trades_needed:
+                result_lines.append(f"- {t['action']} ${t['amount']:,.2f} of {t['symbol']}")
+            result_lines.append(f"\n⚠️ To execute, manually submit each trade or say "
+                              f"'close [symbol]' / 'reduce [symbol] by X%' for each.")
+            return "\n".join(result_lines)
+
+        return _queue_action("rebalance", desc, execute)
+
+    # "reduce meme exposure" or "reduce crypto exposure"
+    if re.search(r"reduce\s+(\w+)\s+exposure", lower):
+        sector_match = re.search(r"reduce\s+(\w+)\s+exposure", lower)
+        sector = sector_match.group(1) if sector_match else ""
+        pct = _parse_percentage(msg) or 50
+
+        desc = f"Reduce **{sector}** exposure by {pct:.0f}%"
+
+        def execute():
+            # Find positions matching sector
+            sector_positions = []
+            sector_map = {
+                "meme": ["DOGE", "SHIB", "PEPE", "BONK", "WIF", "TRUMP"],
+                "l1": ["BTC", "ETH"],
+                "alt": ["SOL", "AVAX", "DOT", "LINK", "ADA", "NEAR"],
+                "defi": ["UNI", "AAVE", "INJ"],
+                "ai": ["FET", "RENDER", "TAO", "WLD"],
+            }
+            target_symbols = sector_map.get(sector.lower(), [])
+            if not target_symbols:
+                return f"Unknown sector '{sector}'. Available: {', '.join(sector_map.keys())}"
+
+            for p in positions:
+                sym = p.get("symbol", "").replace("USDT", "").replace("USD", "").replace("/", "")
+                if sym in target_symbols:
+                    sector_positions.append(p)
+
+            if not sector_positions:
+                return f"No positions in the '{sector}' sector."
+
+            lines = [f"**Reduce {sector} Exposure by {pct:.0f}%**\n"]
+            for p in sector_positions:
+                current_value = abs(p.get("market_value", 0))
+                reduce_value = current_value * (pct / 100)
+                lines.append(f"- {p.get('symbol', '?')}: reduce ${reduce_value:,.2f} of ${current_value:,.2f}")
+
+            lines.append(f"\n⚠️ Use 'reduce [symbol] by {pct:.0f}%' for each to execute.")
+            return "\n".join(lines)
+
+        return _queue_action("rebalance", desc, execute)
+
+    return {"answer": "Rebalance options:\n"
+                     "- 'rebalance to equal weight'\n"
+                     "- 'reduce meme exposure by 50%'\n"
+                     "- 'reduce alt exposure'"}
+
+
+def _intent_schedule_command(msg: str, lower: str) -> dict:
+    """Schedule recurring commands: 'disable meme_momentum every Friday at 4pm'."""
+    from trading.db.store import get_db, log_action
+
+    # Parse the command to schedule
+    command = None
+    schedule_spec = None
+
+    # Pattern: "schedule [command] every [time]"
+    m = re.search(r"schedule\s+(.+?)\s+every\s+(.+)", lower)
+    if m:
+        command = m.group(1).strip()
+        schedule_spec = m.group(2).strip()
+    else:
+        # Pattern: "[command] every [time]"
+        m = re.search(r"(.+?)\s+every\s+(.+)", lower)
+        if m:
+            command = m.group(1).strip()
+            schedule_spec = m.group(2).strip()
+
+    if not command or not schedule_spec:
+        # List existing scheduled commands
+        try:
+            with get_db() as conn:
+                conn.execute("""CREATE TABLE IF NOT EXISTS scheduled_commands (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    command TEXT NOT NULL,
+                    schedule TEXT NOT NULL,
+                    next_run TEXT,
+                    created_at TEXT NOT NULL,
+                    active INTEGER DEFAULT 1
+                )""")
+                existing = conn.execute(
+                    "SELECT * FROM scheduled_commands WHERE active = 1 ORDER BY created_at DESC"
+                ).fetchall()
+                if existing:
+                    lines = ["**Scheduled Commands:**\n"]
+                    for sc in existing:
+                        sc = dict(sc)
+                        lines.append(f"- #{sc['id']}: '{sc['command']}' — every {sc['schedule']} "
+                                   f"(next: {sc.get('next_run', '?')[:16]})")
+                    return {"answer": "\n".join(lines)}
+        except Exception:
+            pass
+        return {"answer": "No scheduled commands found.\n\n"
+                         "Examples:\n"
+                         "- 'disable meme_momentum every friday'\n"
+                         "- 'schedule run cycle every 4 hours'\n"
+                         "- 'enable kalman_trend every monday'"}
+
+    desc = f"Schedule: '{command}' every {schedule_spec}"
+
+    def execute():
+        now = datetime.now(timezone.utc)
+        # Compute next_run based on schedule_spec
+        next_run = now + timedelta(hours=1)  # default
+
+        day_names = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                     "friday": 4, "saturday": 5, "sunday": 6}
+        for day_name, day_num in day_names.items():
+            if day_name in schedule_spec:
+                days_ahead = (day_num - now.weekday()) % 7
+                if days_ahead == 0:
+                    days_ahead = 7
+                next_run = now + timedelta(days=days_ahead)
+                break
+
+        hour_match = re.search(r"(\d+)\s*hours?", schedule_spec)
+        if hour_match:
+            next_run = now + timedelta(hours=int(hour_match.group(1)))
+
+        day_match = re.search(r"(\d+)\s*days?", schedule_spec)
+        if day_match:
+            next_run = now + timedelta(days=int(day_match.group(1)))
+
+        with get_db() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS scheduled_commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                command TEXT NOT NULL,
+                schedule TEXT NOT NULL,
+                next_run TEXT,
+                created_at TEXT NOT NULL,
+                active INTEGER DEFAULT 1
+            )""")
+            conn.execute(
+                "INSERT INTO scheduled_commands (command, schedule, next_run, created_at) VALUES (?,?,?,?)",
+                (command, schedule_spec, next_run.isoformat(), now.isoformat())
+            )
+        log_action("operator", "schedule_command",
+                  details=f"Scheduled '{command}' every {schedule_spec}")
+        return f"Scheduled: **{command}** will run every **{schedule_spec}**.\nNext run: {next_run.strftime('%Y-%m-%d %H:%M UTC')}"
+
+    return _queue_action("schedule_command", desc, execute)
+
+
+def _intent_batch_workflow(msg: str, lower: str) -> dict:
+    """Multi-step workflows: 'take profit on all positions up >5%', 'close all losing positions'."""
+    from trading.execution.router import get_positions_from_aster
+    from trading.db.store import log_action
+
+    positions = get_positions_from_aster()
+    if not positions:
+        return {"answer": "No open positions."}
+
+    # "take profit on all positions up >X%"
+    if "take profit" in lower or "tp" in lower:
+        pct = _parse_percentage(msg) or 5.0
+
+        profitable = []
+        for p in positions:
+            pnl_pct = (p.get("unrealized_pnlpc", 0) or 0) * 100
+            if pnl_pct > pct:
+                profitable.append(p)
+
+        if not profitable:
+            return {"answer": f"No positions with unrealized P&L > {pct:.0f}%."}
+
+        lines = [f"**Take Profit: {len(profitable)} positions up >{pct:.0f}%**\n"]
+        for p in profitable:
+            pnl_pct = (p.get("unrealized_pnlpc", 0) or 0) * 100
+            pnl_usd = p.get("unrealized_pnl", 0)
+            lines.append(f"- {p.get('symbol', '?')}: {pnl_pct:+.1f}% (${pnl_usd:+,.2f})")
+        desc = "\n".join(lines)
+
+        def execute():
+            results = []
+            for p in profitable:
+                try:
+                    from trading.execution.router import close_position
+                    symbol = p.get("symbol", "")
+                    # Convert to internal format
+                    sym_internal = symbol.replace("USDT", "/USD")
+                    if "/" not in sym_internal:
+                        sym_internal = symbol + "/USD"
+                    result = close_position(sym_internal)
+                    results.append(f"✓ Closed {symbol}")
+                    log_action("operator", "take_profit", symbol=symbol,
+                              details=f"Take profit at {(p.get('unrealized_pnlpc', 0) or 0) * 100:+.1f}%")
+                except Exception as e:
+                    results.append(f"✗ Failed to close {p.get('symbol', '?')}: {e}")
+            return f"**Take Profit Results:**\n" + "\n".join(results)
+
+        return _queue_action("take_profit", desc, execute,
+                           warning=f"This will close {len(profitable)} positions!")
+
+    # "close all losing positions" or "close all losing"
+    if "losing" in lower or "red" in lower:
+        losing = []
+        for p in positions:
+            pnl_pct = (p.get("unrealized_pnlpc", 0) or 0) * 100
+            if pnl_pct < 0:
+                losing.append(p)
+
+        if not losing:
+            return {"answer": "No losing positions found."}
+
+        lines = [f"**Close All Losing: {len(losing)} positions**\n"]
+        total_loss = 0
+        for p in losing:
+            pnl_pct = (p.get("unrealized_pnlpc", 0) or 0) * 100
+            pnl_usd = p.get("unrealized_pnl", 0)
+            total_loss += pnl_usd
+            lines.append(f"- {p.get('symbol', '?')}: {pnl_pct:+.1f}% (${pnl_usd:+,.2f})")
+        lines.append(f"\nTotal unrealized loss: ${total_loss:+,.2f}")
+        desc = "\n".join(lines)
+
+        def execute():
+            results = []
+            for p in losing:
+                try:
+                    from trading.execution.router import close_position
+                    symbol = p.get("symbol", "")
+                    sym_internal = symbol.replace("USDT", "/USD")
+                    if "/" not in sym_internal:
+                        sym_internal = symbol + "/USD"
+                    result = close_position(sym_internal)
+                    results.append(f"✓ Closed {symbol}")
+                    log_action("operator", "close_losing", symbol=symbol,
+                              details=f"Closed losing position at {(p.get('unrealized_pnlpc', 0) or 0) * 100:+.1f}%")
+                except Exception as e:
+                    results.append(f"✗ Failed to close {p.get('symbol', '?')}: {e}")
+            return f"**Close Losing Results:**\n" + "\n".join(results)
+
+        return _queue_action("close_losing", desc, execute,
+                           warning=f"This will close {len(losing)} losing positions, "
+                                  f"realizing ${total_loss:+,.2f} in losses!")
+
+    # "close all" or "flatten"
+    if "close all" in lower or "flatten" in lower:
+        lines = [f"**Flatten All: {len(positions)} positions**\n"]
+        total_pnl = 0
+        for p in positions:
+            pnl_usd = p.get("unrealized_pnl", 0)
+            total_pnl += pnl_usd
+            lines.append(f"- {p.get('symbol', '?')}: ${p.get('market_value', 0):,.2f} "
+                        f"(P&L: ${pnl_usd:+,.2f})")
+        lines.append(f"\nTotal unrealized P&L: ${total_pnl:+,.2f}")
+        desc = "\n".join(lines)
+
+        def execute():
+            results = []
+            for p in positions:
+                try:
+                    from trading.execution.router import close_position
+                    symbol = p.get("symbol", "")
+                    sym_internal = symbol.replace("USDT", "/USD")
+                    if "/" not in sym_internal:
+                        sym_internal = symbol + "/USD"
+                    result = close_position(sym_internal)
+                    results.append(f"✓ Closed {symbol}")
+                    log_action("operator", "flatten", symbol=symbol,
+                              details=f"Flattened position")
+                except Exception as e:
+                    results.append(f"✗ Failed to close {p.get('symbol', '?')}: {e}")
+            return f"**Flatten Results:**\n" + "\n".join(results)
+
+        return _queue_action("flatten", desc, execute,
+                           warning=f"This will close ALL {len(positions)} positions!")
+
+    # "close winning" positions
+    if "winning" in lower or "green" in lower:
+        winning = [p for p in positions if (p.get("unrealized_pnlpc", 0) or 0) > 0]
+        if not winning:
+            return {"answer": "No winning positions found."}
+
+        lines = [f"**Close All Winning: {len(winning)} positions**\n"]
+        total_gain = 0
+        for p in winning:
+            pnl_pct = (p.get("unrealized_pnlpc", 0) or 0) * 100
+            pnl_usd = p.get("unrealized_pnl", 0)
+            total_gain += pnl_usd
+            lines.append(f"- {p.get('symbol', '?')}: {pnl_pct:+.1f}% (${pnl_usd:+,.2f})")
+        desc = "\n".join(lines)
+
+        def execute():
+            results = []
+            for p in winning:
+                try:
+                    from trading.execution.router import close_position
+                    symbol = p.get("symbol", "")
+                    sym_internal = symbol.replace("USDT", "/USD")
+                    if "/" not in sym_internal:
+                        sym_internal = symbol + "/USD"
+                    result = close_position(sym_internal)
+                    results.append(f"✓ Closed {symbol}")
+                    log_action("operator", "close_winning", symbol=symbol,
+                              details=f"Closed winning position at {(p.get('unrealized_pnlpc', 0) or 0) * 100:+.1f}%")
+                except Exception as e:
+                    results.append(f"✗ Failed to close {p.get('symbol', '?')}: {e}")
+            return f"**Close Winning Results:**\n" + "\n".join(results)
+
+        return _queue_action("close_winning", desc, execute,
+                           warning=f"This will close {len(winning)} winning positions!")
+
+    return {"answer": "Batch workflow options:\n"
+                     "- 'take profit on positions up >5%'\n"
+                     "- 'close all losing positions'\n"
+                     "- 'close all winning positions'\n"
+                     "- 'flatten' (close everything)"}
+
+
+def check_scheduled_commands():
+    """Check and execute due scheduled commands. Called each cycle from operator_hooks."""
+    from trading.db.store import get_db, log_action
+
+    try:
+        now = datetime.now(timezone.utc)
+        with get_db() as conn:
+            try:
+                due = conn.execute(
+                    "SELECT * FROM scheduled_commands WHERE active = 1 AND next_run <= ?",
+                    (now.isoformat(),)
+                ).fetchall()
+            except Exception:
+                return  # Table doesn't exist yet
+
+            for sc in due:
+                sc = dict(sc)
+                command = sc["command"]
+                schedule = sc["schedule"]
+
+                # Execute the command through operator
+                try:
+                    result = handle_operator_message(command)
+                    if result and result.get("confirm"):
+                        # Auto-confirm scheduled commands
+                        action_id = result["confirm"]["action_id"]
+                        _execute_confirmed(action_id)
+                    log_action("operator", "scheduled_execution",
+                              details=f"Executed scheduled: '{command}'")
+                except Exception as e:
+                    log.warning(f"Scheduled command failed: {command} — {e}")
+
+                # Compute next run
+                next_run = now + timedelta(hours=24)  # default daily
+                day_names = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                             "friday": 4, "saturday": 5, "sunday": 6}
+                for day_name, day_num in day_names.items():
+                    if day_name in schedule:
+                        days_ahead = (day_num - now.weekday()) % 7
+                        if days_ahead == 0:
+                            days_ahead = 7
+                        next_run = now + timedelta(days=days_ahead)
+                        break
+                hour_match = re.search(r"(\d+)\s*hours?", schedule)
+                if hour_match:
+                    next_run = now + timedelta(hours=int(hour_match.group(1)))
+
+                conn.execute(
+                    "UPDATE scheduled_commands SET next_run = ? WHERE id = ?",
+                    (next_run.isoformat(), sc["id"])
+                )
+    except Exception as e:
+        log.warning(f"Scheduled commands check failed: {e}")
 
 
 def _read_knowledge_search(msg: str, lower: str) -> dict:

@@ -5,6 +5,7 @@ v2: Adds correlation limits, crypto exposure cap, trading_blocked check,
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -38,6 +39,24 @@ LEVERAGE_FACTORS: dict[str, float] = {
     "UGL": 2.0,   # 2x Gold
     "AGQ": 2.0,   # 2x Silver
 }
+
+# Asset classification for sector exposure limits
+CRYPTO_L1 = {"BTC", "ETH", "BTCUSDT", "ETHUSDT"}
+CRYPTO_ALTS = {"SOL", "AVAX", "DOT", "LINK", "SOLUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"}
+CRYPTO_MEME = {"DOGE", "SHIB", "PEPE", "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "BONK", "BONKUSDT", "WIF", "WIFUSDT"}
+STOCK_PERPS = {"AAPL", "TSLA", "NVDA", "GOOGL", "MSFT", "AMZN", "META"}
+COMMODITY_PERPS = {"GOLD", "SILVER", "OIL", "XAUUSDT"}
+
+SECTOR_LIMITS = {"l1": 0.50, "alts": 0.20, "defi": 0.25, "meme": 0.10, "stocks": 0.20, "commodities": 0.15}
+
+def _get_asset_sector(symbol: str) -> str:
+    sym = symbol.upper().replace("USDT","").replace("USD","").replace("/","")
+    if sym in {"BTC","ETH"}: return "l1"
+    if sym in {"SOL","AVAX","DOT","LINK","ADA","NEAR","SUI","APT"}: return "alts"
+    if sym in {"DOGE","SHIB","PEPE","BONK","WIF","TRUMP"}: return "meme"
+    if sym in {"AAPL","TSLA","NVDA","GOOGL","MSFT","AMZN","META"}: return "stocks"
+    if sym in {"GOLD","SILVER","OIL","XAU","XAG"}: return "commodities"
+    return "other"
 
 # Reverse lookup: symbol → group name
 _SYMBOL_TO_GROUP: dict[str, str] = {}
@@ -85,6 +104,8 @@ class RiskManager:
             self._check_max_drawdown(),
             self._check_cash_reserve(order_value, positions),
             self._check_trade_count(),
+            self._check_total_leverage_risk(signal, order_value),
+            self._check_sector_exposure(signal, order_value),
         ]
         for check in checks:
             if not check.allowed:
@@ -374,6 +395,55 @@ class RiskManager:
         return RiskCheck(allowed=True, reason="Trade count OK", signal=Signal("risk", "", "hold", 0, ""))
 
     # ------------------------------------------------------------------
+    # Leverage & sector checks
+    # ------------------------------------------------------------------
+
+    def _check_total_leverage_risk(self, signal: Signal, order_value: float) -> RiskCheck:
+        """Cap aggregate portfolio leverage at 5x."""
+        new_leverage = 1
+        if signal.data and isinstance(signal.data, dict):
+            new_leverage = signal.data.get("leverage", 1)
+        total_notional = order_value * new_leverage
+        # Add existing positions' leveraged exposure
+        try:
+            from trading.execution.router import get_positions_from_aster
+            for pos in get_positions_from_aster():
+                pos_lev = pos.get("leverage", 1)
+                total_notional += abs(pos.get("market_value", 0)) * pos_lev
+        except Exception:
+            pass
+        if self.portfolio_value > 0 and total_notional / self.portfolio_value > 5.0:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Total leverage {total_notional/self.portfolio_value:.1f}x exceeds 5x cap",
+                signal=signal,
+            )
+        return RiskCheck(allowed=True, reason="Total leverage OK", signal=signal)
+
+    def _check_sector_exposure(self, signal: Signal, order_value: float) -> RiskCheck:
+        """Check sector exposure limits."""
+        sector = _get_asset_sector(signal.symbol)
+        if sector == "other":
+            return RiskCheck(allowed=True, reason="No sector limit", signal=signal)
+        limit = SECTOR_LIMITS.get(sector, 1.0)
+        # Sum existing exposure in same sector
+        sector_exposure = order_value
+        try:
+            from trading.execution.router import get_positions_from_aster
+            for pos in get_positions_from_aster():
+                if _get_asset_sector(pos.get("symbol", "")) == sector:
+                    sector_exposure += abs(pos.get("market_value", 0))
+        except Exception:
+            pass
+        if self.portfolio_value > 0 and sector_exposure / self.portfolio_value > limit:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Sector '{sector}' exposure {sector_exposure/self.portfolio_value:.1%} exceeds {limit:.0%} limit",
+                signal=signal,
+            )
+        return RiskCheck(allowed=True, reason=f"Sector '{sector}' exposure OK", signal=signal)
+
+    # ------------------------------------------------------------------
     # Stop-loss check (unchanged API, uses RISK config)
     # ------------------------------------------------------------------
 
@@ -443,27 +513,44 @@ def compute_trade_targets(
     entry_price: float,
     order_value: float,
     signal_strength: float = 0.5,
+    leverage: int = 1,
 ) -> TradeTargets:
     """Compute stop loss and take profit targets before entering a trade.
 
-    The SL is based on RISK['stop_loss_pct'] with adjustments for:
+    The SL is ATR-based when data is available, with fallback to RISK['stop_loss_pct'].
+    Adjustments for:
+      - ATR volatility (2x ATR as base stop distance)
       - Leveraged ETFs (tighter SL to account for amplified moves)
       - Signal strength (stronger signals get slightly wider stops)
+      - Leverage (tighter stops to avoid liquidation)
 
     The TP uses profit_manager.TAKE_PROFIT_PCT with a minimum 2:1 R:R ratio.
     """
     base_sl_pct = RISK["stop_loss_pct"]
-    leverage = LEVERAGE_FACTORS.get(symbol, 1.0)
+    etf_leverage = LEVERAGE_FACTORS.get(symbol, 1.0)
+
+    # Try ATR-based stop distance
+    try:
+        from trading.strategy.indicators import atr
+        atr_value = atr(symbol)
+        if atr_value and entry_price > 0:
+            base_sl_pct = (2.0 * atr_value) / entry_price
+    except Exception:
+        pass  # Fall back to config-based stop
 
     # Tighter stops for leveraged instruments (their moves are amplified)
-    effective_sl_pct = base_sl_pct / leverage
+    effective_sl_pct = base_sl_pct / etf_leverage
+
+    # Adjust for trade leverage — tighter stops to preserve margin
+    if leverage > 1:
+        effective_sl_pct /= math.sqrt(leverage)
 
     # Strong signals get slightly wider stops (up to +20% wider)
     strength_adj = 1.0 + (signal_strength - 0.5) * 0.4  # 0.8x to 1.2x
     effective_sl_pct *= strength_adj
 
-    # Clamp SL between 3% and 15%
-    effective_sl_pct = max(0.03, min(effective_sl_pct, 0.15))
+    # Clamp SL between 1.5% and 15%
+    effective_sl_pct = max(0.015, min(effective_sl_pct, 0.15))
 
     # Take profit — at least 2:1 reward-to-risk ratio
     base_tp_pct = TAKE_PROFIT_PCT

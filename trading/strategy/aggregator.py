@@ -17,13 +17,17 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from rich.console import Console
 from rich.table import Table
 
 from trading.db.store import log_action
 from trading.strategy.base import Signal
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Exposure / piling-in guardrails
@@ -147,6 +151,74 @@ def _get_strategy_weight(strategy_name: str) -> float:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _apply_signal_decay(signals: list[Signal], cycle_interval_hours: float = 4.0) -> list[Signal]:
+    """Apply time-based decay to signals. Discard signals older than 3 cycle intervals."""
+    now = datetime.now(timezone.utc)
+    max_age_hours = cycle_interval_hours * 3
+    result = []
+    for sig in signals:
+        age_hours = 0.0
+        if hasattr(sig, 'data') and isinstance(sig.data, dict) and sig.data.get('timestamp'):
+            try:
+                sig_time = datetime.fromisoformat(str(sig.data['timestamp']))
+                age_hours = (now - sig_time).total_seconds() / 3600
+            except Exception:
+                pass
+        if age_hours > max_age_hours:
+            continue  # Discard stale signals
+        if age_hours > 0:
+            decay = max(0.0, 1.0 - age_hours / max_age_hours)
+            sig = Signal(
+                strategy=sig.strategy, symbol=sig.symbol, action=sig.action,
+                strength=round(sig.strength * decay, 4),
+                reason=sig.reason, data=sig.data,
+            )
+        result.append(sig)
+    return result
+
+
+def _compute_diversity_bonus(signals: list[Signal]) -> float:
+    """Compute diversity bonus based on distinct correlation groups.
+    3+ groups -> 1.15x, 2 groups -> 1.05x, 1 group -> 1.0x"""
+    groups = set()
+    for sig in signals:
+        group = _STRATEGY_TO_GROUP.get(sig.strategy, sig.strategy)
+        groups.add(group)
+    n = len(groups)
+    if n >= 3:
+        return 1.15
+    elif n >= 2:
+        return 1.05
+    return 1.0
+
+
+def _apply_multi_timeframe_confirmation(signal: Signal) -> Signal:
+    """Adjust signal strength based on daily 20-SMA trend confirmation."""
+    try:
+        from trading.strategy.indicators import sma
+        from trading.execution.aster_client import get_aster_klines
+        klines = get_aster_klines(signal.symbol.replace("/", ""), interval="1d", limit=25)
+        if klines and len(klines) >= 20:
+            closes = [float(k[4]) for k in klines]
+            sma_20 = sum(closes[-20:]) / 20
+            current = closes[-1]
+            if signal.action == "buy":
+                mult = 1.10 if current > sma_20 else 0.80
+            elif signal.action == "sell":
+                mult = 1.10 if current < sma_20 else 0.80
+            else:
+                return signal
+            return Signal(
+                strategy=signal.strategy, symbol=signal.symbol, action=signal.action,
+                strength=round(min(signal.strength * mult, 1.0), 4),
+                reason=signal.reason + f" [MTF: {'aligned' if mult > 1 else 'misaligned'}]",
+                data=signal.data,
+            )
+    except Exception:
+        pass
+    return signal
+
+
 def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     """Aggregate raw signals from every strategy into one signal per symbol.
 
@@ -165,6 +237,9 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
         List of deduplicated, consolidated Signal objects — at most one per
         symbol, ready for downstream position-sizing and risk checks.
     """
+    # Phase 3.3: Apply signal decay before filtering
+    all_signals = _apply_signal_decay(all_signals)
+
     actionable = [s for s in all_signals if s.is_actionable]
 
     if not actionable:
@@ -198,6 +273,23 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
             result = _merge_agreement(signals)
 
         consolidated.append(result)
+
+    # Phase 3.4: Apply diversity bonus to each consolidated signal
+    for i, sig in enumerate(consolidated):
+        contributing = by_symbol.get(sig.symbol, [])
+        bonus = _compute_diversity_bonus(contributing)
+        if bonus > 1.0 and sig.action in ("buy", "sell"):
+            consolidated[i] = Signal(
+                strategy=sig.strategy, symbol=sig.symbol, action=sig.action,
+                strength=round(min(sig.strength * bonus, 1.0), 4),
+                reason=sig.reason + f" [diversity: {bonus:.2f}x]",
+                data=sig.data,
+            )
+
+    # Phase 4.5: Multi-timeframe confirmation
+    for i, sig in enumerate(consolidated):
+        if sig.action in ("buy", "sell"):
+            consolidated[i] = _apply_multi_timeframe_confirmation(sig)
 
     # Log aggregation summary
     _log_aggregation(all_signals, actionable, consolidated)

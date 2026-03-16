@@ -2,13 +2,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Badge } from "../components/ui/badge";
 import { MetricCard } from "../components/MetricCard";
-import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw } from "lucide-react";
+import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart } from "lucide-react";
 import { useState } from "react";
-import { api, usePolling, isUsingMockData, type StatusResponse, type ActionItem } from "../config/api";
+import { api, usePolling, isUsingMockData, type StatusResponse, type ActionItem, type AggregatedLeverage, type SectorExposure } from "../config/api";
 
 export function Overview() {
   const { data: status, loading } = usePolling<StatusResponse>(api.status, 10000);
   const { data: actions } = usePolling<ActionItem[]>(api.actions, 15000);
+  const { data: leverageData } = usePolling<AggregatedLeverage>(api.leverage, 15000);
+  const { data: sectors } = usePolling<SectorExposure[]>(api.sectors, 30000);
   const [selectedPosition, setSelectedPosition] = useState<StatusResponse['positions'][0] | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<ActionItem | null>(null);
 
@@ -82,6 +84,92 @@ export function Overview() {
         />
         <MetricCard title="Open Positions" value={summary?.open_positions ?? positions.length} icon={Activity} iconColor="text-[#4a9eff]" />
         <MetricCard title="Active Strategies" value={summary?.active_strategies ?? 0} icon={Layers} iconColor="text-[#c0c0c0]" />
+      </div>
+
+      {/* Aggregate Leverage & Sector Exposure */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Aggregate Leverage Gauge */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Gauge className="size-5 text-[#ffa500]" />
+              Aggregate Leverage
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              const lev = leverageData?.aggregate_leverage ?? 0;
+              const levColor = lev < 2 ? '#00d4aa' : lev < 4 ? '#ffa500' : '#ff4466';
+              const levLabel = lev < 2 ? 'Conservative' : lev < 4 ? 'Moderate' : 'Aggressive';
+              return (
+                <div className="flex flex-col items-center gap-4 py-4">
+                  <div className="relative size-32">
+                    <svg viewBox="0 0 100 60" className="w-full">
+                      <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="8" strokeLinecap="round" />
+                      <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke={levColor} strokeWidth="8" strokeLinecap="round"
+                        strokeDasharray={`${Math.min((lev / 6) * 126, 126)} 126`} />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-end pb-1">
+                      <p className="text-3xl font-bold text-[#e8e8e8]">{lev.toFixed(1)}x</p>
+                    </div>
+                  </div>
+                  <p className="text-sm font-medium" style={{ color: levColor }}>{levLabel}</p>
+                  <div className="grid grid-cols-2 gap-4 w-full text-sm">
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                      <p className="text-xs text-[#888888]">Total Notional</p>
+                      <p className="font-medium text-[#e8e8e8]">${(leverageData?.total_notional ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                      <p className="text-xs text-[#888888]">Portfolio Value</p>
+                      <p className="font-medium text-[#e8e8e8]">${(leverageData?.portfolio_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+
+        {/* Sector Exposure */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <PieChart className="size-5 text-[#4a9eff]" />
+              Sector Exposure
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(!sectors || sectors.length === 0) ? (
+              <p className="text-[#888888] text-center py-8">No sector data available</p>
+            ) : (
+              <div className="space-y-3">
+                {sectors.map((s) => {
+                  const isOverLimit = s.exposure_pct > s.limit_pct;
+                  const barColor = isOverLimit ? '#ff4466' : s.exposure_pct > s.limit_pct * 0.8 ? '#ffa500' : '#4a9eff';
+                  return (
+                    <div key={s.sector} className="space-y-1">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-[#e8e8e8] font-medium">{s.sector}</span>
+                        <div className="flex items-center gap-2">
+                          <span style={{ color: barColor }} className="font-medium">{s.exposure_pct.toFixed(1)}%</span>
+                          <span className="text-[#888888] text-xs">/ {s.limit_pct.toFixed(0)}% limit</span>
+                          {isOverLimit && <Badge variant="destructive" className="text-[10px] px-1.5 py-0">OVER</Badge>}
+                        </div>
+                      </div>
+                      <div className="h-2 bg-white/5 rounded-full overflow-hidden relative">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(s.exposure_pct, 100)}%`, backgroundColor: barColor, opacity: 0.8 }} />
+                        {s.limit_pct < 100 && (
+                          <div className="absolute top-0 h-full w-0.5 bg-white/30" style={{ left: `${s.limit_pct}%` }} />
+                        )}
+                      </div>
+                      <p className="text-xs text-[#888888]">{s.positions.join(', ')}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Positions Table */}
