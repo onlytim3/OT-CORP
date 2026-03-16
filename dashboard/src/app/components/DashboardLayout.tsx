@@ -1,18 +1,62 @@
 import { Outlet, Link, useLocation } from "react-router";
-import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle } from "lucide-react";
+import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown } from "lucide-react";
 import { cn } from "./ui/utils";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ChatPanel } from "./ChatPanel";
 import { api, usePolling, fetchAPI } from "../config/api";
+
+type ProfileKey = 'conservative' | 'moderate' | 'aggressive' | 'greedy';
+
+const PROFILE_CONFIG: Record<ProfileKey, { label: string; icon: typeof Shield; color: string; short: string }> = {
+  conservative: { label: 'Conservative', icon: Shield, color: '#00d4aa', short: 'SAFE' },
+  moderate: { label: 'Moderate', icon: BarChart3, color: '#4a9eff', short: 'MOD' },
+  aggressive: { label: 'Aggressive', icon: Flame, color: '#ffa500', short: 'AGG' },
+  greedy: { label: 'Greedy', icon: Zap, color: '#ff4466', short: 'MAX' },
+};
 
 export function DashboardLayout() {
   const location = useLocation();
   const [chatOpen, setChatOpen] = useState(false);
   const [showModeConfirm, setShowModeConfirm] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showGreedyConfirm, setShowGreedyConfirm] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
   const { data: modeData, refresh: refreshMode } = usePolling<{ mode: string }>(api.mode, 30000);
+  const { data: profileData, refresh: refreshProfile } = usePolling<{ profile: string }>(api.profile, 30000);
 
   const mode = modeData?.mode || 'paper';
+  const profile = (profileData?.profile || 'aggressive') as ProfileKey;
+  const profileInfo = PROFILE_CONFIG[profile] || PROFILE_CONFIG.aggressive;
+
+  // Close profile menu on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setShowProfileMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const switchProfile = async (target: ProfileKey) => {
+    if (target === profile) { setShowProfileMenu(false); return; }
+    if (target === 'greedy') { setShowGreedyConfirm(true); setShowProfileMenu(false); return; }
+    setSwitching(true);
+    try {
+      await fetchAPI(api.profile, { method: 'POST', body: JSON.stringify({ profile: target }) });
+      refreshProfile();
+    } catch { /* ignore */ } finally { setSwitching(false); setShowProfileMenu(false); }
+  };
+
+  const confirmGreedy = async () => {
+    setSwitching(true);
+    try {
+      await fetchAPI(api.profile, { method: 'POST', body: JSON.stringify({ profile: 'greedy', confirm: true }) });
+      refreshProfile();
+    } catch { /* ignore */ } finally { setSwitching(false); setShowGreedyConfirm(false); }
+  };
 
   const switchMode = async () => {
     const target = mode === 'paper' ? 'live' : 'paper';
@@ -74,13 +118,66 @@ export function DashboardLayout() {
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {/* Profile Selector */}
+          <div className="relative" ref={profileRef}>
+            <button
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              disabled={switching}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors disabled:opacity-50"
+              style={{
+                backgroundColor: `${profileInfo.color}10`,
+                borderColor: `${profileInfo.color}30`,
+              }}
+            >
+              <profileInfo.icon className="size-4" style={{ color: profileInfo.color }} />
+              <span className="text-xs font-medium tracking-wider hidden sm:inline" style={{ color: profileInfo.color }}>
+                {profileInfo.label.toUpperCase()}
+              </span>
+              <span className="text-xs font-medium tracking-wider sm:hidden" style={{ color: profileInfo.color }}>
+                {profileInfo.short}
+              </span>
+              <ChevronDown className="size-3" style={{ color: profileInfo.color }} />
+            </button>
+
+            {/* Profile Dropdown */}
+            {showProfileMenu && (
+              <div className="absolute right-0 top-12 z-[60] w-56 bg-[#0a0a0a] border border-white/10 rounded-lg shadow-2xl overflow-hidden">
+                <div className="p-2 border-b border-white/5">
+                  <p className="text-[10px] text-[#888888] uppercase tracking-wider px-2">Trading Mentality</p>
+                </div>
+                {(Object.keys(PROFILE_CONFIG) as ProfileKey[]).map((key) => {
+                  const cfg = PROFILE_CONFIG[key];
+                  const isActive = key === profile;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => switchProfile(key)}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-3 text-left transition-colors",
+                        isActive ? "bg-white/10" : "hover:bg-white/5"
+                      )}
+                    >
+                      <cfg.icon className="size-4 shrink-0" style={{ color: cfg.color }} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium" style={{ color: isActive ? cfg.color : '#e8e8e8' }}>
+                          {cfg.label}
+                        </p>
+                      </div>
+                      {isActive && <div className="size-2 rounded-full shrink-0" style={{ backgroundColor: cfg.color }} />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Mode Toggle */}
           <button
             onClick={switchMode}
             disabled={switching}
             className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-lg border cursor-pointer transition-colors disabled:opacity-50",
+              "flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors disabled:opacity-50",
               mode === 'paper'
                 ? 'bg-[#4a9eff]/10 border-[#4a9eff]/30 hover:bg-[#4a9eff]/20'
                 : 'bg-[#00d4aa]/10 border-[#00d4aa]/30 hover:bg-[#00d4aa]/20'
@@ -93,7 +190,7 @@ export function DashboardLayout() {
           </button>
 
           {/* System Status */}
-          <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/30">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/30">
             <div className="size-2 rounded-full bg-[#00d4aa] animate-pulse" />
             <span className="text-xs text-[#00d4aa] font-medium tracking-wider">ONLINE</span>
           </div>
@@ -127,6 +224,41 @@ export function DashboardLayout() {
                 className="flex-1 px-4 py-3 sm:py-2.5 rounded-lg bg-[#ff4466] text-white text-sm font-medium hover:bg-[#ff4466]/80 transition-colors disabled:opacity-50 uppercase tracking-wider"
               >
                 {switching ? 'Switching...' : 'Confirm Live'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Greedy Profile Confirmation Modal */}
+      {showGreedyConfirm && (
+        <div className="fixed inset-0 z-[100] flex max-sm:items-end sm:items-center justify-center bg-black/80">
+          <div className="bg-[#0a0a0a] border border-[#ff4466]/30 max-sm:rounded-t-2xl max-sm:rounded-b-none sm:rounded-lg p-5 sm:p-6 max-w-md w-full sm:mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 rounded-lg bg-[#ff4466]/15 border border-[#ff4466]/30">
+                <Zap className="size-5 sm:size-6 text-[#ff4466]" />
+              </div>
+              <h3 className="text-base sm:text-lg font-bold text-[#e8e8e8] uppercase tracking-wider">Switch to Greedy</h3>
+            </div>
+            <p className="text-sm text-[#888888] mb-2 leading-relaxed">
+              Greedy mode uses up to <span className="text-[#ff4466] font-medium">10x leverage</span> with minimal cash reserves.
+            </p>
+            <p className="text-sm text-[#888888] mb-6 leading-relaxed">
+              This can lead to <span className="text-[#ff4466] font-medium">rapid liquidation</span> in volatile markets. Only use this if you understand the risks.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowGreedyConfirm(false)}
+                className="flex-1 px-4 py-3 sm:py-2.5 rounded-lg bg-white/5 border border-white/10 text-[#c0c0c0] text-sm font-medium hover:bg-white/10 transition-colors uppercase tracking-wider"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmGreedy}
+                disabled={switching}
+                className="flex-1 px-4 py-3 sm:py-2.5 rounded-lg bg-[#ff4466] text-white text-sm font-medium hover:bg-[#ff4466]/80 transition-colors disabled:opacity-50 uppercase tracking-wider"
+              >
+                {switching ? 'Switching...' : 'Confirm Greedy'}
               </button>
             </div>
           </div>

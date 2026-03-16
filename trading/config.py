@@ -518,6 +518,14 @@ LEVERAGE_GREEDY = {
 # Active leverage profile (change this to switch)
 LEVERAGE_PROFILE = os.getenv("LEVERAGE_PROFILE", "aggressive")  # conservative|moderate|aggressive|greedy
 
+def _get_active_profile() -> str:
+    """Get the active profile — DB setting takes precedence over env/default."""
+    try:
+        from trading.db.store import get_setting
+        return get_setting("trading_profile", LEVERAGE_PROFILE)
+    except Exception:
+        return LEVERAGE_PROFILE
+
 def get_leverage(strategy_name: str) -> int:
     """Get leverage multiplier for a strategy based on active profile."""
     profiles = {
@@ -526,7 +534,8 @@ def get_leverage(strategy_name: str) -> int:
         "aggressive": LEVERAGE_AGGRESSIVE,
         "greedy": LEVERAGE_GREEDY,
     }
-    profile = profiles.get(LEVERAGE_PROFILE, LEVERAGE_CONSERVATIVE)
+    active = _get_active_profile()
+    profile = profiles.get(active, LEVERAGE_CONSERVATIVE)
     return profile.get(strategy_name, profile.get("default", 1))
 
 # --- Learning ---

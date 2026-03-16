@@ -32,6 +32,8 @@ export const api = {
   timePnl: `${API_BASE_URL}/api/time-pnl`,
   leverage: `${API_BASE_URL}/api/leverage`,
   sectors: `${API_BASE_URL}/api/sectors`,
+  // Trading profile (mentality)
+  profile: `${API_BASE_URL}/api/profile`,
   // LLM AI Co-Pilot
   llmStatus: `${API_BASE_URL}/api/llm/status`,
   llmJournal: `${API_BASE_URL}/api/llm/journal`,

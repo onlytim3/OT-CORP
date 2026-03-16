@@ -1202,6 +1202,84 @@ def api_mode():
     return jsonify({"mode": new_mode, "previous": old_mode})
 
 
+@app.route("/api/profile", methods=["GET", "POST"])
+def api_profile():
+    """Get or switch trading profile (mentality). Persists in DB for all workers.
+
+    Profiles control leverage, risk tolerance, position sizing, and confluence thresholds.
+    Available: conservative, moderate, aggressive, greedy
+    """
+    import trading.config as cfg
+    from trading.db.store import get_setting, set_setting, log_action
+
+    VALID_PROFILES = ("conservative", "moderate", "aggressive", "greedy")
+
+    # Profile descriptions for the UI
+    PROFILE_INFO = {
+        "conservative": {
+            "label": "Conservative",
+            "description": "Minimal leverage (1x), tight stops, maximum cash reserve. Capital preservation first.",
+            "icon": "shield",
+            "color": "#00d4aa",
+            "leverage_default": 1,
+            "risk_style": "Low risk, low reward",
+        },
+        "moderate": {
+            "label": "Moderate",
+            "description": "Selective leverage (up to 3x on proven strategies), balanced risk/reward.",
+            "icon": "scale",
+            "color": "#4a9eff",
+            "leverage_default": 1,
+            "risk_style": "Balanced risk/reward",
+        },
+        "aggressive": {
+            "label": "Aggressive",
+            "description": "High leverage (2-5x), lower cash reserve (5%), maximum capital deployment.",
+            "icon": "flame",
+            "color": "#ffa500",
+            "leverage_default": 2,
+            "risk_style": "High risk, high reward",
+        },
+        "greedy": {
+            "label": "Greedy",
+            "description": "Maximum leverage (3-10x), near-zero cash reserve. Extremely high risk.",
+            "icon": "zap",
+            "color": "#ff4466",
+            "leverage_default": 3,
+            "risk_style": "Maximum risk, maximum potential",
+        },
+    }
+
+    current = get_setting("trading_profile", cfg.LEVERAGE_PROFILE)
+
+    if request.method == "GET":
+        return jsonify({
+            "profile": current,
+            "profiles": PROFILE_INFO,
+        })
+
+    data = request.get_json(silent=True) or {}
+    new_profile = data.get("profile", "").lower()
+    if new_profile not in VALID_PROFILES:
+        return jsonify({"error": f"profile must be one of: {', '.join(VALID_PROFILES)}"}), 400
+
+    if new_profile == "greedy" and not data.get("confirm"):
+        return jsonify({
+            "error": "Switching to GREEDY requires confirmation",
+            "confirm_required": True,
+            "message": "Greedy mode uses up to 10x leverage and minimal cash reserves. "
+                       "This can lead to rapid liquidation. Confirm to proceed.",
+        }), 400
+
+    old_profile = current
+    set_setting("trading_profile", new_profile)
+    cfg.LEVERAGE_PROFILE = new_profile
+
+    log_action("system", "profile_switch",
+               details=f"Trading mentality switched from {old_profile} to {new_profile}")
+    return jsonify({"profile": new_profile, "previous": old_profile})
+
+
 @app.route("/api/health")
 def api_health():
     """Health check endpoint for monitoring and alerting."""
