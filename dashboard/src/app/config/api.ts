@@ -32,6 +32,11 @@ export const api = {
   timePnl: `${API_BASE_URL}/api/time-pnl`,
   leverage: `${API_BASE_URL}/api/leverage`,
   sectors: `${API_BASE_URL}/api/sectors`,
+  // LLM AI Co-Pilot
+  llmStatus: `${API_BASE_URL}/api/llm/status`,
+  llmJournal: `${API_BASE_URL}/api/llm/journal`,
+  llmExplainTrade: (id: number) => `${API_BASE_URL}/api/llm/explain-trade/${id}`,
+  llmAnalyze: `${API_BASE_URL}/api/llm/analyze`,
 };
 
 // --- Types ---

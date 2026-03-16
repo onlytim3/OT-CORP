@@ -1062,6 +1062,78 @@ def api_chat_confirm():
         return jsonify({"answer": f"Action failed: {exc}"}), 200
 
 
+@app.route("/api/llm/status", methods=["GET"])
+def api_llm_status():
+    """Check LLM provider availability."""
+    try:
+        from trading.llm.engine import check_llm_availability
+        return jsonify(check_llm_availability())
+    except ImportError:
+        return jsonify({"error": "LLM module not installed", "any_available": False})
+
+
+@app.route("/api/llm/journal", methods=["POST"])
+def api_llm_journal():
+    """Generate a daily trading journal entry using LLM."""
+    try:
+        from trading.llm.engine import generate_journal
+        from trading.db.store import get_trades, get_daily_pnl, get_signals, get_action_log
+        from trading.execution.router import get_positions_from_aster
+
+        trades = get_trades(limit=15)
+        positions = get_positions_from_aster()[:10]
+        pnl = get_daily_pnl(limit=7)
+        signals = get_signals(limit=10)
+        actions = get_action_log(limit=10)
+
+        journal = generate_journal(trades, positions, pnl, signals, actions)
+        return jsonify({"journal": journal})
+    except Exception as exc:
+        log.exception("Journal generation error")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/llm/explain-trade/<int:trade_id>", methods=["GET"])
+def api_llm_explain_trade(trade_id):
+    """Explain a specific trade using LLM."""
+    try:
+        from trading.llm.engine import explain_trade
+        from trading.db.store import get_trades, get_signals, get_action_log
+
+        trades = get_trades(limit=200)
+        trade = next((t for t in trades if t.get("id") == trade_id), None)
+        if not trade:
+            return jsonify({"error": f"Trade {trade_id} not found"}), 404
+
+        # Gather context: signals and actions around the trade time
+        context = {
+            "recent_signals": get_signals(limit=10),
+            "recent_actions": get_action_log(limit=10),
+        }
+        explanation = explain_trade(trade, context)
+        return jsonify({"explanation": explanation, "trade": trade})
+    except Exception as exc:
+        log.exception("Trade explanation error")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/llm/analyze", methods=["GET"])
+def api_llm_analyze():
+    """Analyze overall trading performance using LLM."""
+    try:
+        from trading.llm.engine import analyze_performance
+        from trading.db.store import get_daily_pnl
+        from trading.monitor.web import _get_strategies
+
+        pnl = get_daily_pnl(limit=30)
+        strategies = _get_strategies()
+        analysis = analyze_performance(pnl, strategies)
+        return jsonify({"analysis": analysis})
+    except Exception as exc:
+        log.exception("Performance analysis error")
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/mode", methods=["GET", "POST"])
 def api_mode():
     """Get or switch trading mode (paper/live). Persists in DB for all workers."""

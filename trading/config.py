@@ -26,6 +26,10 @@ ASTER_WS_BASE = "wss://fstream.asterdex.com"
 # --- FRED ---
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
+# --- LLM (AI Co-Pilot) ---
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")   # Claude Sonnet (quality)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")         # Gemini Flash (bulk/free)
+
 # --- Trading Mode ---
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
 

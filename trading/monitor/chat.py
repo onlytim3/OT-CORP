@@ -108,27 +108,8 @@ def handle_chat(message: str) -> str:
             answer += "\n"
         return answer
 
-    return (
-        "I can help you with questions about:\n\n"
-        "- **Portfolio** — balance, value, account status\n"
-        "- **Positions** — open holdings, specific assets\n"
-        "- **P&L** — profit/loss, daily returns, performance\n"
-        "- **Trades** — recent executions, history\n"
-        "- **Signals** — active recommendations from strategies\n"
-        "- **Strategies** — which are performing, strategy details\n"
-        "- **Risk** — exposure, stop losses, drawdown\n"
-        "- **Leverage** — current leverage profiles\n"
-        "- **Backtests** — historical strategy performance\n"
-        "- **Intelligence** — market sentiment, regime, briefings\n"
-        "- **Agents** — autonomous system recommendations\n"
-        "- **Allocation** — how capital is sized and distributed\n"
-        "- **Trailing Stops** — active profit targets & watermarks\n"
-        "- **Adaptations** — pending parameter optimizations\n"
-        "- **Knowledge** — search research & strategy docs\n"
-        "- **System** — health, daemon status, errors\n\n"
-        "Try asking: *\"How is my portfolio?\"*, *\"Show backtest results\"*, "
-        "*\"What are the agents recommending?\"*, or *\"What's the market sentiment?\"*"
-    )
+    # LLM fallback — send to AI with full system context
+    return _llm_fallback(message)
 
 
 # ---------------------------------------------------------------------------
@@ -1075,3 +1056,88 @@ def _help_answer() -> str:
         "- *\"Show reviews\"* — performance summaries\n"
         "- *\"Show journal\"* — trade rationale & lessons\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# LLM-powered fallback for unmatched queries
+# ---------------------------------------------------------------------------
+
+def _llm_fallback(message: str) -> str:
+    """Send unmatched questions to the LLM with full trading system context."""
+    try:
+        from trading.llm.engine import chat_with_context
+    except ImportError:
+        return _help_answer()
+
+    # Gather system context for the LLM
+    context = _gather_system_context()
+
+    try:
+        answer = chat_with_context(message, context)
+        if answer and "LLM unavailable" not in answer:
+            return answer
+    except Exception as e:
+        log.warning("LLM fallback error: %s", e) if log.isEnabledFor(logging.WARNING) else None
+
+    # If LLM is unavailable, return help text
+    return _help_answer()
+
+
+def _gather_system_context() -> dict:
+    """Collect current system state for LLM context injection."""
+    import logging as _logging
+    log = _logging.getLogger(__name__)
+
+    context: dict = {}
+
+    # Portfolio
+    try:
+        from trading.execution.router import get_account, get_positions_from_aster
+        context["account"] = get_account()
+        context["positions"] = get_positions_from_aster()[:10]
+    except Exception:
+        context["account"] = {}
+        context["positions"] = []
+
+    # Recent trades
+    try:
+        context["recent_trades"] = get_trades(limit=10)
+    except Exception:
+        context["recent_trades"] = []
+
+    # P&L
+    try:
+        context["pnl"] = get_daily_pnl(limit=7)
+    except Exception:
+        context["pnl"] = []
+
+    # Active signals
+    try:
+        context["signals"] = get_signals(limit=10)
+    except Exception:
+        context["signals"] = []
+
+    # Recent system actions
+    try:
+        context["actions"] = get_action_log(limit=10)
+    except Exception:
+        context["actions"] = []
+
+    # Strategy config
+    try:
+        from trading.config import STRATEGY_ENABLED, LEVERAGE_PROFILE
+        context["enabled_strategies"] = [k for k, v in STRATEGY_ENABLED.items() if v]
+        context["leverage_profile"] = LEVERAGE_PROFILE
+    except Exception:
+        pass
+
+    # Agent recommendations
+    try:
+        context["pending_recommendations"] = get_pending_recommendations()[:5]
+    except Exception:
+        context["pending_recommendations"] = []
+
+    # Timestamp
+    context["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    return context
