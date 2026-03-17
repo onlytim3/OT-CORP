@@ -175,15 +175,20 @@ Be analytical and specific. Reference actual numbers from the data. Be honest ab
         if not response or "LLM unavailable" in response:
             return None
 
-        # Parse JSON from response — handle potential markdown code blocks
+        # Parse JSON from response — strip markdown code fences
         text = response.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
+        # Remove ```json ... ``` wrapping
+        import re
+        fence_match = re.search(r'```(?:json)?\s*\n?(.*?)```', text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        # Also handle case where just ``` prefix/suffix without json tag
+        elif text.startswith("```"):
+            text = text.lstrip("`").strip()
             if text.startswith("json"):
                 text = text[4:].strip()
+            if text.endswith("```"):
+                text = text[:-3].strip()
 
         result = json.loads(text)
         result["model"] = "llm"

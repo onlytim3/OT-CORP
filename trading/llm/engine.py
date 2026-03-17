@@ -1,8 +1,8 @@
 """Gemini-powered LLM engine for OT-CORP trading system.
 
 All LLM calls route through Gemini with call-type-specific model selection:
-  - gemini-2.0-flash: fast/cheap for narratives, annotations, pre-trade reasoning
-  - gemini-2.5-flash-preview-05-20: deeper reasoning for chat, analysis, reviews
+  - gemini-2.5-flash: fast/cheap for narratives, annotations, pre-trade reasoning
+  - gemini-2.5-flash: deeper reasoning for chat, analysis, reviews (same model, higher token budget)
 
 Usage:
     from trading.llm.engine import ask_llm, explain_trade, generate_journal
@@ -25,13 +25,13 @@ log = logging.getLogger(__name__)
 # Model configuration
 # ---------------------------------------------------------------------------
 
-MODEL_FLASH = "gemini-2.0-flash"
-MODEL_THINKING = "gemini-2.5-flash-preview-05-20"
+MODEL_FLASH = "gemini-2.5-flash"
+MODEL_THINKING = "gemini-2.5-flash"
 
 # Per-call-type configuration: model selection + token budget
 CALL_PROFILES: dict[str, dict] = {
     "chat":             {"model": MODEL_THINKING, "max_tokens": 2000},
-    "narrative":        {"model": MODEL_FLASH,    "max_tokens": 800},
+    "narrative":        {"model": MODEL_FLASH,    "max_tokens": 1500},
     "explain_trade":    {"model": MODEL_THINKING, "max_tokens": 1500},
     "journal":          {"model": MODEL_THINKING, "max_tokens": 2500},
     "performance":      {"model": MODEL_THINKING, "max_tokens": 2000},
@@ -65,22 +65,39 @@ def _rate_limit():
 # Gemini provider
 # ---------------------------------------------------------------------------
 
+_genai_client = None
+
+
+def _get_genai_client():
+    """Lazy-init the google.genai Client singleton."""
+    global _genai_client
+    if _genai_client is None:
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            return None
+        import warnings
+        warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+        from google import genai
+        _genai_client = genai.Client(api_key=api_key)
+    return _genai_client
+
+
 def _call_gemini(system: str, prompt: str, model: str = MODEL_FLASH,
                  max_tokens: int = 1500) -> str | None:
-    """Call Gemini API. Returns response text or None on failure."""
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
+    """Call Gemini API via google.genai SDK. Returns response text or None on failure."""
+    client = _get_genai_client()
+    if client is None:
         return None
     _rate_limit()
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        gen_model = genai.GenerativeModel(
-            model_name=model,
-            system_instruction=system,
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config={
+                "system_instruction": system,
+                "max_output_tokens": max_tokens,
+            },
         )
-        config = genai.types.GenerationConfig(max_output_tokens=max_tokens)
-        response = gen_model.generate_content(prompt, generation_config=config)
         return response.text
     except Exception as e:
         log.warning("Gemini API error (%s): %s", model, e)
