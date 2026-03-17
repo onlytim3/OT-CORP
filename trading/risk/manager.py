@@ -532,9 +532,23 @@ def compute_trade_targets(
     # Try ATR-based stop distance
     try:
         from trading.strategy.indicators import atr
-        atr_value = atr(symbol)
-        if atr_value and entry_price > 0:
-            base_sl_pct = (2.0 * atr_value) / entry_price
+        from trading.data.aster import get_aster_ohlcv
+        from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+        # Resolve to AsterDex symbol
+        aster_sym = None
+        for coin_id, alpaca_sym in CRYPTO_SYMBOLS.items():
+            if alpaca_sym == symbol or symbol.replace("/", "") in alpaca_sym.replace("/", ""):
+                aster_sym = ASTER_SYMBOLS.get(coin_id)
+                break
+        if not aster_sym and symbol.endswith("USDT"):
+            aster_sym = symbol
+        if aster_sym:
+            df = get_aster_ohlcv(aster_sym, interval="1h", limit=50)
+            if df is not None and not df.empty and len(df) >= 14:
+                atr_series = atr(df["high"], df["low"], df["close"], period=14)
+                atr_value = float(atr_series.iloc[-1])
+                if atr_value > 0 and entry_price > 0:
+                    base_sl_pct = (2.0 * atr_value) / entry_price
     except Exception:
         pass  # Fall back to config-based stop
 
