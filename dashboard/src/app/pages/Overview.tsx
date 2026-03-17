@@ -14,6 +14,37 @@ function formatQty(qty: number): string {
   return Number(qty.toPrecision(6)).toString();
 }
 
+/** Convert raw system details into human-readable text */
+function humanizeDetails(action: string, details: string): string {
+  if (!details) return '';
+
+  // Funnel pattern: Gen:X Con:Y Act:Z Exec:N
+  const funnel = details.match(/Gen:(\d+)\s*Con:(\d+)\s*Act:(\d+)\s*Exec:(\d+)/);
+  if (funnel) {
+    const [, gen, con, , exec] = funnel;
+    return `${gen} signals → ${con} consolidated → ${exec} executed`;
+  }
+
+  // Sync positions: "Synced X positions"
+  const sync = details.match(/[Ss]ynced?\s+(\d+)\s+positions?/);
+  if (sync) return `Synchronized ${sync[1]} positions with exchange`;
+
+  // Pair trades: "Paired X trades"
+  const pair = details.match(/[Pp]aired?\s+(\d+)\s+trades?/);
+  if (pair) return `Matched ${pair[1]} trade pairs for P&L`;
+
+  // Cycle complete: "Raw: X | Consolidated: Y | Executed: Z"
+  const cycle = details.match(/Raw:\s*(\d+)\s*\|\s*Consolidated:\s*(\d+)\s*\|\s*Executed?:\s*(\d+)/i);
+  if (cycle) {
+    return `${cycle[1]} signals → ${cycle[2]} consolidated → ${cycle[3]} executed`;
+  }
+
+  // Dollar amounts
+  if (/^\$[\d.]+$/.test(details.trim())) return `Trade value: ${details.trim()}`;
+
+  return details;
+}
+
 function ActivityDetailModal({ activity, onClose }: { activity: ActionItem | null; onClose: () => void }) {
   const [detail, setDetail] = useState<ActionDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,7 +92,7 @@ function ActivityDetailModal({ activity, onClose }: { activity: ActionItem | nul
               </div>
             ) : activity.details ? (
               <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                <p className="text-sm text-[#c0c0c0]">{activity.details}</p>
+                <p className="text-sm text-[#d4d4d4] leading-[1.7]">{humanizeDetails(activity.action, activity.details)}</p>
               </div>
             ) : null}
 
@@ -392,7 +423,7 @@ export function Overview() {
                     }`} />
                     <div>
                       <p className="font-medium text-[#e8e8e8] text-sm">{a.action}</p>
-                      {a.details && <p className="text-xs text-[#888888] line-clamp-1">{a.details}</p>}
+                      {a.details && <p className="text-xs text-[#888888] line-clamp-1">{humanizeDetails(a.action, a.details)}</p>}
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">

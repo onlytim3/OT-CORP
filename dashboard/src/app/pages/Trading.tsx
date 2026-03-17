@@ -33,6 +33,30 @@ function formatQty(qty: number): string {
   return Number(qty.toPrecision(6)).toString();
 }
 
+/** Parse entry_reasoning into styled prose segments */
+function renderReasoning(text: string) {
+  // Split on pipe delimiter (legacy format) or double newlines (new prose format)
+  const segments = text.includes(' | ')
+    ? text.split(' | ').map(s => s.trim()).filter(Boolean)
+    : text.split(/\n\n+/).map(s => s.trim()).filter(Boolean);
+
+  return segments.map((segment, i) => {
+    // Highlight dollar amounts, percentages, and strategy names
+    const highlighted = segment
+      .replace(/(\$[\d,.]+)/g, '<span class="text-[#00d4aa] font-medium">$1</span>')
+      .replace(/([\d.]+%)/g, '<span class="text-[#4a9eff] font-medium">$1</span>')
+      .replace(/\b(strength:?\s*[\d.]+)\b/gi, '<span class="text-[#ffa500]">$1</span>');
+
+    return (
+      <p
+        key={i}
+        className={`text-sm leading-relaxed ${i === 0 ? 'text-[#e8e8e8]' : 'text-[#c0c0c0]'}`}
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+      />
+    );
+  });
+}
+
 function TradeDetailModal({ trade, onClose }: { trade: Trade | null; onClose: () => void }) {
   const [analyses, setAnalyses] = useState<TradeAnalysis[]>([]);
   const [loadingAnalyses, setLoadingAnalyses] = useState(false);
@@ -107,21 +131,15 @@ function TradeDetailModal({ trade, onClose }: { trade: Trade | null; onClose: ()
               </div>
             )}
 
-            {/* Entry Reasoning */}
+            {/* Trade Rationale */}
             {trade.entry_reasoning && (
               <div className="rounded-lg bg-white/5 border border-white/10 overflow-hidden">
-                <button
-                  onClick={() => setShowReasoning(!showReasoning)}
-                  className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-white/5 transition-colors"
-                >
-                  <p className="text-xs text-[#888888] font-medium uppercase tracking-wider">Entry Reasoning</p>
-                  <span className="text-xs text-[#888888]">{showReasoning ? '▼' : '▶'}</span>
-                </button>
-                {showReasoning && (
-                  <div className="px-4 pb-3">
-                    <p className="text-sm text-[#d4d4d4] leading-relaxed whitespace-pre-wrap">{trade.entry_reasoning}</p>
-                  </div>
-                )}
+                <div className="px-4 py-2.5 border-b border-white/5">
+                  <p className="text-xs text-[#888888] font-medium uppercase tracking-wider">Trade Rationale</p>
+                </div>
+                <div className="px-4 py-3 space-y-2">
+                  {renderReasoning(trade.entry_reasoning)}
+                </div>
               </div>
             )}
 

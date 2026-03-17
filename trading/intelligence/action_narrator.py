@@ -17,33 +17,46 @@ from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-# Template fallbacks per category
+# Template fallbacks per category — these produce human-readable prose
 TEMPLATES = {
     "trade": (
-        "The system executed a {side} order for {symbol} worth ${total:.2f}. "
-        "Strategy: {strategy}. Signal strength: {strength}."
+        "Executed a {side} order for {symbol} worth ${total:.2f}. "
+        "This was driven by {strategy} with a signal strength of {strength}."
     ),
     "error": (
-        "An error occurred: {action} for {symbol}. Details: {details}. "
-        "This may indicate a configuration issue or external service problem."
+        "An error occurred during {action} for {symbol}. {details}. "
+        "This may indicate a configuration issue or an external service disruption."
     ),
-    "signal": "Signal aggregation completed. {details}.",
+    "signal": "Signal aggregation completed across all active strategies. {details}.",
     "risk_block": (
-        "Risk manager blocked a trade: {details}. "
-        "The system's safety guardrails are functioning correctly."
+        "Risk management blocked a trade on {symbol}: {details}. "
+        "This protective measure prevents overexposure and maintains portfolio discipline."
     ),
-    "strategy_run": "Trading cycle completed. {details}.",
-    "autonomous": "Autonomous agents completed a review cycle. {details}.",
-    "scale_in": "Added to winning position in {symbol}. {details}.",
+    "strategy_run": (
+        "Completed a full trading strategy cycle, evaluating market conditions "
+        "and generating signals. {details}."
+    ),
+    "autonomous": (
+        "The autonomous improvement agents reviewed current performance, positions, "
+        "and market conditions. {details}."
+    ),
+    "scale_in": (
+        "Added to a winning position in {symbol}, increasing exposure to a "
+        "profitable trade. {details}."
+    ),
     "circuit_breaker": (
-        "Circuit breaker activated: {details}. "
-        "The strategy has been temporarily disabled."
+        "Circuit breaker activated — a strategy has been temporarily suspended "
+        "after consecutive losses to protect capital. {details}."
     ),
-    "stop_loss": "Stop loss triggered for {symbol}. {details}.",
-    "operator": "Manual action via operator console: {action}. {details}.",
-    "cleanup": "System cleanup performed. {details}.",
-    "scheduler": "Scheduler event: {action}. {details}.",
+    "stop_loss": (
+        "Stop loss triggered for {symbol}, automatically closing the position "
+        "to limit downside risk. {details}."
+    ),
+    "operator": "Manual operator action: {action}. {details}.",
+    "cleanup": "Routine system maintenance completed. {details}.",
+    "scheduler": "Scheduled task executed: {action}. {details}.",
     "system": "System event: {action}. {details}.",
+    "funnel": None,  # handled by _funnel_narrative
 }
 
 
@@ -211,9 +224,10 @@ Be analytical and specific. Reference actual numbers from the data. Be honest ab
 
 
 def _template_narrative(action: dict) -> str:
-    """Generate a template-based narrative fallback."""
+    """Generate a template-based narrative fallback with smart data parsing."""
     category = action.get("category", "unknown")
-    template = TEMPLATES.get(category, "System action: {action}. {details}.")
+    action_name = action.get("action", "unknown")
+    details = action.get("details", "")
 
     data = action.get("data", {})
     if isinstance(data, str):
@@ -222,15 +236,36 @@ def _template_narrative(action: dict) -> str:
         except Exception:
             data = {}
 
-    # Build context dict from action + data
+    # --- Smart narratives for known action types ---
+
+    # Funnel actions: parse Gen/Con/Act/Exec pattern
+    if category == "funnel" or action_name == "cycle_funnel":
+        return _funnel_narrative(data, details)
+
+    # System actions with known patterns
+    if category == "system" or action_name in (
+        "sync_positions", "pair_trades", "cycle_complete",
+        "pnl_snapshot", "daily_pnl",
+    ):
+        return _system_narrative(action_name, data, details)
+
+    # Strategy runs
+    if category == "strategy_run":
+        return _strategy_run_narrative(data, details)
+
+    # Fall back to template
+    template = TEMPLATES.get(category, "System event: {action}. {details}.")
+    if template is None:
+        template = "System event: {action}. {details}."
+
     ctx = {
         "side": action.get("action", data.get("side", "unknown")),
         "symbol": action.get("symbol", "unknown"),
         "total": float(data.get("total", data.get("notional", 0))),
-        "strategy": data.get("strategy", action.get("action", "unknown")),
+        "strategy": data.get("strategy", action_name),
         "strength": data.get("strength", data.get("signal_strength", "N/A")),
-        "action": action.get("action", "unknown"),
-        "details": action.get("details", "No details available."),
+        "action": action_name,
+        "details": details or "No details available.",
         "result": action.get("result", ""),
     }
 
@@ -238,9 +273,110 @@ def _template_narrative(action: dict) -> str:
         return template.format(**ctx)
     except (KeyError, ValueError):
         return (
-            f"{category.title()} action: {action.get('action', 'unknown')} "
-            f"-- {action.get('details', 'No details')}."
+            f"{category.title()} action: {action_name} "
+            f"— {details or 'No details'}."
         )
+
+
+def _funnel_narrative(data: dict, details: str) -> str:
+    """Human-readable narrative for cycle_funnel actions."""
+    gen = data.get("generated", 0)
+    con = data.get("consolidated", 0)
+    act = data.get("actionable", 0)
+    exc = data.get("executed", 0)
+    blocked = data.get("blocked", 0)
+    cycle_time = data.get("cycle_time_s", 0)
+
+    # Parse from details string if data dict is empty
+    if gen == 0 and details:
+        import re
+        m = re.search(r"Gen:(\d+)", details)
+        if m:
+            gen = int(m.group(1))
+        m = re.search(r"Con:(\d+)", details)
+        if m:
+            con = int(m.group(1))
+        m = re.search(r"Act:(\d+)", details)
+        if m:
+            act = int(m.group(1))
+        m = re.search(r"Exec:(\d+)", details)
+        if m:
+            exc = int(m.group(1))
+
+    parts = []
+    parts.append(
+        f"The trading engine scanned all active strategies and generated "
+        f"{gen} raw signals."
+    )
+    if con > 0:
+        parts.append(
+            f"After cross-strategy consolidation, {con} unique opportunities "
+            f"emerged from the noise."
+        )
+    if act > 0 and act != con:
+        parts.append(f"{act} signals passed risk filters and were actionable.")
+    if exc > 0:
+        parts.append(f"{exc} trade{'s' if exc != 1 else ''} successfully executed.")
+    elif act > 0:
+        parts.append("No trades were executed this cycle.")
+    if blocked > 0:
+        parts.append(
+            f"{blocked} signal{'s' if blocked != 1 else ''} blocked by risk management."
+        )
+    if cycle_time > 0:
+        parts.append(f"Cycle completed in {cycle_time:.1f}s.")
+
+    return " ".join(parts)
+
+
+def _system_narrative(action_name: str, data: dict, details: str) -> str:
+    """Human-readable narrative for common system actions."""
+    if action_name == "sync_positions":
+        import re
+        m = re.search(r"(\d+)", details) if details else None
+        count = m.group(1) if m else "all"
+        return (
+            f"Synchronized {count} open positions with the exchange, "
+            f"updating mark prices, unrealized P&L, and margin status."
+        )
+    if action_name == "pair_trades":
+        import re
+        m = re.search(r"(\d+)", details) if details else None
+        count = m.group(1) if m else "0"
+        return (
+            f"Matched {count} completed trade pairs (entry ↔ exit) to calculate "
+            f"realized P&L and update performance metrics."
+        )
+    if action_name == "cycle_complete":
+        return (
+            f"Full trading cycle completed. {details}. "
+            f"All strategies evaluated, risk checks applied, and positions updated."
+        )
+    if action_name == "pnl_snapshot":
+        return (
+            f"Recorded a portfolio snapshot for performance tracking. {details}."
+        )
+    if action_name == "daily_pnl":
+        return (
+            f"Daily P&L checkpoint recorded. {details}."
+        )
+    return f"System maintenance: {action_name}. {details}."
+
+
+def _strategy_run_narrative(data: dict, details: str) -> str:
+    """Human-readable narrative for strategy_run actions."""
+    strategies_run = data.get("strategies_run", [])
+    total = data.get("total_signals", 0)
+    if strategies_run:
+        return (
+            f"Executed {len(strategies_run)} trading strategies "
+            f"({', '.join(strategies_run[:5])}{'...' if len(strategies_run) > 5 else ''}) "
+            f"generating {total} signals. {details}."
+        )
+    return (
+        f"Completed a full trading strategy cycle, evaluating market conditions "
+        f"and generating signals. {details}."
+    )
 
 
 def generate_missing_narratives(limit: int = 20) -> int:
