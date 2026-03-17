@@ -34,6 +34,11 @@ export const api = {
   sectors: `${API_BASE_URL}/api/sectors`,
   // Trading profile (mentality)
   profile: `${API_BASE_URL}/api/profile`,
+  // Journal
+  journalEntries: `${API_BASE_URL}/api/journal/entries`,
+  journalDaily: `${API_BASE_URL}/api/journal/daily`,
+  journalWeekly: `${API_BASE_URL}/api/journal/weekly`,
+  llmWeeklyReview: `${API_BASE_URL}/api/llm/weekly-review`,
   // LLM AI Co-Pilot
   llmStatus: `${API_BASE_URL}/api/llm/status`,
   llmJournal: `${API_BASE_URL}/api/llm/journal`,

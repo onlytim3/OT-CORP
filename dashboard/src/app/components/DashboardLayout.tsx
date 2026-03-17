@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router";
-import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown, Clock } from "lucide-react";
+import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown, Clock, BookOpen } from "lucide-react";
 import { cn } from "./ui/utils";
 import { useState, useRef, useEffect } from "react";
 import { ChatPanel } from "./ChatPanel";
@@ -175,6 +175,7 @@ export function DashboardLayout() {
   const navItems = [
     { path: "/", icon: LayoutDashboard, label: "Overview" },
     { path: "/trading", icon: TrendingUp, label: "Trading" },
+    { path: "/journal", icon: BookOpen, label: "Journal" },
     { path: "/agents", icon: Bot, label: "Agents" },
     { path: "/analytics", icon: BarChart3, label: "Analytics" },
   ];

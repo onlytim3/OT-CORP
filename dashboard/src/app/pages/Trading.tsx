@@ -140,11 +140,14 @@ function TradeDetailModal({ trade, onClose }: { trade: Trade | null; onClose: ()
                             {new Date(a.timestamp).toLocaleString()}
                           </p>
                           <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            a.source === 'position_review_agent' ? 'bg-[#c084fc]/10 text-[#c084fc]' :
                             a.source === '12h_cycle' ? 'bg-[#4a9eff]/10 text-[#4a9eff]' :
                             a.source === 'static_fallback' ? 'bg-[#888888]/10 text-[#888888]' :
                             'bg-[#00d4aa]/10 text-[#00d4aa]'
                           }`}>
-                            {a.source === '12h_cycle' ? 'AI Analysis' : a.source === 'static_fallback' ? 'Auto' : 'LLM'}
+                            {a.source === 'position_review_agent' ? 'Agent Review' :
+                             a.source === '12h_cycle' ? 'AI Analysis' :
+                             a.source === 'static_fallback' ? 'Auto' : 'LLM'}
                           </span>
                         </div>
                         <p className="text-sm text-[#c0c0c0] leading-relaxed">{a.analysis}</p>
@@ -177,6 +180,65 @@ export function Trading() {
         <p className="text-[#888888] mt-1">Real-time positions, trades, and volume analysis</p>
       </div>
 
+      {/* Recent Trades */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ArrowUpDown className="size-5" />
+            Recent Trades
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {(!trades || trades.length === 0) ? (
+            <p className="text-[#888888] text-center py-8">No trades yet</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-white/5">
+                    <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
+                    <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Side</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Qty</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Price</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L %</th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades.slice(0, 25).map((t) => (
+                    <tr key={t.id} onClick={() => setSelectedTrade(t)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
+                      <td className="py-3 px-4 font-medium text-[#e8e8e8]">{t.symbol}</td>
+                      <td className="py-3 px-4 text-center">
+                        <Badge variant={t.side === 'buy' ? 'default' : 'destructive'}>{t.side.toUpperCase()}</Badge>
+                      </td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(t.qty)}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                      <td className="py-3 px-4 text-[#888888] text-sm">
+                        {t.strategy}
+                        {t.leverage && t.leverage > 1 && (
+                          <span className="ml-1 text-xs text-[#ffa500]">{t.leverage}x</span>
+                        )}
+                      </td>
+                      <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
+                        {t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
+                      </td>
+                      <td className={`text-right py-3 px-4 font-medium ${t.pnl_pct !== null ? (t.pnl_pct >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
+                        {t.pnl_pct !== null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%` : '-'}
+                      </td>
+                      <td className="text-right py-3 px-4 text-[#888888] text-sm">{new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Position Cards with Volume */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {positions.length === 0 ? (
@@ -184,7 +246,10 @@ export function Trading() {
         ) : positions.map((pos, idx) => {
           const vol = volumes?.find(v => v.symbol === pos.symbol || v.aster_symbol === pos.symbol);
           return (
-            <Card key={idx} className="hover:shadow-xl hover:shadow-[#4a9eff]/10 transition-all duration-300">
+            <Card key={idx} className="hover:shadow-xl hover:shadow-[#4a9eff]/10 transition-all duration-300 cursor-pointer" onClick={() => {
+              const match = trades?.find(t => t.symbol === pos.symbol && !t.closed_at);
+              if (match) setSelectedTrade(match);
+            }}>
               <CardContent className="p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div>
@@ -263,65 +328,6 @@ export function Trading() {
           );
         })}
       </div>
-
-      {/* Recent Trades */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ArrowUpDown className="size-5" />
-            Recent Trades
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {(!trades || trades.length === 0) ? (
-            <p className="text-[#888888] text-center py-8">No trades yet</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-white/5">
-                    <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
-                    <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Side</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Qty</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Price</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">P&L %</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trades.slice(0, 25).map((t) => (
-                    <tr key={t.id} onClick={() => setSelectedTrade(t)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
-                      <td className="py-3 px-4 font-medium text-[#e8e8e8]">{t.symbol}</td>
-                      <td className="py-3 px-4 text-center">
-                        <Badge variant={t.side === 'buy' ? 'default' : 'destructive'}>{t.side.toUpperCase()}</Badge>
-                      </td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(t.qty)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                      <td className="py-3 px-4 text-[#888888] text-sm">
-                        {t.strategy}
-                        {t.leverage && t.leverage > 1 && (
-                          <span className="ml-1 text-xs text-[#ffa500]">{t.leverage}x</span>
-                        )}
-                      </td>
-                      <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
-                        {t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
-                      </td>
-                      <td className={`text-right py-3 px-4 font-medium ${t.pnl_pct !== null ? (t.pnl_pct >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
-                        {t.pnl_pct !== null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%` : '-'}
-                      </td>
-                      <td className="text-right py-3 px-4 text-[#888888] text-sm">{new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {/* Trade Detail Modal */}
       <TradeDetailModal trade={selectedTrade} onClose={() => setSelectedTrade(null)} />

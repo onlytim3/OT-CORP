@@ -4,6 +4,7 @@ import { Overview } from "./pages/Overview";
 import { Trading } from "./pages/Trading";
 import { Agents } from "./pages/Agents";
 import { Analytics } from "./pages/Analytics";
+import { Journal } from "./pages/Journal";
 
 const basename = import.meta.env.BASE_URL || '/app/';
 
@@ -14,6 +15,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: Overview },
       { path: "trading", Component: Trading },
+      { path: "journal", Component: Journal },
       { path: "agents", Component: Agents },
       { path: "analytics", Component: Analytics },
     ],

@@ -443,17 +443,31 @@ def run_trading_cycle():
             risk_check = risk_mgr.check_trade(signal, order_value)
             if not risk_check.allowed:
                 blocked_count += 1
+                # Generate LLM explanation for the risk block (best-effort)
+                block_explanation = None
+                try:
+                    from trading.llm.engine import explain_risk_block
+                    sig_dict = {"symbol": signal.symbol, "action": signal.action,
+                                "strategy": signal.strategy, "strength": signal.strength}
+                    port_state = {"portfolio_value": portfolio_value, "order_value": order_value}
+                    block_explanation = explain_risk_block(sig_dict, risk_check.reason, port_state)
+                    if block_explanation and "LLM unavailable" in block_explanation:
+                        block_explanation = None
+                except Exception:
+                    pass
                 log_action(
                     "risk_block", "trade_blocked",
                     symbol=signal.symbol,
                     details=risk_check.reason,
-                    data={"order_value": order_value},
+                    data={"order_value": order_value,
+                          "llm_explanation": block_explanation},
                 )
                 console.print(f"  [red]BLOCKED {signal.symbol}: {risk_check.reason}[/red]")
                 continue
 
             # Compute trade targets (SL/TP) for server-side stop-loss
             stop_loss_price = None
+            take_profit_price = None
             try:
                 from trading.risk.manager import compute_trade_targets
                 from trading.execution.router import get_crypto_quote
@@ -474,6 +488,7 @@ def run_trading_cycle():
                         signal_strength=signal.strength,
                     )
                     stop_loss_price = targets.stop_loss_price
+                    take_profit_price = targets.take_profit_price
             except Exception as e:
                 log.debug("Could not compute trade targets for %s: %s", signal.symbol, e)
 
@@ -610,6 +625,43 @@ def run_trading_cycle():
                 except Exception as fill_err:
                     log.debug("Fill analysis recording failed: %s", fill_err)
 
+                # Enrich entry reasoning with LLM (best-effort, non-blocking)
+                enriched_reasoning = narration
+                try:
+                    from trading.llm.engine import generate_entry_reasoning
+                    signal_dict = {
+                        "symbol": signal.symbol, "action": signal.action,
+                        "strategy": signal.strategy, "strength": signal.strength,
+                        "reason": signal.reason,
+                        "contributing": (signal.data or {}).get("contributing_strategies", []),
+                    }
+                    portfolio_ctx = {
+                        "portfolio_value": portfolio_value,
+                        "order_value": order_value,
+                        "pct_of_portfolio": round(order_value / portfolio_value * 100, 1) if portfolio_value else 0,
+                        "leverage": lev,
+                        "stop_loss": stop_loss_price,
+                        "take_profit": take_profit_price,
+                    }
+                    regime_ctx = {}
+                    try:
+                        from trading.intelligence.engine import generate_briefing
+                        b = generate_briefing()
+                        regime_ctx = {"regime": b.overall_regime, "score": b.overall_score}
+                    except Exception:
+                        pass
+                    lessons = []
+                    try:
+                        from trading.intelligence.action_narrator import get_recent_lessons
+                        lessons = get_recent_lessons(limit=5)
+                    except Exception:
+                        pass
+                    llm_reasoning = generate_entry_reasoning(signal_dict, portfolio_ctx, regime_ctx, lessons)
+                    if llm_reasoning and "LLM unavailable" not in llm_reasoning:
+                        enriched_reasoning = llm_reasoning
+                except Exception as llm_err:
+                    log.debug("LLM entry reasoning failed (using template): %s", llm_err)
+
                 trade_id = insert_trade(
                     symbol=signal.symbol,
                     side=signal.action,
@@ -619,8 +671,10 @@ def run_trading_cycle():
                     strategy=signal.strategy,
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
+                    stop_loss_price=stop_loss_price,
+                    take_profit_price=take_profit_price,
                     leverage=lev,
-                    entry_reasoning=narration,
+                    entry_reasoning=enriched_reasoning,
                 )
                 create_journal_entry(trade_id, signal, ctx, narration=narration)
                 executed_count += 1
@@ -923,88 +977,10 @@ def _check_scale_in_winners(positions, portfolio_value):
 
 
 # ---------------------------------------------------------------------------
-# 12-hour trade analysis cycle — LLM-powered analysis of open trades
+# 12-hour trade analysis — now handled by Position Review Agent in
+# trading.intelligence.autonomous._position_review_agent_think()
+# The agent runs every autonomous cycle and self-throttles to 12h intervals.
 # ---------------------------------------------------------------------------
-
-def run_trade_analysis_cycle():
-    """Generate 12-hour analysis updates for all open trades."""
-    from trading.db.store import get_trades, insert_trade_analysis
-
-    log.info("Running 12-hour trade analysis cycle...")
-    positions = _get_positions()
-    if not positions:
-        log.info("No open positions for 12h analysis cycle")
-        return
-
-    # Get open trades (status != 'closed')
-    open_trades = get_trades(limit=50)
-    open_trades = [t for t in open_trades if not t.get("closed_at")]
-    if not open_trades:
-        log.info("No open trades for 12h analysis cycle")
-        return
-
-    for trade in open_trades:
-        symbol = trade.get("symbol", "")
-        pos = next((p for p in positions if p.get("symbol") == symbol or
-                     p.get("symbol", "").replace("/", "") == symbol.replace("/", "")), None)
-
-        # Build context
-        hours_open = 0
-        try:
-            from datetime import datetime, timezone
-            entry_time = datetime.fromisoformat(trade["timestamp"].replace("Z", "+00:00"))
-            hours_open = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
-        except Exception:
-            pass
-
-        unrealized_pnl = pos.get("unrealized_pnl", 0) if pos else 0
-        unrealized_pct = pos.get("unrealized_pnl_pct", 0) if pos else 0
-        current_price = pos.get("current_price", 0) if pos else 0
-
-        prompt = (
-            f"Provide a brief analysis update for this open trade:\n\n"
-            f"Trade: {symbol} {trade.get('side', 'unknown')} @ ${trade.get('price', 0):.2f}\n"
-            f"Strategy: {trade.get('strategy', 'unknown')}\n"
-            f"Entry reasoning: {trade.get('entry_reasoning', 'N/A')[:200]}\n"
-            f"Current price: ${current_price:.2f}\n"
-            f"Unrealized P&L: ${unrealized_pnl:.2f} ({unrealized_pct:+.1f}%)\n"
-            f"Hours open: {hours_open:.1f}\n"
-            f"Stop loss: {trade.get('stop_loss_price', 'N/A')}\n"
-            f"Take profit: {trade.get('take_profit_price', 'N/A')}\n\n"
-            f"In 2-3 sentences: How is this trade performing? Any changes in market "
-            f"conditions since entry? Should we hold, tighten stops, or consider closing?"
-        )
-
-        try:
-            from trading.llm.engine import ask_llm
-            analysis = ask_llm(
-                "You are a senior trading analyst. Be concise and analytical.",
-                prompt, tier="bulk"
-            )
-            if analysis and "LLM unavailable" not in analysis:
-                market_snapshot = {"current_price": current_price, "unrealized_pnl": unrealized_pnl}
-                insert_trade_analysis(trade["id"], analysis, market_snapshot, source="12h_cycle")
-                log.info("12h analysis for trade #%d (%s)", trade["id"], symbol)
-            else:
-                # Static fallback
-                status = "profitable" if unrealized_pnl >= 0 else "at a loss"
-                fallback = (
-                    f"Trade is currently {status}: "
-                    f"{'+'if unrealized_pnl >= 0 else ''}${unrealized_pnl:.2f} ({unrealized_pct:+.1f}%). "
-                    f"Position has been open for {hours_open:.0f} hours."
-                )
-                insert_trade_analysis(trade["id"], fallback, source="static_fallback")
-        except Exception as e:
-            log.warning("12h analysis failed for trade #%d: %s", trade.get("id", 0), e)
-            # Still insert a basic status
-            try:
-                status = "profitable" if unrealized_pnl >= 0 else "at a loss"
-                fallback = f"Trade is {status}: ${unrealized_pnl:+.2f}. Open for {hours_open:.0f}h."
-                insert_trade_analysis(trade["id"], fallback, source="static_fallback")
-            except Exception:
-                pass
-
-    log.info("12h analysis cycle complete for %d trades", len(open_trades))
 
 
 # ---------------------------------------------------------------------------
@@ -1183,6 +1159,35 @@ def check_stop_losses():
 
 
 # ---------------------------------------------------------------------------
+# Daily journal generation (automated)
+# ---------------------------------------------------------------------------
+
+def run_daily_journal():
+    """Auto-generate a daily trading journal entry and store it in the action log."""
+    try:
+        from trading.llm.engine import generate_journal
+        from trading.db.store import get_trades, get_daily_pnl, get_signals, get_action_log
+        from trading.execution.router import get_positions_from_aster
+
+        trades = get_trades(limit=15)
+        positions = get_positions_from_aster()[:10]
+        pnl = get_daily_pnl(limit=7)
+        signals = get_signals(limit=10)
+        actions = get_action_log(limit=10)
+
+        journal = generate_journal(trades, positions, pnl, signals, actions)
+        if journal and "LLM unavailable" not in journal:
+            log_action("journal", "daily_journal", details=journal[:200],
+                       data={"content": journal, "type": "daily"})
+            log.info("Daily journal generated (%d chars)", len(journal))
+            console.print("[green]Daily journal generated.[/green]")
+        else:
+            log.debug("Daily journal skipped — LLM unavailable")
+    except Exception as e:
+        log.warning("Daily journal generation failed (non-fatal): %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Weekly review + adaptation analysis
 # ---------------------------------------------------------------------------
 
@@ -1197,6 +1202,28 @@ def run_weekly_review():
     except Exception as e:
         log_action("error", "review_error", details=str(e))
         log.error("Review error: %s", e)
+
+    # Generate LLM-powered weekly synthesis
+    try:
+        from trading.llm.engine import generate_weekly_synthesis
+        from trading.intelligence.action_narrator import get_recent_lessons
+        from trading.db.store import get_trades, get_daily_pnl, get_action_log
+        journal_entries = get_action_log(limit=50)
+        lessons = get_recent_lessons(limit=15)
+        strategies = []
+        try:
+            from trading.monitor.web import _get_strategies
+            strategies = _get_strategies()
+        except Exception:
+            pass
+        pnl_hist = get_daily_pnl(limit=7)
+        synthesis = generate_weekly_synthesis(journal_entries, lessons, strategies, pnl_hist)
+        if synthesis and "LLM unavailable" not in synthesis:
+            log_action("journal", "weekly_synthesis", details=synthesis[:200],
+                       data={"content": synthesis, "type": "weekly"})
+            log.info("Weekly LLM synthesis generated (%d chars)", len(synthesis))
+    except Exception as e:
+        log.debug("Weekly LLM synthesis failed (non-fatal): %s", e)
 
     # Also run adaptation analysis
     try:
@@ -1410,8 +1437,9 @@ def start_daemon(interval_hours=4, paper=False):
     schedule.every(interval_hours).hours.do(run_trading_cycle)
     schedule.every(15).minutes.do(check_stop_losses)
     schedule.every(30).minutes.do(process_pending_approvals)
+    schedule.every().day.at("23:55").do(run_daily_journal)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
-    schedule.every(12).hours.do(run_trade_analysis_cycle)
+    # Position review now runs as part of run_autonomous_cycle() — no separate schedule needed
 
     # Graceful shutdown via SIGTERM/SIGINT
     _shutdown_requested = False

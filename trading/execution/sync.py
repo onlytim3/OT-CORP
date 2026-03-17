@@ -361,6 +361,36 @@ def pair_trades() -> int:
                             f"{buy_trade_id}: {exc}[/yellow]"
                         )
 
+                    # Post-trade review via LLM (best-effort, non-blocking)
+                    try:
+                        from trading.llm.engine import generate_post_trade_review
+                        from trading.db.store import insert_trade_analysis
+                        trade_dict = {
+                            "id": buy_trade_id, "symbol": symbol,
+                            "side": "buy", "price": buy_price,
+                            "strategy": buy.get("strategy", "unknown"),
+                            "entry_reasoning": buy.get("entry_reasoning", ""),
+                        }
+                        market_conds = {
+                            "exit_price": sell_price,
+                            "sell_trade_id": sell_trade_id,
+                            "matched_qty": matched_qty,
+                        }
+                        review = generate_post_trade_review(
+                            trade_dict,
+                            buy.get("entry_reasoning", ""),
+                            pnl,
+                            market_conds,
+                        )
+                        if review and "LLM unavailable" not in review:
+                            insert_trade_analysis(
+                                buy_trade_id, review,
+                                {"pnl": pnl, "exit_price": sell_price},
+                                source="post_trade_review",
+                            )
+                    except Exception as ptf:
+                        log.debug("Post-trade review failed (non-fatal): %s", ptf)
+
                     paired += 1
 
                 except Exception as exc:

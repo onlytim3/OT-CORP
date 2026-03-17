@@ -262,7 +262,7 @@ Instructions:
 - Don't just reformat the data — add insight, analysis, and actionable observations"""
 
     try:
-        result = ask_llm(TRADING_SYSTEM_PROMPT, prompt, tier="quality")
+        result = ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="chat")
         if result and "LLM unavailable" not in result:
             return result
         log.warning("LLM returned unavailable response: %s", result[:100] if result else "None")

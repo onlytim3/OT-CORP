@@ -55,6 +55,7 @@ function DialogContent({
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
+        aria-describedby={undefined}
         data-slot="dialog-content"
         className={cn(
           "bg-[#0a0a0a] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed z-50 grid w-full border shadow-lg duration-200 " +

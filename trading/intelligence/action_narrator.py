@@ -171,7 +171,7 @@ Be analytical and specific. Reference actual numbers from the data. Be honest ab
     )
 
     try:
-        response = ask_llm(system, prompt, tier="quality")
+        response = ask_llm(system, prompt, call_type="narrative")
         if not response or "LLM unavailable" in response:
             return None
 

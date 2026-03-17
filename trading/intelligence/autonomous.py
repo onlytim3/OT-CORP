@@ -148,6 +148,14 @@ REGIME_AGENT = "regime_agent"
 LEARNING_AGENT = "learning_agent"
 BACKTEST_AGENT = "backtest_agent"
 EXECUTOR_AGENT = "executor_agent"
+POSITION_REVIEW_AGENT = "position_review_agent"
+
+# Position review thresholds
+POSITION_REVIEW_INTERVAL_HOURS = 12   # How often we review open positions
+POSITION_STALE_HOURS = 72             # Flag positions open longer than this
+POSITION_LOSS_ALERT_PCT = -5.0        # Flag positions losing more than this %
+POSITION_PROFIT_TARGET_PCT = 8.0      # Consider taking profits above this %
+POSITION_SL_DISTANCE_WARN = 0.03      # Warn when price within 3% of stop loss
 
 
 # ---------------------------------------------------------------------------
@@ -1520,6 +1528,340 @@ def _log_agent_conversation(all_recommendations: list[dict]):
 
 
 # ---------------------------------------------------------------------------
+# Position Review Agent — deep analysis of open positions using system context
+# ---------------------------------------------------------------------------
+
+def _position_review_agent_think() -> list[dict]:
+    """Position Review Agent: analyzes every open position with full system context.
+
+    Unlike a raw LLM call, this agent:
+    1. Gathers strategy performance history for the strategy that opened the trade
+    2. Checks volume conditions (is liquidity drying up?)
+    3. Evaluates proximity to stop loss / take profit
+    4. Considers portfolio-level risk (drawdown, concentration)
+    5. Reviews recent lessons from other agents
+    6. Produces structured recommendations (hold / tighten_stop / take_profit / close)
+    7. Writes a rich analysis to trade_analyses table for the dashboard
+
+    Runs on the autonomous cycle (every cycle) but only writes analysis every 12h.
+    """
+    recommendations = []
+
+    positions = get_positions()
+    if not positions:
+        return recommendations
+
+    all_trades = get_trades(limit=200)
+    open_trades = [t for t in all_trades if not t.get("closed_at")]
+    if not open_trades:
+        return recommendations
+
+    # Gather portfolio context once
+    daily_records = get_daily_pnl(limit=30)
+    portfolio_value = daily_records[0]["portfolio_value"] if daily_records else 0
+    peak_value = max(r["portfolio_value"] for r in daily_records) if daily_records else 0
+    portfolio_drawdown = (peak_value - portfolio_value) / peak_value if peak_value > 0 else 0
+
+    # Strategy performance lookup
+    trades_by_strategy = {}
+    for t in all_trades:
+        strat = t.get("strategy", "unknown")
+        trades_by_strategy.setdefault(strat, []).append(t)
+
+    # Recent lessons from other agents
+    recent_lessons = []
+    try:
+        from trading.intelligence.action_narrator import get_recent_lessons
+        recent_lessons = get_recent_lessons(limit=10)
+    except Exception:
+        pass
+
+    # Volume data
+    vol_data = {}
+    try:
+        from trading.execution.router import get_crypto_quote
+    except ImportError:
+        get_crypto_quote = None
+
+    # Check last analysis time per trade to avoid spamming
+    from trading.db.store import get_trade_analyses, insert_trade_analysis
+
+    for trade in open_trades:
+        symbol = trade.get("symbol", "")
+        trade_id = trade.get("id", 0)
+        strategy = trade.get("strategy", "unknown")
+
+        # Find matching position
+        pos = next((p for p in positions if p.get("symbol") == symbol or
+                     p.get("symbol", "").replace("/", "") == symbol.replace("/", "")), None)
+        if not pos:
+            continue
+
+        # --- Skip if analyzed within last 12 hours ---
+        recent_analyses = get_trade_analyses(trade_id, limit=1)
+        if recent_analyses:
+            try:
+                last_analysis_time = datetime.fromisoformat(
+                    recent_analyses[0]["timestamp"].replace("Z", "+00:00")
+                )
+                hours_since = (datetime.now(timezone.utc) - last_analysis_time).total_seconds() / 3600
+                if hours_since < POSITION_REVIEW_INTERVAL_HOURS:
+                    continue  # Already reviewed recently
+            except Exception:
+                pass
+
+        # --- Gather deep context for this position ---
+        entry_price = trade.get("price", 0)
+        current_price = pos.get("current_price", 0) or 0
+        unrealized_pnl = pos.get("unrealized_pnl", 0) or 0
+        unrealized_pct = pos.get("unrealized_pnl_pct", 0) or 0
+        stop_loss = trade.get("stop_loss_price")
+        take_profit = trade.get("take_profit_price")
+        leverage = trade.get("leverage", 1) or 1
+
+        # Time open
+        hours_open = 0
+        try:
+            entry_time = datetime.fromisoformat(trade["timestamp"].replace("Z", "+00:00"))
+            hours_open = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
+        except Exception:
+            pass
+
+        # Strategy track record
+        strat_trades = trades_by_strategy.get(strategy, [])
+        strat_closed = [t for t in strat_trades if t.get("pnl") is not None]
+        strat_win_rate = None
+        strat_avg_pnl = None
+        if strat_closed:
+            wins = len([t for t in strat_closed if t["pnl"] > 0])
+            strat_win_rate = wins / len(strat_closed)
+            strat_avg_pnl = sum(t["pnl"] for t in strat_closed) / len(strat_closed)
+
+        # Position concentration
+        pos_value = pos.get("market_value", 0) or (pos.get("qty", 0) * current_price)
+        concentration = pos_value / portfolio_value if portfolio_value > 0 else 0
+
+        # Stop loss proximity
+        sl_distance = None
+        sl_at_risk = False
+        if stop_loss and current_price > 0:
+            sl_distance = abs(current_price - stop_loss) / current_price
+            sl_at_risk = sl_distance < POSITION_SL_DISTANCE_WARN
+
+        # Take profit proximity
+        tp_distance = None
+        tp_near = False
+        if take_profit and current_price > 0:
+            tp_distance = abs(take_profit - current_price) / current_price
+            tp_near = tp_distance < 0.02  # Within 2% of target
+
+        # --- Determine action based on structured rules ---
+        action = "hold"
+        urgency = "normal"
+        reasons = []
+
+        # Rule 1: Deep loss — recommend closing
+        if unrealized_pct <= POSITION_LOSS_ALERT_PCT:
+            action = "close"
+            urgency = "high"
+            reasons.append(
+                f"Position is down {unrealized_pct:.1f}% (${unrealized_pnl:+.2f}), "
+                f"exceeding {POSITION_LOSS_ALERT_PCT}% loss threshold"
+            )
+
+        # Rule 2: Near stop loss — recommend tightening or preparing exit
+        if sl_at_risk and action != "close":
+            action = "tighten_stop"
+            urgency = "high"
+            reasons.append(
+                f"Price is within {sl_distance*100:.1f}% of stop loss "
+                f"(${stop_loss:.2f}). Close to triggering"
+            )
+
+        # Rule 3: Take profit target nearly reached
+        if tp_near:
+            action = "take_profit"
+            urgency = "medium"
+            reasons.append(
+                f"Price within {tp_distance*100:.1f}% of take profit target "
+                f"(${take_profit:.2f}). Consider taking profits"
+            )
+
+        # Rule 4: Strong profit — consider trailing stop
+        if unrealized_pct >= POSITION_PROFIT_TARGET_PCT and action == "hold":
+            action = "take_profit"
+            urgency = "medium"
+            reasons.append(
+                f"Position is up {unrealized_pct:+.1f}% (${unrealized_pnl:+.2f}). "
+                f"Consider trailing stop or partial close"
+            )
+
+        # Rule 5: Stale position
+        if hours_open >= POSITION_STALE_HOURS and action == "hold":
+            urgency = "low"
+            reasons.append(
+                f"Position has been open for {hours_open:.0f}h ({hours_open/24:.1f} days). "
+                f"Review if thesis still holds"
+            )
+
+        # Rule 6: Strategy underperforming
+        if strat_win_rate is not None and strat_win_rate < 0.35 and len(strat_closed) >= 10:
+            reasons.append(
+                f"Strategy '{strategy}' has {strat_win_rate*100:.0f}% win rate "
+                f"over {len(strat_closed)} trades — underperforming"
+            )
+            if action == "hold":
+                action = "tighten_stop"
+                urgency = "medium"
+
+        # Rule 7: High concentration risk
+        if concentration > get_threshold("concentration_max_pct"):
+            reasons.append(
+                f"Position represents {concentration*100:.1f}% of portfolio — "
+                f"exceeds {get_threshold('concentration_max_pct')*100:.0f}% limit"
+            )
+            if action == "hold":
+                action = "tighten_stop"
+
+        # Rule 8: Portfolio in drawdown — protect capital
+        if portfolio_drawdown >= get_threshold("drawdown_tighten_threshold"):
+            reasons.append(
+                f"Portfolio in {portfolio_drawdown*100:.1f}% drawdown — "
+                f"capital preservation mode"
+            )
+            if action == "hold" and unrealized_pnl > 0:
+                action = "take_profit"
+                urgency = "medium"
+
+        # Rule 9: Leveraged positions get stricter monitoring
+        if leverage > 1:
+            reasons.append(f"Leveraged position ({leverage}x) — tighter monitoring required")
+            if unrealized_pct < -3.0 and action == "hold":
+                action = "tighten_stop"
+                urgency = "high"
+
+        # Default hold reason
+        if not reasons:
+            reasons.append(
+                f"Position performing within normal range "
+                f"({unrealized_pct:+.1f}%, {hours_open:.0f}h open)"
+            )
+
+        # --- Build rich analysis narrative from system knowledge ---
+        analysis_parts = []
+
+        # Position status
+        status_emoji = "📈" if unrealized_pnl >= 0 else "📉"
+        analysis_parts.append(
+            f"{status_emoji} {symbol} {trade.get('side', '').upper()} @ ${entry_price:.2f} → "
+            f"${current_price:.2f} ({unrealized_pct:+.1f}%, ${unrealized_pnl:+.2f})"
+        )
+
+        # Strategy context
+        if strat_win_rate is not None:
+            analysis_parts.append(
+                f"Strategy '{strategy}': {strat_win_rate*100:.0f}% win rate, "
+                f"avg P&L ${strat_avg_pnl:+.2f} over {len(strat_closed)} closed trades"
+            )
+
+        # Risk levels
+        risk_items = []
+        if stop_loss:
+            risk_items.append(f"SL ${stop_loss:.2f} ({sl_distance*100:.1f}% away)" if sl_distance else f"SL ${stop_loss:.2f}")
+        if take_profit:
+            risk_items.append(f"TP ${take_profit:.2f} ({tp_distance*100:.1f}% away)" if tp_distance else f"TP ${take_profit:.2f}")
+        if leverage > 1:
+            risk_items.append(f"{leverage}x leverage")
+        if risk_items:
+            analysis_parts.append(f"Risk levels: {', '.join(risk_items)}")
+
+        # Portfolio context
+        analysis_parts.append(
+            f"Portfolio: ${portfolio_value:.0f} (drawdown: {portfolio_drawdown*100:.1f}%, "
+            f"position weight: {concentration*100:.1f}%)"
+        )
+
+        # Agent assessment
+        assessment = action.upper().replace("_", " ")
+        analysis_parts.append(f"Assessment: {assessment} — {'; '.join(reasons)}")
+
+        # Include relevant lessons
+        symbol_lessons = [l for l in recent_lessons if symbol.lower() in l.lower() or strategy.lower() in l.lower()]
+        if symbol_lessons:
+            analysis_parts.append(f"Relevant lessons: {symbol_lessons[0][:200]}")
+
+        analysis_text = "\n".join(analysis_parts)
+
+        # --- Enhance with LLM synthesis (best-effort) ---
+        try:
+            from trading.llm.engine import synthesize_position_review
+            structured = {
+                "symbol": symbol, "side": trade.get("side"), "action": action,
+                "urgency": urgency, "entry_price": entry_price,
+                "current_price": current_price, "unrealized_pnl": unrealized_pnl,
+                "unrealized_pct": unrealized_pct, "hours_open": round(hours_open, 1),
+                "leverage": leverage, "strategy": strategy,
+                "strategy_win_rate": round(strat_win_rate, 3) if strat_win_rate is not None else None,
+                "concentration": round(concentration, 4),
+                "portfolio_drawdown": round(portfolio_drawdown, 4),
+                "reasons": reasons,
+            }
+            llm_synthesis = synthesize_position_review(structured, analysis_parts)
+            if llm_synthesis and "LLM unavailable" not in llm_synthesis:
+                analysis_text = llm_synthesis
+        except Exception as e:
+            log.debug("LLM position synthesis failed (using rules): %s", e)
+
+        # --- Write analysis to trade_analyses table ---
+        market_snapshot = {
+            "current_price": current_price,
+            "unrealized_pnl": unrealized_pnl,
+            "unrealized_pct": unrealized_pct,
+            "hours_open": round(hours_open, 1),
+            "portfolio_drawdown": round(portfolio_drawdown, 4),
+            "concentration": round(concentration, 4),
+            "strategy_win_rate": round(strat_win_rate, 3) if strat_win_rate else None,
+            "sl_distance": round(sl_distance, 4) if sl_distance else None,
+            "tp_distance": round(tp_distance, 4) if tp_distance else None,
+            "action": action,
+            "urgency": urgency,
+        }
+        try:
+            insert_trade_analysis(trade_id, analysis_text, market_snapshot, source="position_review_agent")
+            log.info("Position review: trade #%d (%s) → %s [%s]", trade_id, symbol, action, urgency)
+        except Exception as e:
+            log.warning("Failed to insert position review for trade #%d: %s", trade_id, e)
+
+        # --- Produce recommendations for actionable items ---
+        if action in ("close", "take_profit", "tighten_stop") and urgency in ("high", "medium"):
+            recommendations.append({
+                "from_agent": POSITION_REVIEW_AGENT,
+                "to_agent": EXECUTOR_AGENT if action == "close" else RISK_AGENT,
+                "category": "position_review",
+                "action": action,
+                "target": symbol,
+                "reasoning": f"{assessment}: {'; '.join(reasons)}",
+                "data": {
+                    "trade_id": trade_id,
+                    "symbol": symbol,
+                    "side": trade.get("side"),
+                    "entry_price": entry_price,
+                    "current_price": current_price,
+                    "unrealized_pnl": round(unrealized_pnl, 2),
+                    "unrealized_pct": round(unrealized_pct, 2),
+                    "hours_open": round(hours_open, 1),
+                    "leverage": leverage,
+                    "strategy": strategy,
+                    "strategy_win_rate": round(strat_win_rate, 3) if strat_win_rate is not None else None,
+                    "concentration_pct": round(concentration, 4),
+                    "urgency": urgency,
+                    "auto_approve": action == "tighten_stop",  # Only auto-approve stop tightening
+                },
+            })
+
+    return recommendations
+
+# ---------------------------------------------------------------------------
 # Main autonomous cycle
 # ---------------------------------------------------------------------------
 
@@ -1573,6 +1915,7 @@ def run_autonomous_cycle() -> dict:
         ("research", _research_agent_think),
         ("learning", _learning_agent_think),
         ("backtest", _backtest_agent_think),
+        ("position_review", _position_review_agent_think),
     ]
 
     for agent_name, think_fn in agents:
