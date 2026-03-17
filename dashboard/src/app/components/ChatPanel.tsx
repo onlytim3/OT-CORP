@@ -136,9 +136,9 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
   if (!isOpen) return null;
 
   return (
-    <div className="fixed bottom-24 right-4 w-96 max-h-[70vh] flex flex-col bg-black/70 backdrop-blur-2xl border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50">
+    <div className="fixed bottom-24 right-4 w-96 max-h-[70vh] flex flex-col bg-black border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-white/[0.03]">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#0a0a0a]">
         <div className="flex items-center gap-2">
           <MessageSquare className="size-5 text-[#4a9eff]" />
           <span className="font-semibold text-[#e8e8e8]">Trading Assistant</span>
@@ -197,7 +197,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
       </div>
 
       {/* Input */}
-      <div className="px-4 py-3 border-t border-white/[0.06] bg-white/[0.02]">
+      <div className="px-4 py-3 border-t border-white/[0.06] bg-black">
         <div className="flex items-center gap-2">
           <input
             type="text"
