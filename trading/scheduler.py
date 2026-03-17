@@ -266,7 +266,26 @@ def run_trading_cycle():
         if briefing:
             contexts["_intelligence"] = briefing.to_dict()
 
+        # Determine current market regime for regime-gating
+        current_regime = None
+        if briefing:
+            current_regime = briefing.overall_regime  # "bull", "bear", "sideways", "neutral"
+        from trading.config import STRATEGY_REGIME_REQUIREMENTS
+        from trading.strategy.circuit_breaker import check_circuit_breaker
+
         for strategy in strategies:
+            # Circuit breaker: skip strategies with consecutive losses
+            if check_circuit_breaker(strategy.name):
+                console.print(f"\n[red]-> {strategy.name} (CIRCUIT BROKEN — 48h cooldown)[/red]")
+                continue
+
+            # Regime-conditional activation: skip strategies in wrong regime
+            regime_reqs = STRATEGY_REGIME_REQUIREMENTS.get(strategy.name)
+            if regime_reqs and current_regime and current_regime not in regime_reqs:
+                console.print(f"\n[dim]-> {strategy.name} (skipped: regime '{current_regime}' not in {regime_reqs})[/dim]")
+                log.debug("Skipping %s: regime %s not in %s", strategy.name, current_regime, regime_reqs)
+                continue
+
             console.print(f"\n[cyan]-> {strategy.name}[/cyan]")
             try:
                 signals = strategy.generate_signals()
@@ -787,6 +806,30 @@ def run_trading_cycle():
                     log.info("Recalculated ALL P&L records with correct initial capital $%.0f", initial)
                 except Exception as fix_err:
                     log.warning("P&L recalc v2 failed: %s", fix_err)
+
+            # One-time fix v3: purge inflated historical P&L from double-counting bug
+            # Recalculates daily_return using day-over-day portfolio value changes
+            if not get_setting("pnl_purge_v3_done"):
+                try:
+                    with get_db() as db:
+                        rows = db.execute(
+                            "SELECT date, portfolio_value FROM daily_pnl ORDER BY date ASC"
+                        ).fetchall()
+                        if rows:
+                            prev_val = initial
+                            for row in rows:
+                                pv = row["portfolio_value"]
+                                daily_ret = (pv - prev_val) / prev_val if prev_val > 0 else 0
+                                cum_ret = (pv - initial) / initial if initial > 0 else 0
+                                db.execute(
+                                    "UPDATE daily_pnl SET daily_return = ?, cumulative_return = ? WHERE date = ?",
+                                    (daily_ret, cum_ret, row["date"]),
+                                )
+                                prev_val = pv
+                    set_setting("pnl_purge_v3_done", "true")
+                    log.info("P&L v3 purge complete: recalculated daily_return for %d records", len(rows) if rows else 0)
+                except Exception as fix_err:
+                    log.warning("P&L purge v3 failed: %s", fix_err)
         except Exception as e:
             log.warning("P&L snapshot warning: %s", e)
             console.print(f"[yellow]P&L snapshot warning: {e}[/yellow]")
@@ -882,6 +925,59 @@ def run_trading_cycle():
             check_alerts()
         except Exception as e:
             log.warning("Alert check failed (non-fatal): %s", e)
+
+        # ---------------------------------------------------------------
+        # Phase 8.1: Margin monitor — emergency close / reduce / warn
+        # ---------------------------------------------------------------
+        try:
+            from trading.risk.margin_monitor import check_margin_health
+            margin_actions = check_margin_health(positions or [])
+            for ma in margin_actions:
+                if ma["action"] == "emergency_close":
+                    log_action("risk_block", "margin_emergency_close", symbol=ma["symbol"],
+                               details=f"Margin distance {ma['margin_distance']:.1%} — EMERGENCY CLOSE")
+                    console.print(f"[bold red]MARGIN EMERGENCY: {ma['symbol']} at {ma['margin_distance']:.1%}[/bold red]")
+                elif ma["action"] == "reduce_50":
+                    log_action("risk_block", "margin_reduce", symbol=ma["symbol"],
+                               details=f"Margin distance {ma['margin_distance']:.1%} — reduce position 50%")
+                    console.print(f"[yellow]MARGIN WARNING: {ma['symbol']} at {ma['margin_distance']:.1%}[/yellow]")
+                elif ma["action"] == "warn":
+                    log_action("system", "margin_warn", symbol=ma["symbol"],
+                               details=f"Margin distance {ma['margin_distance']:.1%}")
+        except Exception as e:
+            log.debug("Margin monitor failed (non-fatal): %s", e)
+
+        # ---------------------------------------------------------------
+        # Phase 8.2: Anomaly detection — track per-cycle metrics
+        # ---------------------------------------------------------------
+        try:
+            from trading.monitor.anomaly import check_cycle_anomalies, log_anomalies
+            _cycle_elapsed_s = time.monotonic() - _cycle_start_time
+            anomalies = check_cycle_anomalies(
+                signals_count=signal_count,
+                exec_time_s=_cycle_elapsed_s,
+                rejections=blocked_count,
+                api_errors=0,
+            )
+            log_anomalies(anomalies)
+            if anomalies:
+                console.print(f"[yellow]Anomalies detected: {len(anomalies)}[/yellow]")
+                for a in anomalies:
+                    console.print(f"  [yellow]{a}[/yellow]")
+        except Exception as e:
+            log.debug("Anomaly detection failed (non-fatal): %s", e)
+
+        # ---------------------------------------------------------------
+        # Phase 8.3: Scale into winners — add to winning positions
+        # ---------------------------------------------------------------
+        try:
+            scaled = _check_scale_in_winners(positions, portfolio_value)
+            if scaled:
+                console.print(f"[green]Scaled into {len(scaled)} winning positions[/green]")
+                for s in scaled:
+                    console.print(f"  [green]→ {s['symbol']} +${s['addon_value']:.2f} (unrealized +{s['current_pnl_pct']:.1%})[/green]")
+        except Exception as e:
+            log.debug("Scale-in check failed (non-fatal): %s", e)
 
         # ---------------------------------------------------------------
         # Phase 9: Record volume snapshots for learning
@@ -1426,6 +1522,17 @@ def start_daemon(interval_hours=4, paper=False):
 
     # Note: AsterDex orders are immediate (market orders) — no orphaned order reconciliation needed
     log.info("AsterDex primary venue — skipping Alpaca order reconciliation")
+
+    # Start WebSocket price feed (best-effort, falls back to REST)
+    try:
+        from trading.data.ws_feed import start_ws_feed
+        from trading.config import ASTER_SYMBOLS
+        ws_symbols = [s for s in ASTER_SYMBOLS.values() if s]
+        if ws_symbols:
+            start_ws_feed(ws_symbols[:20])  # Top 20 symbols
+            console.print(f"[dim]WebSocket feed started for {min(len(ws_symbols), 20)} symbols[/dim]")
+    except Exception as e:
+        log.debug("WebSocket feed start failed (non-fatal, using REST): %s", e)
 
     # Run startup validation backtest (if enabled)
     _run_startup_validation()

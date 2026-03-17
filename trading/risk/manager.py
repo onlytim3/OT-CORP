@@ -529,26 +529,47 @@ def compute_trade_targets(
     base_sl_pct = RISK["stop_loss_pct"]
     etf_leverage = LEVERAGE_FACTORS.get(symbol, 1.0)
 
-    # Try ATR-based stop distance
+    # Try ATR-based stop distance with per-asset-class multiplier
     try:
         from trading.strategy.indicators import atr
         from trading.data.aster import get_aster_ohlcv
-        from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
-        # Resolve to AsterDex symbol
+        from trading.config import (ASTER_SYMBOLS, CRYPTO_SYMBOLS,
+                                     CRYPTO_L1, CRYPTO_MEME,
+                                     STOCK_PERPS, COMMODITY_PERPS, INDEX_PERPS)
+        # Resolve to AsterDex symbol and determine coin_id
         aster_sym = None
+        matched_coin_id = None
         for coin_id, alpaca_sym in CRYPTO_SYMBOLS.items():
             if alpaca_sym == symbol or symbol.replace("/", "") in alpaca_sym.replace("/", ""):
                 aster_sym = ASTER_SYMBOLS.get(coin_id)
+                matched_coin_id = coin_id
                 break
         if not aster_sym and symbol.endswith("USDT"):
             aster_sym = symbol
+
+        # Per-asset-class ATR multiplier:
+        #   2.5x — crypto majors (BTC, ETH, SOL, etc.)
+        #   3.0x — crypto alts (L2, DeFi, AI)
+        #   4.0x — meme coins (high volatility)
+        #   2.0x — stocks, commodities, indices
+        if matched_coin_id and matched_coin_id in CRYPTO_MEME:
+            atr_mult = 4.0
+        elif matched_coin_id and matched_coin_id in CRYPTO_L1:
+            atr_mult = 2.5
+        elif matched_coin_id and matched_coin_id in (STOCK_PERPS + COMMODITY_PERPS + INDEX_PERPS):
+            atr_mult = 2.0
+        elif matched_coin_id:
+            atr_mult = 3.0  # alts (L2, DeFi, AI)
+        else:
+            atr_mult = 2.0  # default for unknown
+
         if aster_sym:
             df = get_aster_ohlcv(aster_sym, interval="1h", limit=50)
             if df is not None and not df.empty and len(df) >= 14:
                 atr_series = atr(df["high"], df["low"], df["close"], period=14)
                 atr_value = float(atr_series.iloc[-1])
                 if atr_value > 0 and entry_price > 0:
-                    base_sl_pct = (2.0 * atr_value) / entry_price
+                    base_sl_pct = (atr_mult * atr_value) / entry_price
     except Exception:
         pass  # Fall back to config-based stop
 

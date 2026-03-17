@@ -361,6 +361,15 @@ def pair_trades() -> int:
                             f"{buy_trade_id}: {exc}[/yellow]"
                         )
 
+                    # Record result for circuit breaker tracking
+                    try:
+                        from trading.strategy.circuit_breaker import record_trade_result
+                        strategy_name = buy.get("strategy", "")
+                        if strategy_name:
+                            record_trade_result(strategy_name, is_loss=(pnl < 0))
+                    except Exception:
+                        pass
+
                     # Post-trade review via LLM (best-effort, non-blocking)
                     try:
                         from trading.llm.engine import generate_post_trade_review
