@@ -507,7 +507,26 @@ def api_trade_detail(trade_id):
                     except Exception:
                         pass
 
-    return jsonify({"trade": trade, "journal": journal, "signals": signals})
+    # Trade analyses (12h cycle updates)
+    analyses = []
+    try:
+        from trading.db.store import get_trade_analyses
+        analyses = get_trade_analyses(trade_id, limit=20)
+    except Exception:
+        pass
+
+    return jsonify({"trade": trade, "journal": journal, "signals": signals, "analyses": analyses})
+
+
+@app.route("/api/trade/<int:trade_id>/analyses")
+def api_trade_analyses(trade_id):
+    """Get analysis timeline for a trade."""
+    try:
+        from trading.db.store import get_trade_analyses
+        analyses = get_trade_analyses(trade_id, limit=20)
+        return jsonify(analyses)
+    except Exception as e:
+        return jsonify([])
 
 
 @app.route("/api/signal/<int:signal_id>")
@@ -565,11 +584,35 @@ def api_action_detail(action_id):
             "SELECT * FROM action_log WHERE id > ? ORDER BY id ASC LIMIT 5", (action_id,)
         ).fetchall()]
 
+    # Get or generate narrative
+    narrative_data = {"narrative": "", "interpretation": {}, "lessons": [], "quality_score": None}
+    try:
+        from trading.intelligence.action_narrator import get_or_generate_narrative
+        narrative_data = get_or_generate_narrative(action)
+    except Exception as e:
+        log.warning("Narrative generation failed for action #%s: %s", action_id, e)
+
     return jsonify({
         "action": action,
         "context_before": list(reversed(context_before)),
         "context_after": context_after,
+        "narrative": narrative_data.get("narrative", ""),
+        "interpretation": narrative_data.get("interpretation", {}),
+        "lessons": narrative_data.get("lessons", []),
+        "quality_score": narrative_data.get("quality_score"),
     })
+
+
+@app.route("/api/actions/generate-narratives", methods=["POST"])
+def api_generate_narratives():
+    """Trigger narrative generation for recent un-narrated actions."""
+    try:
+        from trading.intelligence.action_narrator import generate_missing_narratives
+        count = generate_missing_narratives(limit=20)
+        return jsonify({"generated": count})
+    except Exception as e:
+        log.warning("Batch narrative generation failed: %s", e)
+        return jsonify({"generated": 0, "error": str(e)})
 
 
 @app.route("/api/pnl/history")

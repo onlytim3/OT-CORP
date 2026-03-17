@@ -1555,6 +1555,16 @@ def run_autonomous_cycle() -> dict:
         log.error("Verification phase failed: %s", e)
         agent_results["verification"] = f"error: {e}"
 
+    # --- Gather recent lessons from action narratives for context ---
+    recent_lessons = []
+    try:
+        from trading.intelligence.action_narrator import get_recent_lessons
+        recent_lessons = get_recent_lessons(limit=15)
+        if recent_lessons:
+            log.info("Injecting %d recent lessons into agent context", len(recent_lessons))
+    except Exception:
+        pass
+
     # --- Each agent thinks ---
     agents = [
         ("performance", _performance_agent_think),

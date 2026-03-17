@@ -39,6 +39,10 @@ export const api = {
   llmJournal: `${API_BASE_URL}/api/llm/journal`,
   llmExplainTrade: (id: number) => `${API_BASE_URL}/api/llm/explain-trade/${id}`,
   llmAnalyze: `${API_BASE_URL}/api/llm/analyze`,
+  // Trade detail & action narratives
+  tradeAnalyses: (id: number) => `${API_BASE_URL}/api/trade/${id}/analyses`,
+  actionDetail: (id: number) => `${API_BASE_URL}/api/action/${id}`,
+  generateNarratives: `${API_BASE_URL}/api/actions/generate-narratives`,
 };
 
 // --- Types ---
@@ -89,6 +93,33 @@ export interface Trade {
   pnl: number | null;
   pnl_pct: number | null;
   closed_at: string | null;
+  leverage: number | null;
+  stop_loss_price: number | null;
+  take_profit_price: number | null;
+  entry_reasoning: string | null;
+}
+
+export interface TradeAnalysis {
+  id: number;
+  trade_id: number;
+  timestamp: string;
+  analysis: string;
+  source: string;
+}
+
+export interface ActionDetail {
+  action: ActionItem;
+  context_before: ActionItem[];
+  context_after: ActionItem[];
+  narrative: string;
+  interpretation: {
+    summary?: string;
+    context?: string;
+    assessment?: string;
+    impact?: string;
+  };
+  lessons: string[];
+  quality_score: number | null;
 }
 
 export interface ActionItem {

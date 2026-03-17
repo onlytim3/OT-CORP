@@ -2,8 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { TrendingUp, TrendingDown, DollarSign, Volume2, RefreshCw, ArrowUpDown, ShieldAlert } from "lucide-react";
-import { useState } from "react";
-import { api, usePolling, type StatusResponse, type Trade, type VolumeAnalysis, type MarginHealth } from "../config/api";
+import { useState, useEffect } from "react";
+import { api, usePolling, fetchAPI, type StatusResponse, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
 
 function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
   const pct = Math.min(ratio * 100, 200);
@@ -31,6 +31,134 @@ function formatQty(qty: number): string {
   if (abs >= 1) return qty.toLocaleString('en-US', { maximumFractionDigits: 4 });
   // Small quantities: up to 6 significant digits
   return Number(qty.toPrecision(6)).toString();
+}
+
+function TradeDetailModal({ trade, onClose }: { trade: Trade | null; onClose: () => void }) {
+  const [analyses, setAnalyses] = useState<TradeAnalysis[]>([]);
+  const [loadingAnalyses, setLoadingAnalyses] = useState(false);
+  const [showReasoning, setShowReasoning] = useState(true);
+
+  useEffect(() => {
+    if (trade) {
+      setLoadingAnalyses(true);
+      fetchAPI<TradeAnalysis[]>(api.tradeAnalyses(trade.id))
+        .then(setAnalyses)
+        .catch(() => setAnalyses([]))
+        .finally(() => setLoadingAnalyses(false));
+    } else {
+      setAnalyses([]);
+    }
+  }, [trade]);
+
+  return (
+    <Dialog open={!!trade} onOpenChange={() => onClose()}>
+      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-3">
+            <Badge variant={trade?.side === 'buy' ? 'default' : 'destructive'}>{trade?.side?.toUpperCase()}</Badge>
+            {trade?.symbol}
+            {trade?.leverage && trade.leverage > 1 && (
+              <span className="text-sm font-normal text-[#ffa500] bg-[#ffa500]/10 px-2 py-0.5 rounded-md">{trade.leverage}x Leverage</span>
+            )}
+          </DialogTitle>
+        </DialogHeader>
+        {trade && (
+          <div className="space-y-4 mt-2 sm:mt-4">
+            {/* Core Info Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+              {[
+                ['Strategy', trade.strategy],
+                ['Quantity', formatQty(trade.qty)],
+                ['Price', `$${trade.price.toFixed(2)}`],
+                ['Total', `$${trade.total.toFixed(2)}`],
+                ['P&L', trade.pnl !== null ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : 'Open'],
+                ['P&L %', trade.pnl_pct !== null ? `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(2)}%` : '-'],
+                ['Leverage', trade.leverage ? `${trade.leverage}x` : '1x'],
+                ['Take Profit', trade.take_profit_price ? `$${trade.take_profit_price.toFixed(2)}` : 'None'],
+                ['Stop Loss', trade.stop_loss_price ? `$${trade.stop_loss_price.toFixed(2)}` : 'None'],
+                ['Time', new Date(trade.timestamp).toLocaleString()],
+                ['Closed', trade.closed_at ? new Date(trade.closed_at).toLocaleString() : 'Open'],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="p-2.5 sm:p-3 rounded-lg bg-white/5 border border-white/10">
+                  <p className="text-[10px] sm:text-xs text-[#888888] mb-1">{label}</p>
+                  <p className="text-sm sm:text-base font-bold truncate">{value}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* TP/SL Visual Bar */}
+            {(trade.stop_loss_price || trade.take_profit_price) && (
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-xs text-[#888888] mb-2">Risk/Reward Range</p>
+                <div className="relative h-6 bg-white/5 rounded-full overflow-hidden">
+                  {trade.stop_loss_price && trade.take_profit_price && (
+                    <>
+                      <div className="absolute left-0 top-0 h-full bg-[#ff4466]/20 rounded-l-full" style={{ width: '30%' }} />
+                      <div className="absolute right-0 top-0 h-full bg-[#00d4aa]/20 rounded-r-full" style={{ width: '30%' }} />
+                      <div className="absolute left-1/2 top-0 h-full w-0.5 bg-[#4a9eff] -translate-x-1/2" />
+                    </>
+                  )}
+                  <div className="absolute inset-0 flex items-center justify-between px-3 text-[10px] font-medium">
+                    <span className="text-[#ff4466]">{trade.stop_loss_price ? `SL $${trade.stop_loss_price.toFixed(2)}` : ''}</span>
+                    <span className="text-[#4a9eff]">Entry ${trade.price.toFixed(2)}</span>
+                    <span className="text-[#00d4aa]">{trade.take_profit_price ? `TP $${trade.take_profit_price.toFixed(2)}` : ''}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Entry Reasoning */}
+            {trade.entry_reasoning && (
+              <div className="rounded-lg bg-white/5 border border-white/10 overflow-hidden">
+                <button
+                  onClick={() => setShowReasoning(!showReasoning)}
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-white/5 transition-colors"
+                >
+                  <p className="text-xs text-[#888888] font-medium uppercase tracking-wider">Entry Reasoning</p>
+                  <span className="text-xs text-[#888888]">{showReasoning ? '▼' : '▶'}</span>
+                </button>
+                {showReasoning && (
+                  <div className="px-4 pb-3">
+                    <p className="text-sm text-[#d4d4d4] leading-relaxed whitespace-pre-wrap">{trade.entry_reasoning}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Live Analysis Updates */}
+            {(analyses.length > 0 || loadingAnalyses) && (
+              <div className="rounded-lg bg-white/5 border border-white/10 p-4">
+                <p className="text-xs text-[#888888] font-medium uppercase tracking-wider mb-3">Live Analysis Updates</p>
+                {loadingAnalyses ? (
+                  <p className="text-sm text-[#888888] animate-pulse">Loading analysis...</p>
+                ) : (
+                  <div className="space-y-2.5 max-h-48 overflow-y-auto">
+                    {analyses.map(a => (
+                      <div key={a.id} className="p-3 rounded-lg bg-black/30 border border-white/5">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="text-[10px] text-[#888888]">
+                            {new Date(a.timestamp).toLocaleString()}
+                          </p>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            a.source === '12h_cycle' ? 'bg-[#4a9eff]/10 text-[#4a9eff]' :
+                            a.source === 'static_fallback' ? 'bg-[#888888]/10 text-[#888888]' :
+                            'bg-[#00d4aa]/10 text-[#00d4aa]'
+                          }`}>
+                            {a.source === '12h_cycle' ? 'AI Analysis' : a.source === 'static_fallback' ? 'Auto' : 'LLM'}
+                          </span>
+                        </div>
+                        <p className="text-sm text-[#c0c0c0] leading-relaxed">{a.analysis}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 export function Trading() {
@@ -173,7 +301,12 @@ export function Trading() {
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(t.qty)}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                      <td className="py-3 px-4 text-[#888888] text-sm">{t.strategy}</td>
+                      <td className="py-3 px-4 text-[#888888] text-sm">
+                        {t.strategy}
+                        {t.leverage && t.leverage > 1 && (
+                          <span className="ml-1 text-xs text-[#ffa500]">{t.leverage}x</span>
+                        )}
+                      </td>
                       <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
                         {t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
                       </td>
@@ -191,35 +324,7 @@ export function Trading() {
       </Card>
 
       {/* Trade Detail Modal */}
-      <Dialog open={!!selectedTrade} onOpenChange={() => setSelectedTrade(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-3">
-              <Badge variant={selectedTrade?.side === 'buy' ? 'default' : 'destructive'}>{selectedTrade?.side.toUpperCase()}</Badge>
-              {selectedTrade?.symbol}
-            </DialogTitle>
-          </DialogHeader>
-          {selectedTrade && (
-            <div className="grid grid-cols-2 gap-2 sm:gap-4 mt-2 sm:mt-4">
-              {[
-                ['Strategy', selectedTrade.strategy],
-                ['Quantity', formatQty(selectedTrade.qty)],
-                ['Price', `$${selectedTrade.price.toFixed(2)}`],
-                ['Total', `$${selectedTrade.total.toFixed(2)}`],
-                ['P&L', selectedTrade.pnl !== null ? `${selectedTrade.pnl >= 0 ? '+' : ''}$${selectedTrade.pnl.toFixed(2)}` : 'Open'],
-                ['P&L %', selectedTrade.pnl_pct !== null ? `${selectedTrade.pnl_pct.toFixed(2)}%` : '-'],
-                ['Time', new Date(selectedTrade.timestamp).toLocaleString()],
-                ['Closed', selectedTrade.closed_at ? new Date(selectedTrade.closed_at).toLocaleString() : 'Open'],
-              ].map(([label, value]) => (
-                <div key={String(label)} className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-xs sm:text-sm text-[#888888] mb-1">{label}</p>
-                  <p className="text-base sm:text-lg font-bold truncate">{value}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      <TradeDetailModal trade={selectedTrade} onClose={() => setSelectedTrade(null)} />
     </div>
   );
 }

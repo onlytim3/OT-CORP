@@ -237,6 +237,27 @@ def init_db():
                 active INTEGER DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS trade_analyses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                analysis TEXT NOT NULL,
+                market_snapshot TEXT,
+                source TEXT DEFAULT 'llm'
+            );
+            CREATE INDEX IF NOT EXISTS idx_trade_analyses_trade_id
+                ON trade_analyses(trade_id);
+
+            CREATE TABLE IF NOT EXISTS action_narratives (
+                action_id INTEGER PRIMARY KEY,
+                narrative TEXT NOT NULL,
+                interpretation TEXT,
+                lessons TEXT,
+                quality_score REAL,
+                generated_at TEXT NOT NULL,
+                model TEXT
+            );
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -260,6 +281,8 @@ def init_db():
             ("take_profit_price", "REAL"),
             ("trailing_stop_activate", "REAL"),
             ("risk_reward_ratio", "REAL"),
+            ("leverage", "INTEGER"),
+            ("entry_reasoning", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {coltype}")
@@ -328,14 +351,15 @@ def set_setting(key: str, value: str):
 
 def insert_trade(symbol, side, qty, price, total, strategy, status="pending", alpaca_order_id=None,
                   stop_loss_price=None, take_profit_price=None, trailing_stop_activate=None,
-                  risk_reward_ratio=None):
+                  risk_reward_ratio=None, leverage=None, entry_reasoning=None):
     with get_db() as conn:
         cur = conn.execute(
             "INSERT INTO trades (timestamp, symbol, side, qty, price, total, strategy, status, alpaca_order_id, "
-            "stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio, leverage, entry_reasoning) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (_now(), symbol, side, qty, price, total, strategy, status, alpaca_order_id,
-             stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio),
+             stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio,
+             leverage, entry_reasoning),
         )
         return cur.lastrowid
 
@@ -608,12 +632,21 @@ def get_action_log_summary():
             "SELECT timestamp FROM action_log WHERE category='strategy_run' ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
 
+        open_positions = conn.execute(
+            "SELECT COUNT(*) FROM positions"
+        ).fetchone()[0]
+
+        from trading.config import STRATEGY_ENABLED
+        active_strategies = len([k for k, v in STRATEGY_ENABLED.items() if v])
+
         return {
             "trades_today": total_trades_today,
             "signals_today": total_signals_today,
             "risk_blocks_today": risk_blocks_today,
             "errors_today": errors_today,
             "last_run": last_run[0] if last_run else None,
+            "active_strategies": active_strategies,
+            "open_positions": open_positions,
         }
 
 
@@ -868,3 +901,72 @@ def cleanup_old_volume_profiles(keep_days: int = 90) -> int:
             "DELETE FROM volume_profiles WHERE timestamp < ?", (cutoff,)
         )
         return cursor.rowcount
+
+
+# --- Trade Analyses ---
+
+def insert_trade_analysis(trade_id: int, analysis: str, market_snapshot: dict = None,
+                          source: str = "llm") -> int:
+    """Insert a trade analysis entry."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO trade_analyses (trade_id, timestamp, analysis, market_snapshot, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (trade_id, _now(), analysis,
+             json.dumps(market_snapshot) if market_snapshot else None, source),
+        )
+        return cur.lastrowid
+
+
+def get_trade_analyses(trade_id: int, limit: int = 20) -> list:
+    """Get analysis entries for a trade, newest first."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trade_analyses WHERE trade_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (trade_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# --- Action Narratives ---
+
+def insert_action_narrative(action_id: int, narrative: str, interpretation: str = None,
+                            lessons: str = None, quality_score: float = None,
+                            model: str = None) -> None:
+    """Insert or update an action narrative."""
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO action_narratives "
+            "(action_id, narrative, interpretation, lessons, quality_score, generated_at, model) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (action_id, narrative, interpretation, lessons, quality_score, _now(), model),
+        )
+
+
+def get_action_narrative(action_id: int) -> dict | None:
+    """Get cached narrative for an action."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM action_narratives WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_recent_action_lessons(limit: int = 20) -> list:
+    """Get recent lessons from action narratives for agent context."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT lessons FROM action_narratives "
+            "WHERE lessons IS NOT NULL AND lessons != '[]' "
+            "ORDER BY generated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    all_lessons = []
+    for row in rows:
+        try:
+            lessons = json.loads(row["lessons"])
+            all_lessons.extend(lessons)
+        except Exception:
+            pass
+    return list(dict.fromkeys(all_lessons))[:limit]

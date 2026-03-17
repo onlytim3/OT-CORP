@@ -3,8 +3,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/
 import { Badge } from "../components/ui/badge";
 import { MetricCard } from "../components/MetricCard";
 import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart } from "lucide-react";
-import { useState } from "react";
-import { api, usePolling, isUsingMockData, type StatusResponse, type ActionItem, type AggregatedLeverage, type SectorExposure } from "../config/api";
+import { useState, useEffect } from "react";
+import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure } from "../config/api";
 
 function formatQty(qty: number): string {
   if (qty === 0) return '0';
@@ -12,6 +12,125 @@ function formatQty(qty: number): string {
   if (abs >= 100) return qty.toLocaleString('en-US', { maximumFractionDigits: 2 });
   if (abs >= 1) return qty.toLocaleString('en-US', { maximumFractionDigits: 4 });
   return Number(qty.toPrecision(6)).toString();
+}
+
+function ActivityDetailModal({ activity, onClose }: { activity: ActionItem | null; onClose: () => void }) {
+  const [detail, setDetail] = useState<ActionDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [showRawData, setShowRawData] = useState(false);
+
+  useEffect(() => {
+    if (activity?.id) {
+      setLoading(true);
+      setDetail(null);
+      fetchAPI<ActionDetail>(api.actionDetail(activity.id))
+        .then(setDetail)
+        .catch(() => setDetail(null))
+        .finally(() => setLoading(false));
+    } else {
+      setDetail(null);
+    }
+  }, [activity]);
+
+  const qualityColor = (score: number | null) => {
+    if (score === null || score === undefined) return { border: 'border-white/10', bg: 'bg-white/5', label: '', text: 'text-[#888888]' };
+    if (score > 0.7) return { border: 'border-[#00d4aa]/30', bg: 'bg-[#00d4aa]/10', label: 'Good Decision', text: 'text-[#00d4aa]' };
+    if (score > 0.4) return { border: 'border-[#ffa500]/30', bg: 'bg-[#ffa500]/10', label: 'Neutral', text: 'text-[#ffa500]' };
+    return { border: 'border-[#ff4466]/30', bg: 'bg-[#ff4466]/10', label: 'Needs Review', text: 'text-[#ff4466]' };
+  };
+
+  return (
+    <Dialog open={!!activity} onOpenChange={() => onClose()}>
+      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-3">
+            {activity?.action}
+            {activity && <Badge variant="secondary" className="text-xs">{activity.category}</Badge>}
+          </DialogTitle>
+        </DialogHeader>
+        {activity && (
+          <div className="space-y-4 mt-2 sm:mt-4">
+            {/* Narrative Section */}
+            {loading ? (
+              <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-sm text-[#888888] animate-pulse">Analyzing activity...</p>
+              </div>
+            ) : detail?.narrative ? (
+              <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-sm text-[#d4d4d4] leading-[1.7]">{detail.narrative}</p>
+              </div>
+            ) : activity.details ? (
+              <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-sm text-[#c0c0c0]">{activity.details}</p>
+              </div>
+            ) : null}
+
+            {/* Assessment Card */}
+            {detail?.interpretation?.assessment && (
+              <div className={`p-4 rounded-lg ${qualityColor(detail.quality_score).bg} border ${qualityColor(detail.quality_score).border}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs text-[#888888] font-medium uppercase tracking-wider">Assessment</p>
+                  {detail.quality_score !== null && (
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${qualityColor(detail.quality_score).text} ${qualityColor(detail.quality_score).bg}`}>
+                      {qualityColor(detail.quality_score).label} ({(detail.quality_score * 100).toFixed(0)}%)
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-[#d4d4d4] leading-relaxed">{detail.interpretation.assessment}</p>
+                {detail.interpretation.impact && (
+                  <p className="text-sm text-[#888888] mt-2 leading-relaxed"><span className="text-[#c0c0c0] font-medium">Impact:</span> {detail.interpretation.impact}</p>
+                )}
+              </div>
+            )}
+
+            {/* Lessons */}
+            {detail?.lessons && detail.lessons.length > 0 && (
+              <div>
+                <p className="text-xs text-[#888888] font-medium uppercase tracking-wider mb-2">Lessons Learned</p>
+                <div className="flex flex-wrap gap-2">
+                  {detail.lessons.map((lesson, i) => (
+                    <span key={i} className="text-xs px-3 py-1.5 rounded-full bg-[#4a9eff]/10 border border-[#4a9eff]/20 text-[#4a9eff]">
+                      {lesson}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Meta Info */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-xs text-[#888888] mb-1">Category</p>
+                <Badge>{activity.category}</Badge>
+              </div>
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-xs text-[#888888] mb-1">Time</p>
+                <p className="text-xs">{new Date(activity.timestamp).toLocaleString()}</p>
+              </div>
+            </div>
+
+            {/* Raw Data (Collapsible) */}
+            {activity.data && (
+              <div className="rounded-lg bg-white/5 border border-white/10 overflow-hidden">
+                <button
+                  onClick={() => setShowRawData(!showRawData)}
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-white/5 transition-colors"
+                >
+                  <p className="text-xs text-[#888888] font-medium">Technical Details</p>
+                  <span className="text-xs text-[#888888]">{showRawData ? '▼' : '▶'}</span>
+                </button>
+                {showRawData && (
+                  <div className="px-4 pb-3">
+                    <pre className="text-xs text-[#c0c0c0] overflow-x-auto max-h-40 whitespace-pre-wrap break-all">{JSON.stringify(activity.data, null, 2)}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 export function Overview() {
@@ -288,37 +407,7 @@ export function Overview() {
       </Card>
 
       {/* Activity Detail Modal */}
-      <Dialog open={!!selectedActivity} onOpenChange={() => setSelectedActivity(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
-          <DialogHeader><DialogTitle>{selectedActivity?.action}</DialogTitle></DialogHeader>
-          {selectedActivity && (
-            <div className="space-y-3 sm:space-y-4 mt-2 sm:mt-4">
-              {selectedActivity.details && (
-                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Details</p>
-                  <p className="text-sm sm:text-base text-[#c0c0c0]">{selectedActivity.details}</p>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-2 sm:gap-4">
-                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Category</p>
-                  <Badge>{selectedActivity.category}</Badge>
-                </div>
-                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Time</p>
-                  <p className="text-xs sm:text-sm">{new Date(selectedActivity.timestamp).toLocaleString()}</p>
-                </div>
-              </div>
-              {selectedActivity.data && (
-                <div className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-xs sm:text-sm text-[#888888] mb-1">Data</p>
-                  <pre className="text-xs text-[#c0c0c0] overflow-x-auto max-h-40 whitespace-pre-wrap break-all">{JSON.stringify(selectedActivity.data, null, 2)}</pre>
-                </div>
-              )}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      <ActivityDetailModal activity={selectedActivity} onClose={() => setSelectedActivity(null)} />
     </div>
   );
 }

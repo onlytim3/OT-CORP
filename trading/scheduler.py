@@ -23,7 +23,7 @@ import os
 import signal as signal_mod
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import schedule
 from rich.console import Console
@@ -619,6 +619,8 @@ def run_trading_cycle():
                     strategy=signal.strategy,
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
+                    leverage=lev,
+                    entry_reasoning=narration,
                 )
                 create_journal_entry(trade_id, signal, ctx, narration=narration)
                 executed_count += 1
@@ -679,29 +681,27 @@ def run_trading_cycle():
                 p.get("market_value", p["qty"] * p["current_price"])
                 for p in positions
             ) if positions else 0
-            cash = account["cash"]
+            fresh_account = _get_account()
+            cash = fresh_account["cash"]
             pv = cash + pos_value
 
-            # Proper daily return: compare to yesterday's portfolio value
-            prev_records = get_daily_pnl(limit=2)
-            if prev_records:
-                prev_pv = prev_records[0]["portfolio_value"]
-                # Check if prev record is from today (already written) or yesterday
-                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                if prev_records[0]["date"] == today_str and len(prev_records) > 1:
-                    prev_pv = prev_records[1]["portfolio_value"]
-                daily_ret = (pv - prev_pv) / prev_pv if prev_pv > 0 else 0
-            else:
-                daily_ret = 0
-
-            # Cumulative return from initial capital
-            # Use DB-persisted initial capital, falling back to config
+            # Proper daily return: compare to yesterday's final portfolio value
             initial_str = get_setting("initial_capital")
             if initial_str:
                 initial = float(initial_str)
             else:
                 initial = INITIAL_CAPITAL
                 set_setting("initial_capital", str(initial))
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            with get_db() as conn:
+                prev_row = conn.execute(
+                    "SELECT portfolio_value FROM daily_pnl WHERE date = ? LIMIT 1",
+                    (yesterday,)
+                ).fetchone()
+            prev_pv = prev_row["portfolio_value"] if prev_row else initial
+            daily_ret = (pv - prev_pv) / prev_pv if prev_pv > 0 else 0
+
+            # Cumulative return from initial capital (initial already set above)
             cum_ret = (pv - initial) / initial if initial > 0 else 0
             record_daily_pnl(pv, cash, pos_value, daily_ret, cum_ret)
 
@@ -719,9 +719,34 @@ def run_trading_cycle():
                     log.info("Recalculated stale P&L records with correct initial capital $%.0f", initial)
                 except Exception as fix_err:
                     log.warning("P&L recalc failed: %s", fix_err)
+
+            # One-time fix v2: recalculate ALL daily_pnl records with correct initial capital
+            if not get_setting("pnl_recalc_v2_done"):
+                try:
+                    with get_db() as db:
+                        db.execute(
+                            "UPDATE daily_pnl SET cumulative_return = "
+                            "(portfolio_value - ?) / ? ",
+                            (initial, initial),
+                        )
+                    set_setting("pnl_recalc_v2_done", "true")
+                    log.info("Recalculated ALL P&L records with correct initial capital $%.0f", initial)
+                except Exception as fix_err:
+                    log.warning("P&L recalc v2 failed: %s", fix_err)
         except Exception as e:
             log.warning("P&L snapshot warning: %s", e)
             console.print(f"[yellow]P&L snapshot warning: {e}[/yellow]")
+
+        # ---------------------------------------------------------------
+        # Phase 7: Dust cleanup
+        # ---------------------------------------------------------------
+        try:
+            from trading.execution.cleanup import close_dust_positions
+            dust_closed = close_dust_positions()
+            if dust_closed:
+                log_action("cleanup", "dust_sweep", details=f"Closed {len(dust_closed)} dust positions: {', '.join(dust_closed)}")
+        except Exception as e:
+            log.warning("Dust cleanup failed: %s", e)
 
         # ---------------------------------------------------------------
         # Summary
@@ -829,6 +854,23 @@ def run_trading_cycle():
         except Exception as e:
             log.debug("Volume snapshot recording failed (non-fatal): %s", e)
 
+        # ---------------------------------------------------------------
+        # Phase 10: Generate narratives for this cycle's actions (background)
+        # ---------------------------------------------------------------
+        try:
+            import threading
+            def _generate_narratives():
+                try:
+                    from trading.intelligence.action_narrator import generate_missing_narratives
+                    count = generate_missing_narratives(limit=30)
+                    if count:
+                        log.info("Generated %d action narratives", count)
+                except Exception as ne:
+                    log.debug("Narrative generation failed (non-fatal): %s", ne)
+            threading.Thread(target=_generate_narratives, daemon=True, name="narrative-generator").start()
+        except Exception:
+            pass
+
     except Exception as e:
         log_action("error", "cycle_crash", details=str(e))
         log.exception("Cycle crashed: %s", e)
@@ -878,6 +920,91 @@ def _check_scale_in_winners(positions, portfolio_value):
         set_setting(key, json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}))
         log_action("scale_in", f"Scale into winner {symbol} (+${addon_value:.2f})", symbol=symbol)
     return scaled
+
+
+# ---------------------------------------------------------------------------
+# 12-hour trade analysis cycle — LLM-powered analysis of open trades
+# ---------------------------------------------------------------------------
+
+def run_trade_analysis_cycle():
+    """Generate 12-hour analysis updates for all open trades."""
+    from trading.db.store import get_trades, insert_trade_analysis
+
+    log.info("Running 12-hour trade analysis cycle...")
+    positions = _get_positions()
+    if not positions:
+        log.info("No open positions for 12h analysis cycle")
+        return
+
+    # Get open trades (status != 'closed')
+    open_trades = get_trades(limit=50)
+    open_trades = [t for t in open_trades if not t.get("closed_at")]
+    if not open_trades:
+        log.info("No open trades for 12h analysis cycle")
+        return
+
+    for trade in open_trades:
+        symbol = trade.get("symbol", "")
+        pos = next((p for p in positions if p.get("symbol") == symbol or
+                     p.get("symbol", "").replace("/", "") == symbol.replace("/", "")), None)
+
+        # Build context
+        hours_open = 0
+        try:
+            from datetime import datetime, timezone
+            entry_time = datetime.fromisoformat(trade["timestamp"].replace("Z", "+00:00"))
+            hours_open = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
+        except Exception:
+            pass
+
+        unrealized_pnl = pos.get("unrealized_pnl", 0) if pos else 0
+        unrealized_pct = pos.get("unrealized_pnl_pct", 0) if pos else 0
+        current_price = pos.get("current_price", 0) if pos else 0
+
+        prompt = (
+            f"Provide a brief analysis update for this open trade:\n\n"
+            f"Trade: {symbol} {trade.get('side', 'unknown')} @ ${trade.get('price', 0):.2f}\n"
+            f"Strategy: {trade.get('strategy', 'unknown')}\n"
+            f"Entry reasoning: {trade.get('entry_reasoning', 'N/A')[:200]}\n"
+            f"Current price: ${current_price:.2f}\n"
+            f"Unrealized P&L: ${unrealized_pnl:.2f} ({unrealized_pct:+.1f}%)\n"
+            f"Hours open: {hours_open:.1f}\n"
+            f"Stop loss: {trade.get('stop_loss_price', 'N/A')}\n"
+            f"Take profit: {trade.get('take_profit_price', 'N/A')}\n\n"
+            f"In 2-3 sentences: How is this trade performing? Any changes in market "
+            f"conditions since entry? Should we hold, tighten stops, or consider closing?"
+        )
+
+        try:
+            from trading.llm.engine import ask_llm
+            analysis = ask_llm(
+                "You are a senior trading analyst. Be concise and analytical.",
+                prompt, tier="bulk"
+            )
+            if analysis and "LLM unavailable" not in analysis:
+                market_snapshot = {"current_price": current_price, "unrealized_pnl": unrealized_pnl}
+                insert_trade_analysis(trade["id"], analysis, market_snapshot, source="12h_cycle")
+                log.info("12h analysis for trade #%d (%s)", trade["id"], symbol)
+            else:
+                # Static fallback
+                status = "profitable" if unrealized_pnl >= 0 else "at a loss"
+                fallback = (
+                    f"Trade is currently {status}: "
+                    f"{'+'if unrealized_pnl >= 0 else ''}${unrealized_pnl:.2f} ({unrealized_pct:+.1f}%). "
+                    f"Position has been open for {hours_open:.0f} hours."
+                )
+                insert_trade_analysis(trade["id"], fallback, source="static_fallback")
+        except Exception as e:
+            log.warning("12h analysis failed for trade #%d: %s", trade.get("id", 0), e)
+            # Still insert a basic status
+            try:
+                status = "profitable" if unrealized_pnl >= 0 else "at a loss"
+                fallback = f"Trade is {status}: ${unrealized_pnl:+.2f}. Open for {hours_open:.0f}h."
+                insert_trade_analysis(trade["id"], fallback, source="static_fallback")
+            except Exception:
+                pass
+
+    log.info("12h analysis cycle complete for %d trades", len(open_trades))
 
 
 # ---------------------------------------------------------------------------
@@ -1284,6 +1411,7 @@ def start_daemon(interval_hours=4, paper=False):
     schedule.every(15).minutes.do(check_stop_losses)
     schedule.every(30).minutes.do(process_pending_approvals)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
+    schedule.every(12).hours.do(run_trade_analysis_cycle)
 
     # Graceful shutdown via SIGTERM/SIGINT
     _shutdown_requested = False

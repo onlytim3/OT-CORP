@@ -212,7 +212,7 @@ export function Analytics() {
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.08)" />
                       <XAxis dataKey="date" stroke="#888888" tick={{ fontSize: 11 }} />
-                      <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
+                      <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} domain={['dataMin * 0.95', 'dataMax * 1.05']} />
                       <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={false} formatter={(v: number) => [`$${v.toFixed(2)}`, 'Portfolio']} />
                       <Area type="monotone" dataKey="value" stroke="#4a9eff" fill="url(#valueGrad)" strokeWidth={2} />
                     </AreaChart>
@@ -233,7 +233,7 @@ export function Analytics() {
                     <LineChart data={portfolioChartData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(192,192,192,0.08)" />
                       <XAxis dataKey="date" stroke="#888888" tick={{ fontSize: 11 }} />
-                      <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                      <YAxis stroke="#888888" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} domain={['dataMin - 1', 'dataMax + 1']} />
                       <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={false} formatter={(v: number) => [`${v.toFixed(2)}%`, 'Cumulative']} />
                       <ReferenceLine y={0} stroke="rgba(192,192,192,0.2)" />
                       <Line type="monotone" dataKey="cumulative" stroke="#00d4aa" strokeWidth={2} dot={false} />
