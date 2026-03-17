@@ -1,9 +1,84 @@
 import { Outlet, Link, useLocation } from "react-router";
-import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown } from "lucide-react";
+import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown, Clock } from "lucide-react";
 import { cn } from "./ui/utils";
 import { useState, useRef, useEffect } from "react";
 import { ChatPanel } from "./ChatPanel";
 import { api, usePolling, fetchAPI } from "../config/api";
+
+// --- Trading Sessions ---
+interface TradingSession {
+  name: string;
+  short: string;
+  color: string;
+  // Hours in UTC
+  startUTC: number;
+  endUTC: number;
+}
+
+const SESSIONS: TradingSession[] = [
+  { name: 'Sydney',    short: 'SYD', color: '#c084fc', startUTC: 22, endUTC: 7 },
+  { name: 'Tokyo',     short: 'TKY', color: '#f472b6', startUTC: 0,  endUTC: 9 },
+  { name: 'London',    short: 'LDN', color: '#4a9eff', startUTC: 8,  endUTC: 17 },
+  { name: 'New York',  short: 'NYC', color: '#00d4aa', startUTC: 13, endUTC: 22 },
+];
+
+function isSessionActive(s: TradingSession, utcHour: number): boolean {
+  if (s.startUTC < s.endUTC) {
+    return utcHour >= s.startUTC && utcHour < s.endUTC;
+  }
+  // Wraps midnight (e.g. Sydney 22-7)
+  return utcHour >= s.startUTC || utcHour < s.endUTC;
+}
+
+function TradingClock() {
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const utcHour = now.getUTCHours();
+  const activeSessions = SESSIONS.filter(s => isSessionActive(s, utcHour));
+  const localTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+  // Determine overlap label
+  const overlapLabel = activeSessions.length >= 2
+    ? activeSessions.map(s => s.short).join(' + ')
+    : activeSessions.length === 1
+    ? activeSessions[0].name
+    : 'Crypto Only';
+
+  const primaryColor = activeSessions.length >= 2
+    ? '#ffa500' // overlap = high volume
+    : activeSessions.length === 1
+    ? activeSessions[0].color
+    : '#888888';
+
+  return (
+    <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/[0.08]">
+      <Clock className="size-3.5 text-[#888888]" />
+      <span className="text-sm font-mono text-[#e8e8e8] tabular-nums">{localTime}</span>
+      <div className="w-px h-4 bg-white/10" />
+      <div className="flex items-center gap-1.5">
+        {activeSessions.length >= 2 && (
+          <span className="relative flex size-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ backgroundColor: primaryColor }} />
+            <span className="relative inline-flex rounded-full size-2" style={{ backgroundColor: primaryColor }} />
+          </span>
+        )}
+        {activeSessions.length === 1 && (
+          <span className="relative flex size-2">
+            <span className="relative inline-flex rounded-full size-2" style={{ backgroundColor: primaryColor }} />
+          </span>
+        )}
+        <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: primaryColor }}>
+          {overlapLabel}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 type ProfileKey = 'conservative' | 'moderate' | 'aggressive' | 'greedy';
 
@@ -119,6 +194,8 @@ export function DashboardLayout() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Trading Clock */}
+          <TradingClock />
           {/* Profile Selector */}
           <div className="relative" ref={profileRef}>
             <button
