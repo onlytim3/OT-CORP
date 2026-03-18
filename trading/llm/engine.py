@@ -66,19 +66,32 @@ def _rate_limit():
 # ---------------------------------------------------------------------------
 
 _genai_client = None
+_genai_init_attempted = False
 
 
 def _get_genai_client():
-    """Lazy-init the google.genai Client singleton."""
-    global _genai_client
-    if _genai_client is None:
-        api_key = os.getenv("GEMINI_API_KEY", "")
-        if not api_key:
-            return None
-        import warnings
-        warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-        from google import genai
-        _genai_client = genai.Client(api_key=api_key)
+    """Lazy-init the google.genai Client singleton.
+
+    Retries if a previous attempt failed (e.g., env var not yet loaded).
+    """
+    global _genai_client, _genai_init_attempted
+    if _genai_client is not None:
+        return _genai_client
+    # Ensure dotenv is loaded (config.py does load_dotenv on import)
+    try:
+        import trading.config  # noqa: F401 — side-effect: loads .env
+    except Exception:
+        pass
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        if not _genai_init_attempted:
+            _genai_init_attempted = True
+            log.warning("GEMINI_API_KEY not set — LLM features disabled")
+        return None
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+    from google import genai
+    _genai_client = genai.Client(api_key=api_key)
     return _genai_client
 
 
