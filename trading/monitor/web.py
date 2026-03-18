@@ -1253,7 +1253,7 @@ def api_journal_daily():
             data = a.get("data")
             if isinstance(data, str):
                 try:
-                    data = _json.loads(data)
+                    data = json.loads(data)
                 except Exception:
                     data = {}
             if not isinstance(data, dict):
@@ -1285,7 +1285,7 @@ def api_journal_weekly():
             data = a.get("data")
             if isinstance(data, str):
                 try:
-                    data = _json.loads(data)
+                    data = json.loads(data)
                 except Exception:
                     data = {}
             if not isinstance(data, dict):
