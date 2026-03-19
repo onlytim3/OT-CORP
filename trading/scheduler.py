@@ -1540,6 +1540,46 @@ def start_daemon(interval_hours=4, paper=False):
     # Run immediately on start
     run_trading_cycle()
 
+    # ---------------------------------------------------------------------------
+    # Startup sync — run any scheduled tasks that should have fired today
+    # ---------------------------------------------------------------------------
+    try:
+        from trading.db.store import get_action_log as _startup_get_al
+        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _today_actions = _startup_get_al(limit=100, category="journal")
+        _has_daily = any(
+            a.get("timestamp", "")[:10] == _today
+            and isinstance(a.get("data"), dict)
+            and a["data"].get("type") == "daily"
+            for a in _today_actions
+        )
+        if not isinstance(_today_actions[0].get("data"), dict) if _today_actions else True:
+            # data might be JSON string — parse it
+            import json as _json_startup
+            _has_daily = any(
+                a.get("timestamp", "")[:10] == _today
+                and (_json_startup.loads(a["data"]) if isinstance(a.get("data"), str) else a.get("data", {})).get("type") == "daily"
+                for a in _today_actions
+            )
+        if not _has_daily:
+            log.info("No daily journal for today — generating on startup")
+            run_daily_journal()
+
+        # Check if weekly review is due (if today is Sunday and none generated this week)
+        now_utc = datetime.now(timezone.utc)
+        if now_utc.weekday() == 6:  # Sunday
+            _week_start = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+            _has_weekly = any(
+                a.get("timestamp", "")[:10] >= _week_start
+                and ((_json_startup.loads(a["data"]) if isinstance(a.get("data"), str) else a.get("data", {})).get("type") == "weekly" if a.get("data") else False)
+                for a in _today_actions
+            )
+            if not _has_weekly:
+                log.info("No weekly review this week — generating on startup")
+                run_weekly_review()
+    except Exception as e:
+        log.debug("Startup journal/review sync failed (non-fatal): %s", e)
+
     # Schedule recurring tasks
     schedule.every(interval_hours).hours.do(run_trading_cycle)
     schedule.every(15).minutes.do(check_stop_losses)
