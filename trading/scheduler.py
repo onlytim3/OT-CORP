@@ -803,31 +803,9 @@ def run_trading_cycle():
                 except Exception as fix_err:
                     log.warning("P&L recalc v2 failed: %s", fix_err)
 
-            # One-time fix v3: purge inflated historical P&L from double-counting bug
-            # Recalculates daily_return using day-over-day portfolio value changes
-            if not get_setting("pnl_purge_v3_done"):
-                try:
-                    with get_db() as db:
-                        rows = db.execute(
-                            "SELECT date, portfolio_value FROM daily_pnl ORDER BY date ASC"
-                        ).fetchall()
-                        if rows:
-                            prev_val = initial
-                            for row in rows:
-                                pv = row["portfolio_value"]
-                                daily_ret = (pv - prev_val) / prev_val if prev_val > 0 else 0
-                                cum_ret = (pv - initial) / initial if initial > 0 else 0
-                                db.execute(
-                                    "UPDATE daily_pnl SET daily_return = ?, cumulative_return = ? WHERE date = ?",
-                                    (daily_ret, cum_ret, row["date"]),
-                                )
-                                prev_val = pv
-                    set_setting("pnl_purge_v3_done", "true")
-                    log.info("P&L v3 purge complete: recalculated daily_return for %d records", len(rows) if rows else 0)
-                except Exception as fix_err:
-                    log.warning("P&L purge v3 failed: %s", fix_err)
+            # P&L v3 purge now runs at startup (not here) to avoid DB locks
         except Exception as e:
-            log.warning("P&L snapshot warning: %s", e)
+            log.error("P&L snapshot failed: %s", e)
             console.print(f"[yellow]P&L snapshot warning: {e}[/yellow]")
 
         # ---------------------------------------------------------------
@@ -1529,6 +1507,37 @@ def start_daemon(interval_hours=4, paper=False):
             console.print(f"[dim]WebSocket feed started for {min(len(ws_symbols), 20)} symbols[/dim]")
     except Exception as e:
         log.debug("WebSocket feed start failed (non-fatal, using REST): %s", e)
+
+    # -----------------------------------------------------------------------
+    # One-time P&L migrations — run at startup, NOT in trading cycle
+    # These hold the DB open for a while; doing them in the cycle blocks
+    # record_daily_pnl() and caused the P&L chart to stop updating.
+    # -----------------------------------------------------------------------
+    try:
+        from trading.db.store import get_setting, set_setting, get_db
+        initial = float(os.environ.get("INITIAL_CAPITAL", os.environ.get("PAPER_BALANCE", 1000)))
+
+        if not get_setting("pnl_purge_v3_done"):
+            log.info("Running one-time P&L v3 purge at startup...")
+            with get_db() as db:
+                rows = db.execute(
+                    "SELECT date, portfolio_value FROM daily_pnl ORDER BY date ASC"
+                ).fetchall()
+                if rows:
+                    prev_val = initial
+                    for row in rows:
+                        pv = row["portfolio_value"]
+                        daily_ret = (pv - prev_val) / prev_val if prev_val > 0 else 0
+                        cum_ret = (pv - initial) / initial if initial > 0 else 0
+                        db.execute(
+                            "UPDATE daily_pnl SET daily_return = ?, cumulative_return = ? WHERE date = ?",
+                            (daily_ret, cum_ret, row["date"]),
+                        )
+                        prev_val = pv
+            set_setting("pnl_purge_v3_done", "true")
+            log.info("P&L v3 purge complete: recalculated %d records", len(rows) if rows else 0)
+    except Exception as e:
+        log.error("P&L v3 startup purge failed: %s", e)
 
     # Run startup validation backtest (if enabled)
     _run_startup_validation()

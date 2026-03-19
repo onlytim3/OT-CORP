@@ -442,9 +442,9 @@ def submit_order(
     from trading.db.store import get_setting
     mode = get_setting("trading_mode", TRADING_MODE)
     if mode != "live":
-        log.debug("Paper mode order: %s %s notional=%s", side, symbol, notional)
+        log.debug("Paper mode order: %s %s notional=%s leverage=%dx", side, symbol, notional, leverage)
         return _paper_submit_order(symbol, side, notional=notional, qty=qty,
-                                   stop_loss_price=stop_loss_price)
+                                   stop_loss_price=stop_loss_price, leverage=leverage)
 
     # -------------------------------------------------------------------
     # Smart execution: TWAP for large orders, limit orders when enabled
@@ -916,6 +916,7 @@ def _init_paper_tables():
                 qty REAL NOT NULL DEFAULT 0,
                 avg_cost REAL NOT NULL DEFAULT 0,
                 strategy TEXT,
+                leverage INTEGER NOT NULL DEFAULT 1,
                 opened_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -926,6 +927,11 @@ def _init_paper_tables():
                 updated_at TEXT NOT NULL
             );
         """)
+        # Migration: add leverage column to existing tables
+        try:
+            conn.execute("ALTER TABLE paper_positions ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass  # Column already exists
 
 
 def _get_paper_cash() -> float:
@@ -966,11 +972,15 @@ def _paper_submit_order(
     notional: Optional[float] = None,
     qty: Optional[float] = None,
     stop_loss_price: Optional[float] = None,
+    leverage: int = 1,
 ) -> dict:
     """Simulate an order using real market prices, no exchange interaction.
 
     Fills instantly at the current mark price. Updates paper_positions and
     paper_balance tables in the DB.
+
+    With leverage, the cash deducted = notional / leverage (margin requirement).
+    The position tracks the full notional exposure.
     """
     from trading.execution.aster_client import get_aster_mark_prices
     from trading.db.store import get_db, log_action
@@ -1027,6 +1037,7 @@ def _paper_submit_order(
         }
 
     order_value = qty * fill_price
+    margin_required = order_value / max(leverage, 1)  # With leverage, only margin is deducted
     cash = _get_paper_cash()
     order_id = str(uuid.uuid4())[:12]
     now = datetime.now(timezone.utc).isoformat()
@@ -1042,17 +1053,17 @@ def _paper_submit_order(
         existing_side = pos_row["side"] if pos_row else "long"
 
         if side_lower == "buy":
-            # Check cash
-            if order_value > cash:
+            # Check cash (only margin required, not full notional)
+            if margin_required > cash:
                 return {
                     "id": order_id, "status": "rejected",
-                    "reason": f"Insufficient paper cash: ${cash:.2f} < ${order_value:.2f}",
+                    "reason": f"Insufficient paper margin: ${cash:.2f} < ${margin_required:.2f} ({leverage}x leverage)",
                     "symbol": symbol, "side": side,
                     "qty": qty, "filled_qty": 0, "filled_avg_price": 0,
                 }
 
-            # Deduct cash
-            _set_paper_cash(cash - order_value)
+            # Deduct margin from cash
+            _set_paper_cash(cash - margin_required)
 
             if pos_row and existing_side == "long" and existing_qty > 0:
                 # Add to existing long — weighted avg cost
@@ -1086,9 +1097,9 @@ def _paper_submit_order(
             else:
                 # New long position
                 conn.execute(
-                    "INSERT INTO paper_positions (symbol, side, qty, avg_cost, strategy, opened_at, updated_at) "
-                    "VALUES (?, 'long', ?, ?, ?, ?, ?)",
-                    (sym_key, qty, fill_price, "", now, now),
+                    "INSERT INTO paper_positions (symbol, side, qty, avg_cost, strategy, leverage, opened_at, updated_at) "
+                    "VALUES (?, 'long', ?, ?, ?, ?, ?, ?)",
+                    (sym_key, qty, fill_price, "", leverage, now, now),
                 )
 
         elif side_lower == "sell":
@@ -1127,9 +1138,9 @@ def _paper_submit_order(
                     )
                 else:
                     conn.execute(
-                        "INSERT OR REPLACE INTO paper_positions (symbol, side, qty, avg_cost, strategy, opened_at, updated_at) "
-                        "VALUES (?, 'short', ?, ?, ?, ?, ?)",
-                        (sym_key, qty, fill_price, "", now, now),
+                        "INSERT OR REPLACE INTO paper_positions (symbol, side, qty, avg_cost, strategy, leverage, opened_at, updated_at) "
+                        "VALUES (?, 'short', ?, ?, ?, ?, ?, ?)",
+                        (sym_key, qty, fill_price, "", leverage, now, now),
                     )
 
     log.info("PAPER FILL: %s %s %.6f %s @ $%.4f ($%.2f)",
@@ -1213,7 +1224,7 @@ def _paper_get_positions() -> list[dict]:
             "side": side,
             "strategy": row.get("strategy", ""),
             "aster_symbol": aster_sym,
-            "leverage": 1,
+            "leverage": row.get("leverage", 1) or 1,
             "liquidation_price": 0,
             "paper": True,
         })

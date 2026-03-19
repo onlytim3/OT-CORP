@@ -866,12 +866,12 @@ def api_intelligence():
 
     # Fear & Greed
     try:
-        from trading.data.crypto import get_fear_greed_index
-        fg = get_fear_greed_index()
-        if fg and isinstance(fg, list) and fg:
-            result["fear_greed"] = fg[0]
-    except Exception:
-        pass
+        from trading.data.sentiment import get_fear_greed
+        fg = get_fear_greed(limit=7)
+        if fg and fg.get("current"):
+            result["fear_greed"] = fg["current"]  # {value, classification, timestamp}
+    except Exception as e:
+        log.debug("Fear & Greed fetch failed: %s", e)
 
     # Recent intelligence briefings from action log
     with get_db() as conn:
@@ -1812,13 +1812,14 @@ def api_leverage():
     try:
         account = _safe_account()
         portfolio_value = account.get("portfolio_value", 0)
-        positions = get_positions_from_alpaca()
+        from trading.execution.router import get_positions_from_aster
+        positions = get_positions_from_aster()
         total_notional = 0
         pos_data = []
         for pos in positions:
-            lev = pos.get("leverage", 1)
+            lev = pos.get("leverage", 1) or 1
             mv = abs(pos.get("market_value", 0))
-            notional = mv * lev
+            notional = mv  # market_value already reflects full position notional
             total_notional += notional
             pos_data.append({
                 "symbol": pos.get("symbol", "?"),
