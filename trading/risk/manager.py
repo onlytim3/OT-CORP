@@ -47,6 +47,73 @@ CRYPTO_MEME = {"DOGE", "SHIB", "PEPE", "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "BONK
 STOCK_PERPS = {"AAPL", "TSLA", "NVDA", "GOOGL", "MSFT", "AMZN", "META"}
 COMMODITY_PERPS = {"GOLD", "SILVER", "OIL", "XAUUSDT"}
 
+
+def _get_atr_stop_pct(symbol: str, leverage: int = 1) -> float | None:
+    """Calculate ATR-based stop distance for a symbol, adjusted for leverage.
+
+    Used by portfolio.py to size positions based on risk-per-trade.
+    Returns the effective stop distance as a fraction (e.g., 0.035 = 3.5%).
+    """
+    try:
+        from trading.strategy.indicators import atr
+        from trading.data.aster import get_aster_ohlcv
+        from trading.config import (ASTER_SYMBOLS, CRYPTO_SYMBOLS,
+                                     CRYPTO_L1 as CFG_L1, CRYPTO_MEME as CFG_MEME,
+                                     STOCK_PERPS as CFG_STOCK, COMMODITY_PERPS as CFG_COMM,
+                                     INDEX_PERPS as CFG_IDX)
+
+        # Resolve symbol to AsterDex
+        aster_sym = None
+        matched_coin_id = None
+        for coin_id, alpaca_sym in CRYPTO_SYMBOLS.items():
+            if alpaca_sym == symbol or symbol.replace("/", "") in alpaca_sym.replace("/", ""):
+                aster_sym = ASTER_SYMBOLS.get(coin_id)
+                matched_coin_id = coin_id
+                break
+        if not aster_sym and symbol.endswith("USDT"):
+            aster_sym = symbol
+
+        if not aster_sym:
+            return None
+
+        # Per-asset-class ATR multiplier
+        if matched_coin_id and matched_coin_id in CFG_MEME:
+            atr_mult = 4.0
+        elif matched_coin_id and matched_coin_id in CFG_L1:
+            atr_mult = 2.5
+        elif matched_coin_id and matched_coin_id in (CFG_STOCK + CFG_COMM + CFG_IDX):
+            atr_mult = 2.0
+        elif matched_coin_id:
+            atr_mult = 3.0
+        else:
+            atr_mult = 2.0
+
+        df = get_aster_ohlcv(aster_sym, interval="1h", limit=50)
+        if df is None or df.empty or len(df) < 14:
+            return None
+
+        atr_series = atr(df["high"], df["low"], df["close"], period=14)
+        atr_value = float(atr_series.iloc[-1])
+        entry_price = float(df["close"].iloc[-1])
+
+        if atr_value <= 0 or entry_price <= 0:
+            return None
+
+        base_sl_pct = (atr_mult * atr_value) / entry_price
+
+        # Tighten for leverage (sqrt scaling)
+        if leverage > 1:
+            effective_sl_pct = base_sl_pct / math.sqrt(leverage)
+        else:
+            effective_sl_pct = base_sl_pct
+
+        # Clamp between 1.5% and 15%
+        effective_sl_pct = max(0.015, min(0.15, effective_sl_pct))
+
+        return effective_sl_pct
+    except Exception:
+        return None
+
 SECTOR_LIMITS = {"l1": 0.50, "alts": 0.20, "defi": 0.25, "meme": 0.10, "stocks": 0.20, "commodities": 0.15}
 
 def _get_asset_sector(symbol: str) -> str:

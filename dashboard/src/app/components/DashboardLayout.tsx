@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router";
-import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown, Clock, BookOpen } from "lucide-react";
+import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown, Clock, BookOpen, RefreshCw } from "lucide-react";
 import { cn } from "./ui/utils";
 import { useState, useRef, useEffect } from "react";
 import { ChatPanel } from "./ChatPanel";
@@ -265,6 +265,15 @@ export function DashboardLayout() {
             <span className={`text-xs font-medium tracking-wider ${mode === 'paper' ? 'text-[#4a9eff]' : 'text-[#00d4aa]'}`}>
               {mode.toUpperCase()}
             </span>
+          </button>
+
+          {/* Refresh Button */}
+          <button
+            onClick={() => window.location.reload()}
+            className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+            title="Refresh data"
+          >
+            <RefreshCw className="size-4 text-[#888888]" />
           </button>
 
           {/* System Status */}

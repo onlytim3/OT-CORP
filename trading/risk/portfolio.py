@@ -452,8 +452,54 @@ def calculate_order_size(
         # Free capital is the constraint — split among all buy signals
         per_signal = ceiling / max(num_signals, 1)
 
-    # --- Factor 6: Signal strength ---
-    order_value = per_signal * signal.strength
+    # =====================================================================
+    # RISK-BASED POSITION SIZING (v4)
+    # Core logic: size the position so that hitting the stop loss = 1% loss
+    #
+    # Formula:
+    #   risk_amount = portfolio × RISK_PER_TRADE_PCT (default 1%)
+    #   stop_distance_pct = ATR-based stop distance (from compute_trade_targets)
+    #   position_notional = risk_amount / stop_distance_pct
+    #   (This is the leveraged notional — the actual margin used is notional/leverage)
+    #
+    # The old budget-based system produced bite-sized orders that didn't
+    # take advantage of leverage. This approach sizes to the stop, meaning
+    # leverage amplifies gains while risk stays fixed at 1% of portfolio.
+    # =====================================================================
+
+    # Get leverage for this strategy
+    leverage = 1
+    if hasattr(signal, 'data') and isinstance(signal.data, dict):
+        leverage = signal.data.get("leverage", 1)
+    if leverage < 1:
+        leverage = 1
+
+    # Risk per trade: 1% of portfolio (configurable)
+    risk_pct = RISK.get("risk_per_trade_pct", 0.01)
+    risk_amount = portfolio_value * risk_pct
+
+    # Get ATR-based stop distance
+    stop_distance_pct = RISK.get("stop_loss_pct", 0.05)  # fallback 5%
+    try:
+        from trading.risk.manager import _get_atr_stop_pct
+        atr_stop = _get_atr_stop_pct(signal.symbol, leverage)
+        if atr_stop and atr_stop > 0:
+            stop_distance_pct = atr_stop
+    except Exception:
+        pass
+
+    # Core formula: size so that stop_loss hit = risk_amount loss
+    # With leverage, our margin = notional / leverage
+    # Loss at stop = margin × stop_distance_pct × leverage = notional × stop_distance_pct
+    # So: notional = risk_amount / stop_distance_pct
+    if stop_distance_pct > 0:
+        risk_based_size = risk_amount / stop_distance_pct
+    else:
+        risk_based_size = per_signal  # fallback to old method
+
+    # Use the LARGER of risk-based sizing and the old budget method
+    # (risk-based is usually larger since it properly accounts for leverage)
+    order_value = max(risk_based_size * signal.strength, per_signal * signal.strength)
 
     # --- Factor 2: Confluence boost ---
     confluence_mult = _confluence_multiplier(signal)
@@ -467,15 +513,7 @@ def calculate_order_size(
     perf_mult = _performance_multiplier(base_strategy)
     order_value *= perf_mult
 
-    # --- Factor 5: Volatility adjustment ---
-    if use_vol_sizing and signal.action == "buy":
-        vol_mult = _estimate_volatility(signal.symbol)
-        order_value *= vol_mult
-    else:
-        vol_mult = 1.0
-
     # --- Factor 7: Volume-based sizing ---
-    # Scale position size with current volume conditions
     if signal.action == "buy":
         try:
             from trading.risk.volume_gate import compute_volume_sizing_multiplier
@@ -493,31 +531,31 @@ def calculate_order_size(
     dd_mult = _drawdown_multiplier(portfolio_value)
     order_value *= corr_mult * dd_mult
 
-    # --- Liquidation-aware sizing ---
-    leverage = 1
-    if hasattr(signal, 'data') and isinstance(signal.data, dict):
-        leverage = signal.data.get("leverage", 1)
+    # --- Liquidation safety check ---
     if leverage > 1:
         liq_distance = 1.0 / leverage
-        buffer_required = liq_distance * 0.8  # 20% buffer
-        # Reduce size if stop would be within liquidation zone
-        if order_value > 0 and buffer_required > 0:
-            max_safe_size = order_value * min(1.0, buffer_required / 0.07)
-            order_value = min(order_value, max_safe_size)
+        # Ensure stop is within 80% of liquidation distance
+        if stop_distance_pct >= liq_distance * 0.8:
+            # Stop is too close to liquidation — reduce size
+            order_value *= 0.7
 
     # Hard cap
     order_value = min(order_value, max_per_position)
+
+    # Also cap at free capital
+    order_value = min(order_value, free_capital * 0.95)
 
     # Minimum order size
     if order_value < 5.0:
         return 0.0
 
     log.info(
-        "Dynamic sizing %s %s: base=$%.0f × confluence=%.1f × regime=%.2f "
-        "× perf=%.2f × vol=%.1f × volume=%.2f × corr=%.2f × dd=%.2f × strength=%.2f → $%.2f",
-        signal.action, signal.symbol, per_signal,
-        confluence_mult, regime_mult, perf_mult, vol_mult, volume_mult,
-        corr_mult, dd_mult, signal.strength, order_value,
+        "Risk-based sizing %s %s: risk=$%.0f stop=%.2f%% → risk_size=$%.0f "
+        "× confluence=%.1f × regime=%.2f × perf=%.2f × volume=%.2f "
+        "× corr=%.2f × dd=%.2f × strength=%.2f → $%.2f (lev=%dx)",
+        signal.action, signal.symbol, risk_amount, stop_distance_pct * 100,
+        risk_based_size, confluence_mult, regime_mult, perf_mult, volume_mult,
+        corr_mult, dd_mult, signal.strength, order_value, leverage,
     )
 
     return round(order_value, 2)

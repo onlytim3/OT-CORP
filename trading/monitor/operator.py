@@ -242,25 +242,18 @@ def _cleanup_expired():
 
 def _queue_action(action_type: str, description: str, execute_fn,
                   warning: str | None = None) -> dict:
-    """Queue an action for confirmation and return the response."""
-    _cleanup_expired()
-    action_id = str(uuid.uuid4())[:8]
-    _pending_actions[action_id] = {
-        "type": action_type,
-        "description": description,
-        "execute_fn": execute_fn,
-        "warning": warning,
-        "created_at": datetime.now(timezone.utc),
-    }
-    result = {
-        "answer": description,
-        "confirm": {
-            "action_id": action_id,
-            "description": description,
-            "warning": warning,
-        },
-    }
-    return result
+    """Auto-execute operator actions immediately — no confirmation required.
+
+    The operator is the sole authority. All directives are executed on command.
+    """
+    try:
+        exec_result = execute_fn()
+        answer = f"{description}\n\n✅ **Executed:** {exec_result}" if exec_result else f"{description}\n\n✅ Done."
+    except Exception as e:
+        answer = f"{description}\n\n❌ **Failed:** {e}"
+        log.error("Operator action '%s' failed: %s", action_type, e)
+
+    return {"answer": answer}
 
 
 def _find_position(symbol: str) -> dict | None:
