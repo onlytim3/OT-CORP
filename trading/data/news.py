@@ -30,14 +30,32 @@ _RSS_FEEDS = {
     "crypto": [
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://cointelegraph.com/rss",
+        "https://decrypt.co/feed",
+        "https://cryptoslate.com/feed/",
+        "https://bitcoinmagazine.com/feed",
+    ],
+    "stocks": [
+        "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://seekingalpha.com/feed.xml",
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
     ],
     "commodities": [
         "https://oilprice.com/rss/main",
         "https://news.google.com/rss/search?q=gold+silver+commodities+precious+metals&hl=en-US&gl=US&ceid=US:en",
+        "https://www.investing.com/rss/news_11.rss",
+    ],
+    "forex": [
+        "https://www.investing.com/rss/news_1.rss",
+        "https://seekingalpha.com/tag/forex.xml",
     ],
     "macro": [
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
         "https://news.google.com/rss/search?q=central+bank+interest+rate+federal+reserve+economic+data&hl=en-US&gl=US&ceid=US:en",
+        "https://www.cnbc.com/id/20910258/device/rss/rss.html",
+    ],
+    "global": [
+        "https://www.cnbc.com/id/100727362/device/rss/rss.html",
+        "https://feeds.marketwatch.com/marketwatch/marketpulse/",
     ],
 }
 
@@ -339,6 +357,166 @@ def fetch_economic_calendar() -> list[dict]:
         })
 
     return upcoming
+
+
+# ---------------------------------------------------------------------------
+# GDELT global events (no API key)
+# ---------------------------------------------------------------------------
+
+@cached(ttl=600)
+def fetch_gdelt_news(query: str = "economy finance markets", max_items: int = 20) -> list[dict]:
+    """Fetch global news from GDELT Project API (no key, unlimited).
+
+    Returns articles with tone scores (built-in sentiment).
+    Covers 65 languages, translates to English automatically.
+    """
+    try:
+        resp = requests.get(
+            "https://api.gdeltproject.org/api/v2/doc/doc",
+            params={
+                "query": query,
+                "mode": "artlist",
+                "maxrecords": min(max_items * 3, 75),
+                "format": "json",
+                "sort": "datedesc",
+            },
+            timeout=15, headers=_HEADERS,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        articles = data.get("articles", [])
+
+        headlines = []
+        for a in articles[:max_items]:
+            headlines.append({
+                "title": a.get("title", "").strip(),
+                "published": a.get("seendate", ""),
+                "source": a.get("domain", "gdelt"),
+                "category": "global",
+                "url": a.get("url", ""),
+                "tone": a.get("tone", 0),  # GDELT sentiment: negative=bearish, positive=bullish
+                "language": a.get("language", "English"),
+            })
+        return headlines
+
+    except Exception as e:
+        log.debug("GDELT fetch failed for query '%s': %s", query, e)
+        return []
+
+
+@cached(ttl=600)
+def fetch_crypto_news_api(max_items: int = 20) -> list[dict]:
+    """Fetch crypto news from cryptocurrency.cv API (no key required).
+
+    662k+ articles from 75+ sources. Free and open.
+    """
+    try:
+        resp = requests.get(
+            "https://cryptocurrency.cv/api/news",
+            params={"limit": max_items},
+            timeout=10, headers=_HEADERS,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        articles = data.get("articles", data) if isinstance(data, dict) else data
+
+        headlines = []
+        for a in (articles if isinstance(articles, list) else []):
+            headlines.append({
+                "title": a.get("title", "").strip(),
+                "published": a.get("publishedAt", a.get("date", "")),
+                "source": a.get("source", {}).get("name", "cryptocurrency.cv") if isinstance(a.get("source"), dict) else a.get("source", "cryptocurrency.cv"),
+                "category": "crypto",
+            })
+        return headlines[:max_items]
+
+    except Exception as e:
+        log.debug("cryptocurrency.cv fetch failed: %s", e)
+        return []
+
+
+@cached(ttl=600)
+def fetch_finnhub_news(category: str = "general") -> list[dict]:
+    """Fetch financial news from Finnhub (requires FINNHUB_API_KEY env var).
+
+    Free tier: 60 calls/min. Categories: general, forex, crypto, merger.
+    """
+    import os
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return []
+
+    try:
+        resp = requests.get(
+            "https://finnhub.io/api/v1/news",
+            params={"category": category, "token": api_key},
+            timeout=10, headers=_HEADERS,
+        )
+        resp.raise_for_status()
+        articles = resp.json()
+
+        headlines = []
+        for a in articles[:20]:
+            headlines.append({
+                "title": a.get("headline", "").strip(),
+                "published": datetime.fromtimestamp(a.get("datetime", 0), tz=timezone.utc).isoformat() if a.get("datetime") else "",
+                "source": a.get("source", "finnhub"),
+                "category": category,
+                "url": a.get("url", ""),
+                "summary": a.get("summary", "")[:200],
+            })
+        return headlines
+
+    except Exception as e:
+        log.debug("Finnhub news fetch failed: %s", e)
+        return []
+
+
+def fetch_all_headlines(max_per_source: int = 10) -> list[dict]:
+    """Fetch headlines from ALL sources — RSS, GDELT, crypto API, Finnhub.
+
+    Returns a combined, deduplicated list of headlines across all categories.
+    """
+    all_headlines = []
+
+    # RSS feeds (all categories)
+    for category in _RSS_FEEDS:
+        try:
+            hl = fetch_rss_headlines(category, max_items=max_per_source)
+            all_headlines.extend(hl)
+        except Exception:
+            pass
+
+    # GDELT global events
+    for query in ["economy markets finance", "cryptocurrency bitcoin", "oil gold commodities"]:
+        try:
+            all_headlines.extend(fetch_gdelt_news(query, max_items=max_per_source))
+        except Exception:
+            pass
+
+    # Crypto news API
+    try:
+        all_headlines.extend(fetch_crypto_news_api(max_items=max_per_source))
+    except Exception:
+        pass
+
+    # Finnhub (if configured)
+    for cat in ["general", "crypto", "forex"]:
+        try:
+            all_headlines.extend(fetch_finnhub_news(cat))
+        except Exception:
+            pass
+
+    # Deduplicate by title (case-insensitive)
+    seen = set()
+    unique = []
+    for h in all_headlines:
+        key = h.get("title", "").lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(h)
+
+    return unique
 
 
 # ---------------------------------------------------------------------------

@@ -1862,6 +1862,101 @@ def _position_review_agent_think() -> list[dict]:
     return recommendations
 
 # ---------------------------------------------------------------------------
+# News interpretation agent
+# ---------------------------------------------------------------------------
+
+NEWS_AGENT = "news_interpretation_agent"
+
+
+def _news_agent_think() -> list[dict]:
+    """News Interpretation Agent — analyzes market news impact on portfolio.
+
+    Fetches headlines from all sources, uses LLM to interpret,
+    and generates recommendations if high-impact news is detected.
+    """
+    recommendations = []
+
+    try:
+        from trading.data.news import fetch_all_headlines
+        from trading.llm.engine import analyze_news_impact
+        from trading.execution.router import get_positions_from_aster
+        from trading.config import CRYPTO_SYMBOLS, ASTER_SYMBOLS
+        from trading.db.store import log_action, get_action_log
+        import json
+
+        # Don't run if we analyzed news recently (within 2 hours)
+        recent = get_action_log(limit=5, category="intelligence")
+        for r in recent:
+            if r.get("action") == "news_analysis":
+                from datetime import datetime, timezone, timedelta
+                ts = r.get("timestamp", "")
+                try:
+                    last_run = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if datetime.now(timezone.utc) - last_run < timedelta(hours=2):
+                        return recommendations
+                except Exception:
+                    pass
+                break
+
+        # Fetch headlines
+        headlines = fetch_all_headlines(max_per_source=6)
+        if len(headlines) < 5:
+            return recommendations
+
+        # Get positions and regime
+        positions = get_positions_from_aster()[:15]
+        regime = "unknown"
+        for b in get_action_log(limit=3, category="intelligence"):
+            data = b.get("data", {})
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    data = {}
+            if isinstance(data, dict) and data.get("overall_regime"):
+                regime = data["overall_regime"]
+                break
+
+        traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(ASTER_SYMBOLS.keys())))
+        analysis = analyze_news_impact(headlines, positions, regime, traded_assets[:30])
+
+        if not analysis or "LLM unavailable" in analysis:
+            return recommendations
+
+        # Log the analysis
+        log_action(
+            "intelligence", "news_analysis",
+            details=analysis[:300],
+            data={
+                "full_analysis": analysis,
+                "headline_count": len(headlines),
+                "source_count": len(set(h.get("source", "") for h in headlines)),
+                "regime": regime,
+            },
+        )
+
+        # Check for risk alerts in the analysis
+        analysis_lower = analysis.lower()
+        if any(word in analysis_lower for word in ["risk alert", "reduce exposure", "emergency", "crash", "liquidat"]):
+            recommendations.append({
+                "from_agent": NEWS_AGENT,
+                "to_agent": "risk",
+                "category": "risk_alert",
+                "action": "review_exposure",
+                "target": "portfolio",
+                "reasoning": f"News analysis flagged risk: {analysis[:200]}",
+                "data": {"auto_approve": False, "source": "news_analysis"},
+            })
+
+        log.info("News agent: analyzed %d headlines, regime=%s", len(headlines), regime)
+
+    except Exception as e:
+        log.debug("News agent failed (non-fatal): %s", e)
+
+    return recommendations
+
+
+# ---------------------------------------------------------------------------
 # Main autonomous cycle
 # ---------------------------------------------------------------------------
 
@@ -1916,6 +2011,7 @@ def run_autonomous_cycle() -> dict:
         ("learning", _learning_agent_think),
         ("backtest", _backtest_agent_think),
         ("position_review", _position_review_agent_think),
+        ("news_interpretation", _news_agent_think),
     ]
 
     for agent_name, think_fn in agents:

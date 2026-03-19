@@ -42,6 +42,7 @@ CALL_PROFILES: dict[str, dict] = {
     "post_trade":       {"model": MODEL_THINKING, "max_tokens": 1500},
     "agent_synthesis":  {"model": MODEL_THINKING, "max_tokens": 2000},
     "weekly_synthesis": {"model": MODEL_THINKING, "max_tokens": 3000},
+    "news_analysis":    {"model": MODEL_THINKING, "max_tokens": 1500},
 }
 
 
@@ -373,6 +374,58 @@ Produce a structured weekly review covering:
 
 Use markdown formatting. Be analytical and specific."""
     return ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="weekly_synthesis")
+
+
+def analyze_news_impact(headlines: list[dict], positions: list[dict],
+                        regime: str, traded_assets: list[str]) -> str:
+    """Use Gemini to interpret market news and assess impact on specific assets.
+
+    Returns structured JSON-like analysis with per-asset sentiment,
+    key events, actionable signals, and risk alerts.
+    """
+    # Trim headlines to titles + source for token efficiency
+    hl_summary = [{"title": h.get("title", ""), "source": h.get("source", ""),
+                    "category": h.get("category", "")}
+                   for h in headlines[:20]]
+
+    position_symbols = [p.get("symbol", p.get("coin", "")) for p in positions[:15]]
+
+    prompt = f"""You are a senior market analyst. Analyze these recent news headlines
+and determine their impact on the assets we actively trade.
+
+**Headlines:**
+{json.dumps(hl_summary, indent=1)}
+
+**Our open positions:** {json.dumps(position_symbols)}
+**Current market regime:** {regime}
+**All assets we trade:** {json.dumps(traded_assets[:30])}
+
+Provide your analysis in this exact format:
+
+## Key Events
+List the 3 most market-moving headlines and explain WHY they matter.
+
+## Asset Impacts
+For each asset affected by this news, provide:
+- Asset name
+- Impact score: -1.0 (very bearish) to +1.0 (very bullish)
+- One-sentence explanation
+
+Only list assets where news has a CLEAR directional impact (skip neutral).
+
+## Trading Signals
+Based on this news, recommend specific actions:
+- BUY [asset] — [reason] (strength: 0.0-1.0)
+- SELL [asset] — [reason] (strength: 0.0-1.0)
+Only include high-conviction signals (strength >= 0.5).
+
+## Risk Alerts
+Flag any headlines suggesting we should reduce exposure or be cautious.
+Include specific assets or the portfolio as a whole.
+
+Be direct. Cite specific headlines. Don't hedge excessively."""
+
+    return ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="news_analysis")
 
 
 # ---------------------------------------------------------------------------

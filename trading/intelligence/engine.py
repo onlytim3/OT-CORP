@@ -360,6 +360,8 @@ class MarketBriefing:
     event_risk: list[str] = field(default_factory=list)
     overall_regime: str = "neutral"
     overall_score: float = 0.0
+    news_interpretation: str = ""       # LLM analysis of headlines
+    asset_impacts: dict = field(default_factory=dict)  # {coin_id: score}
 
     def category_score(self, category: str) -> float:
         """Get score for a specific category, defaulting to 0.0."""
@@ -378,13 +380,18 @@ class MarketBriefing:
 
     def to_dict(self) -> dict:
         """Serialize for storage/logging."""
-        return {
+        d = {
             "timestamp": self.timestamp,
             "categories": self.categories,
             "event_risk": self.event_risk,
             "overall_regime": self.overall_regime,
             "overall_score": self.overall_score,
         }
+        if self.news_interpretation:
+            d["news_interpretation"] = self.news_interpretation[:2000]
+        if self.asset_impacts:
+            d["asset_impacts"] = self.asset_impacts
+        return d
 
 
 def generate_briefing() -> MarketBriefing:
@@ -442,6 +449,32 @@ def generate_briefing() -> MarketBriefing:
         overall_regime=regime,
         overall_score=overall,
     )
+
+    # LLM news interpretation — non-fatal, enriches briefing with semantic analysis
+    try:
+        from trading.data.news import fetch_all_headlines
+        from trading.llm.engine import analyze_news_impact
+        from trading.config import CRYPTO_SYMBOLS, ASTER_SYMBOLS
+
+        all_headlines = fetch_all_headlines(max_per_source=5)
+        if len(all_headlines) >= 3:
+            traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(ASTER_SYMBOLS.keys())))
+            interpretation = analyze_news_impact(
+                all_headlines, [], regime, traded_assets[:30],
+            )
+            if interpretation and "LLM unavailable" not in interpretation:
+                briefing.news_interpretation = interpretation
+                # Parse per-asset impacts from interpretation
+                from trading.strategy.news_sentiment import _parse_asset_impacts
+                asset_map = {}
+                for k, v in CRYPTO_SYMBOLS.items():
+                    asset_map[k] = v
+                for k, v in ASTER_SYMBOLS.items():
+                    asset_map[k] = v
+                briefing.asset_impacts = _parse_asset_impacts(interpretation, asset_map)
+                log.info("News interpretation: %d asset impacts parsed", len(briefing.asset_impacts))
+    except Exception as e:
+        log.debug("LLM news interpretation failed (non-fatal): %s", e)
 
     log.info("Intelligence briefing: %s", briefing.summary())
     return briefing

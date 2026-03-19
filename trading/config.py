@@ -139,6 +139,8 @@ STRATEGY_ENABLED = {
     # On-chain & funding
     "onchain_flow": True,
     "funding_forecast": True,
+    # News & sentiment
+    "news_sentiment": True,
     # Disabled
     "dxy_dollar": False,            # Disabled: requires Alpaca ETF access
     "garch_volatility": False,       # Disabled: vol regimes don't predict direction
