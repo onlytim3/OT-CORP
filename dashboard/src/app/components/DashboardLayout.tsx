@@ -361,7 +361,7 @@ export function DashboardLayout() {
       <button
         onClick={() => setChatOpen(!chatOpen)}
         className={cn(
-          "fixed bottom-24 right-4 z-50 p-4 rounded-full transition-all duration-300 shadow-lg",
+          "fixed bottom-20 sm:bottom-24 right-2 sm:right-4 z-50 p-3 sm:p-4 rounded-full transition-all duration-300 shadow-lg",
           chatOpen
             ? "bg-[#ff4466] scale-90 shadow-[#ff4466]/20"
             : "bg-[#4a9eff] hover:bg-[#4a9eff]/80 shadow-[#4a9eff]/20"

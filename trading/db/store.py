@@ -434,12 +434,28 @@ def get_positions():
 
 def record_daily_pnl(portfolio_value, cash, positions_value, daily_return, cumulative_return):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    with get_db() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO daily_pnl (date, portfolio_value, cash, positions_value, daily_return, cumulative_return) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (today, portfolio_value, cash, positions_value, daily_return, cumulative_return),
-        )
+    # Retry with backoff — SQLite BUSY errors common with concurrent gunicorn workers
+    import time as _time
+    for attempt in range(3):
+        try:
+            conn = sqlite3.connect(str(DB_PATH), timeout=10)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                "INSERT OR REPLACE INTO daily_pnl (date, portfolio_value, cash, positions_value, daily_return, cumulative_return) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (today, portfolio_value, cash, positions_value, daily_return, cumulative_return),
+            )
+            conn.commit()
+            conn.close()
+            log.info("record_daily_pnl: saved %s pv=$%.2f", today, portfolio_value)
+            return
+        except Exception as e:
+            if attempt < 2:
+                _time.sleep(0.5 * (attempt + 1))
+            else:
+                log.error("record_daily_pnl FAILED after 3 attempts: %s", e)
+                raise
 
 
 def get_daily_pnl(limit=30):

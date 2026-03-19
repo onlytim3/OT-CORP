@@ -492,11 +492,26 @@ export function Analytics() {
           <Card>
             <CardHeader><CardTitle>Regime Signals</CardTitle></CardHeader>
             <CardContent>
-              {regimeSignals.length === 0 ? (
-                <p className="text-[#888888] text-center py-8">No regime signals</p>
+              {(() => {
+                // Filter out 0% HOLD noise and deduplicate by strategy+signal
+                const actionable = regimeSignals.filter(
+                  (s) => !(s.signal === 'hold' && (s.strength || 0) === 0)
+                );
+                // Deduplicate: keep strongest signal per strategy+action combo
+                const seen = new Map<string, typeof regimeSignals[0]>();
+                for (const s of actionable) {
+                  const key = `${s.strategy}:${s.signal}`;
+                  const existing = seen.get(key);
+                  if (!existing || (s.strength || 0) > (existing.strength || 0)) {
+                    seen.set(key, s);
+                  }
+                }
+                const filtered = Array.from(seen.values());
+                return filtered.length === 0 ? (
+                <p className="text-[#888888] text-center py-8">No actionable regime signals</p>
               ) : (
                 <div className="space-y-3">
-                  {regimeSignals.slice(0, 15).map((s) => {
+                  {filtered.slice(0, 15).map((s) => {
                     const regime = s.data && typeof s.data === 'object'
                       ? ((s.data as Record<string, unknown>).regime || (s.data as Record<string, unknown>).current_regime || (s.data as Record<string, unknown>).market_regime) as string | undefined
                       : undefined;
@@ -525,7 +540,8 @@ export function Analytics() {
                     );
                   })}
                 </div>
-              )}
+              );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>

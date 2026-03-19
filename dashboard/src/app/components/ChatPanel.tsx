@@ -136,7 +136,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
   if (!isOpen) return null;
 
   return (
-    <div className="fixed bottom-24 right-4 w-96 max-h-[70vh] flex flex-col bg-black border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50">
+    <div className="fixed bottom-20 sm:bottom-24 right-2 sm:right-4 w-[calc(100vw-1rem)] sm:w-96 max-h-[70vh] flex flex-col bg-black border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#0a0a0a]">
         <div className="flex items-center gap-2">
@@ -152,7 +152,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
       <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[200px] max-h-[50vh]">
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${
+            <div className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 text-sm ${
               msg.role === 'user'
                 ? 'bg-[#4a9eff] text-white rounded-br-md'
                 : 'bg-white/5 text-[#e8e8e8] border border-white/10 rounded-bl-md'
