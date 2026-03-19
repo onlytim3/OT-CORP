@@ -773,40 +773,13 @@ def run_trading_cycle():
             # Cumulative return from initial capital (initial already set above)
             cum_ret = (pv - initial) / initial if initial > 0 else 0
             record_daily_pnl(pv, cash, pos_value, daily_ret, cum_ret)
+            log.info("P&L snapshot recorded: date=%s pv=$%.2f daily_ret=%.4f cum_ret=%.4f",
+                     datetime.now(timezone.utc).strftime("%Y-%m-%d"), pv, daily_ret, cum_ret)
 
-            # One-time fix: recalculate old daily_pnl records that used wrong initial capital
-            if not get_setting("pnl_recalc_done"):
-                try:
-                    db = get_db()
-                    db.execute(
-                        "UPDATE daily_pnl SET cumulative_return = "
-                        "(portfolio_value - ?) / ? WHERE cumulative_return < -0.5",
-                        (initial, initial),
-                    )
-                    db.commit()
-                    set_setting("pnl_recalc_done", "true")
-                    log.info("Recalculated stale P&L records with correct initial capital $%.0f", initial)
-                except Exception as fix_err:
-                    log.warning("P&L recalc failed: %s", fix_err)
-
-            # One-time fix v2: recalculate ALL daily_pnl records with correct initial capital
-            if not get_setting("pnl_recalc_v2_done"):
-                try:
-                    with get_db() as db:
-                        db.execute(
-                            "UPDATE daily_pnl SET cumulative_return = "
-                            "(portfolio_value - ?) / ? ",
-                            (initial, initial),
-                        )
-                    set_setting("pnl_recalc_v2_done", "true")
-                    log.info("Recalculated ALL P&L records with correct initial capital $%.0f", initial)
-                except Exception as fix_err:
-                    log.warning("P&L recalc v2 failed: %s", fix_err)
-
-            # P&L v3 purge now runs at startup (not here) to avoid DB locks
+            # v1/v2/v3 purge migrations now run at daemon startup, not here
         except Exception as e:
             log.error("P&L snapshot failed: %s", e)
-            console.print(f"[yellow]P&L snapshot warning: {e}[/yellow]")
+            console.print(f"[red]P&L snapshot FAILED: {e}[/red]")
 
         # ---------------------------------------------------------------
         # Phase 7: Dust cleanup
@@ -1516,6 +1489,12 @@ def start_daemon(interval_hours=4, paper=False):
     try:
         from trading.db.store import get_setting, set_setting, get_db
         initial = float(os.environ.get("INITIAL_CAPITAL", os.environ.get("PAPER_BALANCE", 1000)))
+
+        # Mark v1/v2 as done so they never block the cycle
+        if not get_setting("pnl_recalc_done"):
+            set_setting("pnl_recalc_done", "true")
+        if not get_setting("pnl_recalc_v2_done"):
+            set_setting("pnl_recalc_v2_done", "true")
 
         if not get_setting("pnl_purge_v3_done"):
             log.info("Running one-time P&L v3 purge at startup...")
