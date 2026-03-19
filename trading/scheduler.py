@@ -746,12 +746,16 @@ def run_trading_cycle():
         # ---------------------------------------------------------------
         try:
             positions = _get_positions()
-            pos_value = sum(
-                p.get("market_value", p["qty"] * p["current_price"])
-                for p in positions
-            ) if positions else 0
+            pos_value = 0
+            for p in (positions or []):
+                mv = p.get("market_value") or 0
+                if not mv:
+                    qty = p.get("qty", 0) or 0
+                    price = p.get("current_price") or p.get("avg_cost") or 0
+                    mv = qty * price
+                pos_value += mv
             fresh_account = _get_account()
-            cash = fresh_account["cash"]
+            cash = fresh_account.get("cash", 0) or 0
             pv = cash + pos_value
 
             # Proper daily return: compare to yesterday's final portfolio value
