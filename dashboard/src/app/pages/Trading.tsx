@@ -210,9 +210,9 @@ export function Trading() {
           {(!trades || trades.length === 0) ? (
             <p className="text-[#888888] text-center py-8">No trades yet</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
               <table className="w-full">
-                <thead>
+                <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
                     <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
                     <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Side</th>
@@ -226,7 +226,7 @@ export function Trading() {
                   </tr>
                 </thead>
                 <tbody>
-                  {trades.slice(0, 25).map((t) => (
+                  {trades.map((t) => (
                     <tr key={t.id} onClick={() => setSelectedTrade(t)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
                       <td className="py-3 px-4 font-medium text-[#e8e8e8]">{t.symbol}</td>
                       <td className="py-3 px-4 text-center">

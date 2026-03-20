@@ -333,9 +333,9 @@ export function Analytics() {
               {(!strategies || strategies.length === 0) ? (
                 <p className="text-[#888888] text-center py-8">No strategies loaded</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                   <table className="w-full">
-                    <thead>
+                    <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                       <tr className="border-b border-white/5">
                         <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
                         <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Status</th>
@@ -538,8 +538,8 @@ export function Analytics() {
               {briefings.length === 0 ? (
                 <p className="text-[#888888] text-center py-8">No briefings available</p>
               ) : (
-                <div className="space-y-3">
-                  {briefings.slice(0, 15).map((b) => (
+                <div className="space-y-3 max-h-[50vh] overflow-y-auto">
+                  {briefings.map((b) => (
                     <div key={b.id} className="p-4 rounded-lg bg-white/5 border border-white/10">
                       <div className="flex items-center justify-between mb-2">
                         <p className="font-medium text-[#e8e8e8]">{b.action}</p>
@@ -576,8 +576,8 @@ export function Analytics() {
                 return filtered.length === 0 ? (
                 <p className="text-[#888888] text-center py-8">No actionable regime signals</p>
               ) : (
-                <div className="space-y-3">
-                  {filtered.slice(0, 15).map((s) => {
+                <div className="space-y-3 max-h-[50vh] overflow-y-auto">
+                  {filtered.map((s) => {
                     const regime = s.data && typeof s.data === 'object'
                       ? ((s.data as Record<string, unknown>).regime || (s.data as Record<string, unknown>).current_regime || (s.data as Record<string, unknown>).market_regime) as string | undefined
                       : undefined;
@@ -706,9 +706,9 @@ export function Analytics() {
               {(!attribution || attribution.length === 0) ? (
                 <p className="text-[#888888] text-center py-8">No attribution data available</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                   <table className="w-full">
-                    <thead>
+                    <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                       <tr className="border-b border-white/5">
                         <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
                         <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total P&L</th>
@@ -777,9 +777,9 @@ export function Analytics() {
 
                   {/* Worst fills table */}
                   <h4 className="text-sm font-medium text-[#888888] mb-3">Recent Fills (sorted by slippage)</h4>
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
                     <table className="w-full">
-                      <thead>
+                      <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                         <tr className="border-b border-white/5">
                           <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
                           <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Side</th>
@@ -790,7 +790,7 @@ export function Analytics() {
                         </tr>
                       </thead>
                       <tbody>
-                        {[...fills].sort((a, b) => b.slippage_bps - a.slippage_bps).slice(0, 15).map((f) => (
+                        {[...fills].sort((a, b) => b.slippage_bps - a.slippage_bps).map((f) => (
                           <tr key={f.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
                             <td className="py-3 px-4 font-medium text-[#e8e8e8]">{f.symbol}</td>
                             <td className="py-3 px-4 text-center">

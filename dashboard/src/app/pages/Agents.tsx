@@ -195,8 +195,8 @@ export function Agents() {
           {activity.length === 0 ? (
             <p className="text-[#888888] text-center py-8">No agent activity</p>
           ) : (
-            <div className="space-y-2">
-              {activity.slice(0, 20).map((a) => (
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+              {activity.map((a) => (
                 <div key={a.id} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
                   <div className="flex items-center gap-3">
                     <div className="size-2 rounded-full bg-[#4a9eff]" />

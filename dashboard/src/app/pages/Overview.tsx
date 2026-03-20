@@ -413,8 +413,8 @@ export function Overview() {
           {(!actions || actions.length === 0) ? (
             <p className="text-[#888888] text-center py-8">No recent activity</p>
           ) : (
-            <div className="space-y-1">
-              {actions.slice(0, 15).map((a) => (
+            <div className="space-y-1 max-h-[50vh] overflow-y-auto">
+              {actions.map((a) => (
                 <div key={a.id} onClick={() => setSelectedActivity(a)}
                   className="flex items-center justify-between py-3 border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors cursor-pointer rounded px-2">
                   <div className="flex items-center gap-4">
