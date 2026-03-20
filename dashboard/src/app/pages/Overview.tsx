@@ -354,7 +354,21 @@ export function Overview() {
                 <tbody>
                   {positions.map((pos, idx) => (
                     <tr key={idx} onClick={() => setSelectedPosition(pos)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
-                      <td className="py-3 px-4 font-medium text-[#e8e8e8]">{pos.symbol}</td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-[#e8e8e8]">{pos.symbol}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide ${
+                            pos.side === 'short' || pos.side === 'sell'
+                              ? 'bg-[#ff4466]/20 text-[#ff4466] border border-[#ff4466]/30'
+                              : 'bg-[#00d4aa]/20 text-[#00d4aa] border border-[#00d4aa]/30'
+                          }`}>{pos.side === 'short' || pos.side === 'sell' ? 'SHORT' : 'LONG'}</span>
+                          {pos.leverage && pos.leverage > 1 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-[#ffa500]/20 text-[#ffa500] border border-[#ffa500]/30">
+                              {pos.leverage}x
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
