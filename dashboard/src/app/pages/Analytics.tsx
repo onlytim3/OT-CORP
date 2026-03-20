@@ -65,6 +65,11 @@ export function Analytics() {
       winRate: s.win_rate || 0,
     }));
 
+  // P&L chart data
+  const daily = pnlHistory?.daily || [];
+  const weekly = pnlHistory?.weekly || [];
+  const monthly = pnlHistory?.monthly || [];
+
   // Portfolio stats — use portfolio-level P&L from daily_pnl history
   const latestPnl = daily.length > 0 ? daily[daily.length - 1] : null;
   const initialCapital = 1000; // matches INITIAL_CAPITAL in config
@@ -74,11 +79,6 @@ export function Analytics() {
   const avgWinRate = withClosedTrades.length > 0
     ? withClosedTrades.reduce((s, st) => s + (st.win_rate || 0), 0) / withClosedTrades.length
     : 0;
-
-  // P&L chart data
-  const daily = pnlHistory?.daily || [];
-  const weekly = pnlHistory?.weekly || [];
-  const monthly = pnlHistory?.monthly || [];
 
   const portfolioChartData = daily.map(d => ({
     date: d.date.slice(5), // MM-DD
