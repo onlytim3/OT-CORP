@@ -65,12 +65,14 @@ export function Analytics() {
       winRate: s.win_rate || 0,
     }));
 
-  // Portfolio stats
-  const totalPnl = (strategies || []).reduce((s, st) => s + st.total_pnl, 0);
+  // Portfolio stats — use portfolio-level P&L from daily_pnl history
+  const latestPnl = daily.length > 0 ? daily[daily.length - 1] : null;
+  const initialCapital = 1000; // matches INITIAL_CAPITAL in config
+  const totalPnl = latestPnl ? latestPnl.portfolio_value - initialCapital : 0;
   const totalTrades = (strategies || []).reduce((s, st) => s + st.trades, 0);
-  const withWinRate = (strategies || []).filter(s => s.win_rate !== null && s.win_rate !== undefined);
-  const avgWinRate = withWinRate.length > 0
-    ? withWinRate.reduce((s, st) => s + (st.win_rate || 0), 0) / withWinRate.length
+  const withClosedTrades = (strategies || []).filter(s => s.closed_trades > 0 && s.win_rate !== null);
+  const avgWinRate = withClosedTrades.length > 0
+    ? withClosedTrades.reduce((s, st) => s + (st.win_rate || 0), 0) / withClosedTrades.length
     : 0;
 
   // P&L chart data
@@ -127,8 +129,8 @@ export function Analytics() {
                   {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
                 </p>
               </div>
-              <div className="hidden sm:block p-3 rounded-lg bg-[#00d4aa]/10 border border-[#00d4aa]/30">
-                <TrendingUp className="size-6 text-[#00d4aa]" />
+              <div className={`hidden sm:block p-3 rounded-lg ${totalPnl >= 0 ? 'bg-[#00d4aa]/10 border border-[#00d4aa]/30' : 'bg-[#ff4466]/10 border border-[#ff4466]/30'}`}>
+                <TrendingUp className={`size-6 ${totalPnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`} />
               </div>
             </div>
           </CardContent>
@@ -151,7 +153,7 @@ export function Analytics() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs sm:text-sm text-[#888888]">Avg Win Rate</p>
-                <p className="text-xl sm:text-2xl font-bold text-[#e8e8e8] mt-1">{avgWinRate.toFixed(1)}%</p>
+                <p className="text-xl sm:text-2xl font-bold text-[#e8e8e8] mt-1">{(avgWinRate * 100).toFixed(1)}%</p>
               </div>
               <div className="hidden sm:block p-3 rounded-lg bg-[#c0c0c0]/10 border border-[#c0c0c0]/30">
                 <Shield className="size-6 text-[#c0c0c0]" />
