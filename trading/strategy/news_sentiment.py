@@ -107,6 +107,7 @@ def _parse_asset_impacts(analysis: str, asset_map: dict[str, str]) -> dict[str, 
         if clean:
             name_to_id[clean] = coin_id
 
+    # Single-line patterns
     patterns = [
         # - Bitcoin: +0.7 or - **Bitcoin**: +0.7
         r"[-•*]\s*\*{0,2}(\w[\w\s/-]*?)\*{0,2}\s*[:—–-]\s*([+-]?\d\.\d+)",
@@ -115,6 +116,26 @@ def _parse_asset_impacts(analysis: str, asset_map: dict[str, str]) -> dict[str, 
         # | Bitcoin | +0.7 | (table format)
         r"\|\s*(\w[\w\s/-]*?)\s*\|\s*([+-]?\d\.\d+)\s*\|",
     ]
+
+    # Multi-line pattern: Gemini often outputs:
+    #   *   **Natural Gas**
+    #       *   Impact score: +0.7
+    multiline_pattern = r"\*{2}([\w\s/-]+?)\*{2}\s*\n\s*\*?\s*[Ii]mpact\s+score:\s*([+-]?\d\.\d+)"
+    for match in re.finditer(multiline_pattern, analysis):
+        asset_raw = match.group(1).lower().strip()
+        try:
+            score = float(match.group(2))
+        except ValueError:
+            continue
+        score = max(-1.0, min(1.0, score))
+        matched_id = name_to_id.get(asset_raw)
+        if not matched_id:
+            for name, cid in name_to_id.items():
+                if asset_raw in name or name in asset_raw:
+                    matched_id = cid
+                    break
+        if matched_id and matched_id not in impacts:
+            impacts[matched_id] = score
 
     for pattern in patterns:
         for match in re.finditer(pattern, analysis):
