@@ -342,9 +342,9 @@ export function Overview() {
           {positions.length === 0 ? (
             <p className="text-[#888888] text-center py-8">No open positions</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
               <table className="w-full">
-                <thead>
+                <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
                     {['Symbol', 'Qty', 'Entry', 'Current', 'P&L', 'P&L %', 'Age'].map(h => (
                       <th key={h} className={`${h === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>

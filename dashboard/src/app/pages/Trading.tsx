@@ -215,7 +215,6 @@ export function Trading() {
                 <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
                     <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
-                    <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Side</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Qty</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Price</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total</th>
@@ -228,19 +227,25 @@ export function Trading() {
                 <tbody>
                   {trades.map((t) => (
                     <tr key={t.id} onClick={() => setSelectedTrade(t)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
-                      <td className="py-3 px-4 font-medium text-[#e8e8e8]">{t.symbol}</td>
-                      <td className="py-3 px-4 text-center">
-                        <Badge variant={t.side === 'buy' ? 'default' : 'destructive'}>{t.side.toUpperCase()}</Badge>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-[#e8e8e8]">{t.symbol}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide ${
+                            t.side === 'sell' || t.side === 'short'
+                              ? 'bg-[#ff4466]/20 text-[#ff4466] border border-[#ff4466]/30'
+                              : 'bg-[#00d4aa]/20 text-[#00d4aa] border border-[#00d4aa]/30'
+                          }`}>{t.side === 'sell' || t.side === 'short' ? 'SELL' : 'BUY'}</span>
+                          {t.leverage && t.leverage > 1 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-[#ffa500]/20 text-[#ffa500] border border-[#ffa500]/30">
+                              {t.leverage}x
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(t.qty)}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                      <td className="py-3 px-4 text-[#888888] text-sm">
-                        {t.strategy}
-                        {t.leverage && t.leverage > 1 && (
-                          <span className="ml-1 text-xs text-[#ffa500]">{t.leverage}x</span>
-                        )}
-                      </td>
+                      <td className="py-3 px-4 text-[#888888] text-sm">{t.strategy}</td>
                       <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
                         {t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
                       </td>

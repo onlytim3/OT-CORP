@@ -782,7 +782,6 @@ export function Analytics() {
                       <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                         <tr className="border-b border-white/5">
                           <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
-                          <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Side</th>
                           <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Mid Price</th>
                           <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Fill Price</th>
                           <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Slippage</th>
@@ -792,9 +791,15 @@ export function Analytics() {
                       <tbody>
                         {[...fills].sort((a, b) => b.slippage_bps - a.slippage_bps).map((f) => (
                           <tr key={f.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                            <td className="py-3 px-4 font-medium text-[#e8e8e8]">{f.symbol}</td>
-                            <td className="py-3 px-4 text-center">
-                              <Badge variant={f.side === 'buy' ? 'default' : 'destructive'}>{f.side.toUpperCase()}</Badge>
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-[#e8e8e8]">{f.symbol}</span>
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide ${
+                                  f.side === 'sell' || f.side === 'short'
+                                    ? 'bg-[#ff4466]/20 text-[#ff4466] border border-[#ff4466]/30'
+                                    : 'bg-[#00d4aa]/20 text-[#00d4aa] border border-[#00d4aa]/30'
+                                }`}>{f.side === 'sell' || f.side === 'short' ? 'SELL' : 'BUY'}</span>
+                              </div>
                             </td>
                             <td className="text-right py-3 px-4 text-[#c0c0c0]">${f.mid_price.toFixed(2)}</td>
                             <td className="text-right py-3 px-4 text-[#c0c0c0]">${f.fill_price.toFixed(2)}</td>
