@@ -28,21 +28,23 @@ log = logging.getLogger(__name__)
 MODEL_FLASH = "gemini-2.5-flash"
 MODEL_THINKING = "gemini-2.5-flash"
 
-# Per-call-type configuration: model selection + token budget
+# Per-call-type configuration: model selection + token budget + thinking budget
+# For Gemini 2.5 models, max_tokens includes thinking tokens.
+# thinking_budget limits reasoning tokens so more go to visible output.
 CALL_PROFILES: dict[str, dict] = {
-    "chat":             {"model": MODEL_THINKING, "max_tokens": 2000},
-    "narrative":        {"model": MODEL_FLASH,    "max_tokens": 1500},
-    "explain_trade":    {"model": MODEL_THINKING, "max_tokens": 1500},
-    "journal":          {"model": MODEL_THINKING, "max_tokens": 2500},
-    "performance":      {"model": MODEL_THINKING, "max_tokens": 2000},
-    "risk_event":       {"model": MODEL_THINKING, "max_tokens": 1000},
-    "signal_summary":   {"model": MODEL_FLASH,    "max_tokens": 500},
-    "annotate":         {"model": MODEL_FLASH,    "max_tokens": 200},
-    "pre_trade":        {"model": MODEL_FLASH,    "max_tokens": 1000},
-    "post_trade":       {"model": MODEL_THINKING, "max_tokens": 1500},
-    "agent_synthesis":  {"model": MODEL_THINKING, "max_tokens": 2000},
-    "weekly_synthesis": {"model": MODEL_THINKING, "max_tokens": 3000},
-    "news_analysis":    {"model": MODEL_THINKING, "max_tokens": 1500},
+    "chat":             {"model": MODEL_THINKING, "max_tokens": 4000, "thinking_budget": 1024},
+    "narrative":        {"model": MODEL_FLASH,    "max_tokens": 2000, "thinking_budget": 512},
+    "explain_trade":    {"model": MODEL_THINKING, "max_tokens": 4000, "thinking_budget": 1024},
+    "journal":          {"model": MODEL_THINKING, "max_tokens": 5000, "thinking_budget": 1024},
+    "performance":      {"model": MODEL_THINKING, "max_tokens": 4000, "thinking_budget": 1024},
+    "risk_event":       {"model": MODEL_THINKING, "max_tokens": 2000, "thinking_budget": 512},
+    "signal_summary":   {"model": MODEL_FLASH,    "max_tokens": 1000, "thinking_budget": 256},
+    "annotate":         {"model": MODEL_FLASH,    "max_tokens": 500,  "thinking_budget": 128},
+    "pre_trade":        {"model": MODEL_FLASH,    "max_tokens": 2000, "thinking_budget": 512},
+    "post_trade":       {"model": MODEL_THINKING, "max_tokens": 3000, "thinking_budget": 1024},
+    "agent_synthesis":  {"model": MODEL_THINKING, "max_tokens": 4000, "thinking_budget": 1024},
+    "weekly_synthesis": {"model": MODEL_THINKING, "max_tokens": 6000, "thinking_budget": 1024},
+    "news_analysis":    {"model": MODEL_THINKING, "max_tokens": 5000, "thinking_budget": 1024},
 }
 
 
@@ -97,20 +99,29 @@ def _get_genai_client():
 
 
 def _call_gemini(system: str, prompt: str, model: str = MODEL_FLASH,
-                 max_tokens: int = 1500) -> str | None:
-    """Call Gemini API via google.genai SDK. Returns response text or None on failure."""
+                 max_tokens: int = 1500,
+                 thinking_budget: int | None = None) -> str | None:
+    """Call Gemini API via google.genai SDK. Returns response text or None on failure.
+
+    For Gemini 2.5 models, max_output_tokens includes thinking tokens.
+    Set thinking_budget to control how many tokens go to reasoning vs output.
+    """
     client = _get_genai_client()
     if client is None:
         return None
     _rate_limit()
     try:
+        config: dict = {
+            "system_instruction": system,
+            "max_output_tokens": max_tokens,
+        }
+        # Constrain thinking budget so more tokens go to visible output
+        if thinking_budget is not None:
+            config["thinking_config"] = {"thinking_budget": thinking_budget}
         response = client.models.generate_content(
             model=model,
             contents=prompt,
-            config={
-                "system_instruction": system,
-                "max_output_tokens": max_tokens,
-            },
+            config=config,
         )
         return response.text
     except Exception as e:
@@ -136,6 +147,7 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
         system, prompt,
         model=profile["model"],
         max_tokens=profile["max_tokens"],
+        thinking_budget=profile.get("thinking_budget"),
     )
     if result:
         return result

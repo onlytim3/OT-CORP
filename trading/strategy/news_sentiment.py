@@ -86,25 +86,54 @@ def _parse_llm_signals(analysis: str, asset_map: dict[str, str]) -> list[dict]:
 def _parse_asset_impacts(analysis: str, asset_map: dict[str, str]) -> dict[str, float]:
     """Parse LLM analysis for per-asset impact scores.
 
-    Looks for patterns like:
+    Handles multiple formats Gemini may use:
       - Bitcoin: +0.7 (reason)
-      - Ethereum: -0.3 (reason)
+      - **Ethereum**: -0.3 — explanation
       - Impact score: 0.5
+      - Bitcoin (+0.7): explanation
+      - | Bitcoin | +0.7 | reason |
     """
     impacts = {}
     if not analysis:
         return impacts
 
-    # Match: asset_name ... score (like +0.7 or -0.3)
-    pattern = r"[-•*]\s*(\w[\w\s/-]*?)[:—]\s*([+-]?\d\.\d)"
-    for match in re.finditer(pattern, analysis):
-        asset_raw = match.group(1).lower().strip()
-        score = float(match.group(2))
+    # Build reverse lookup: lowercase name/symbol → coin_id
+    name_to_id: dict[str, str] = {}
+    for coin_id, symbol in asset_map.items():
+        name_to_id[coin_id.lower()] = coin_id
+        name_to_id[symbol.lower()] = coin_id
+        # Handle common variants
+        clean = coin_id.lower().replace("usdt", "").replace("usd", "").replace("-", "").replace("/", "")
+        if clean:
+            name_to_id[clean] = coin_id
 
-        for coin_id in asset_map:
-            if asset_raw in coin_id or coin_id in asset_raw:
-                impacts[coin_id] = score
-                break
+    patterns = [
+        # - Bitcoin: +0.7 or - **Bitcoin**: +0.7
+        r"[-•*]\s*\*{0,2}(\w[\w\s/-]*?)\*{0,2}\s*[:—–-]\s*([+-]?\d\.\d+)",
+        # Bitcoin (+0.7) or Bitcoin: Impact score: +0.7
+        r"\b(\w[\w\s/-]*?)\s*\(([+-]?\d\.\d+)\)",
+        # | Bitcoin | +0.7 | (table format)
+        r"\|\s*(\w[\w\s/-]*?)\s*\|\s*([+-]?\d\.\d+)\s*\|",
+    ]
+
+    for pattern in patterns:
+        for match in re.finditer(pattern, analysis):
+            asset_raw = match.group(1).lower().strip().strip("*")
+            try:
+                score = float(match.group(2))
+            except ValueError:
+                continue
+            score = max(-1.0, min(1.0, score))  # Clamp to [-1, 1]
+
+            # Try direct match first, then substring match
+            matched_id = name_to_id.get(asset_raw)
+            if not matched_id:
+                for name, cid in name_to_id.items():
+                    if asset_raw in name or name in asset_raw:
+                        matched_id = cid
+                        break
+            if matched_id and matched_id not in impacts:
+                impacts[matched_id] = score
 
     return impacts
 
