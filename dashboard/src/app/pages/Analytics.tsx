@@ -70,10 +70,14 @@ export function Analytics() {
   const weekly = pnlHistory?.weekly || [];
   const monthly = pnlHistory?.monthly || [];
 
-  // Portfolio stats — use portfolio-level P&L from daily_pnl history
+  // Portfolio stats — use real-time portfolio value (account equity) when available,
+  // fall back to last daily_pnl snapshot
   const latestPnl = daily.length > 0 ? daily[daily.length - 1] : null;
   const initialCapital = 1000; // matches INITIAL_CAPITAL in config
-  const totalPnl = latestPnl ? latestPnl.portfolio_value - initialCapital : 0;
+  const livePortfolioValue = status?.account?.portfolio_value ?? status?.account?.equity;
+  const totalPnl = livePortfolioValue
+    ? livePortfolioValue - initialCapital
+    : latestPnl ? latestPnl.portfolio_value - initialCapital : 0;
   const totalTrades = (strategies || []).reduce((s, st) => s + st.trades, 0);
   const withClosedTrades = (strategies || []).filter(s => s.closed_trades > 0 && s.win_rate !== null);
   const avgWinRate = withClosedTrades.length > 0

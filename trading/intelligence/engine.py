@@ -388,7 +388,7 @@ class MarketBriefing:
             "overall_score": self.overall_score,
         }
         if self.news_interpretation:
-            d["news_interpretation"] = self.news_interpretation[:2000]
+            d["news_interpretation"] = self.news_interpretation[:5000]
         if self.asset_impacts:
             d["asset_impacts"] = self.asset_impacts
         return d
