@@ -156,6 +156,7 @@ export interface Intelligence {
   news_analysis?: { timestamp: string; interpretation: string; headline_count: number; source_count: number; regime: string };
   asset_impacts?: Record<string, number>;
   news_interpretation?: string;
+  headlines?: { title: string; source: string; category: string; published: string }[];
 }
 
 export interface AgentStats {

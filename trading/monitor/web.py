@@ -965,9 +965,21 @@ def api_intelligence():
                     if bdata.get("asset_impacts") and "asset_impacts" not in result:
                         result["asset_impacts"] = bdata["asset_impacts"]
                     if bdata.get("news_interpretation") and "news_interpretation" not in result:
-                        result["news_interpretation"] = bdata["news_interpretation"][:1000]
+                        result["news_interpretation"] = bdata["news_interpretation"][:2000]
         except Exception:
             pass
+
+        # Live headlines — fetch current headlines for display
+        try:
+            from trading.data.news import fetch_all_headlines
+            headlines = fetch_all_headlines(max_per_source=3)
+            result["headlines"] = [
+                {"title": h.get("title", ""), "source": h.get("source", ""),
+                 "category": h.get("category", ""), "published": h.get("published", "")}
+                for h in headlines[:15]
+            ]
+        except Exception:
+            result["headlines"] = []
 
     return jsonify(result)
 

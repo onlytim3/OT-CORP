@@ -494,6 +494,40 @@ export function Analytics() {
             </Card>
           )}
 
+          {/* Live Headlines — what the system is reading */}
+          {intelligence?.headlines && intelligence.headlines.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <span className="size-2 rounded-full bg-[#ffd700] animate-pulse" />
+                    Live Headlines
+                  </span>
+                  <span className="text-xs text-[#888888] font-normal">{intelligence.headlines.length} headlines</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {intelligence.headlines.map((h, i) => (
+                    <div key={i} className="flex items-start gap-3 py-2 border-b border-white/5 last:border-0">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 mt-0.5 ${
+                        h.category === 'crypto' ? 'bg-[#4a9eff]/20 text-[#4a9eff]' :
+                        h.category === 'stocks' ? 'bg-[#00d4aa]/20 text-[#00d4aa]' :
+                        h.category === 'commodities' ? 'bg-[#ffd700]/20 text-[#ffd700]' :
+                        h.category === 'macro' ? 'bg-[#ff4466]/20 text-[#ff4466]' :
+                        'bg-white/10 text-[#888888]'
+                      }`}>{h.category || 'news'}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-[#e8e8e8] leading-snug">{h.title}</p>
+                        <p className="text-[10px] text-[#666666] mt-0.5">{h.source}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader><CardTitle>AI Briefings</CardTitle></CardHeader>
             <CardContent>
