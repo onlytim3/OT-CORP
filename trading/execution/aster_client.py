@@ -229,6 +229,53 @@ def _retry(func, *args, **kwargs):
 
 
 # ---------------------------------------------------------------------------
+# Rate limiter — prevents hitting AsterDex API rate limits
+# ---------------------------------------------------------------------------
+
+import threading
+
+class _RateLimiter:
+    """Thread-safe sliding-window rate limiter.
+
+    AsterDex allows ~1200 requests/minute for public endpoints and
+    ~300/minute for private. We enforce conservative limits to stay safe
+    when 22 strategies fire in a single cycle.
+    """
+
+    def __init__(self, max_requests: int = 600, window_seconds: float = 60.0):
+        self._max = max_requests
+        self._window = window_seconds
+        self._timestamps: list[float] = []
+        self._lock = threading.Lock()
+
+    def acquire(self):
+        """Block until a request slot is available."""
+        while True:
+            with self._lock:
+                now = time.time()
+                cutoff = now - self._window
+                self._timestamps = [t for t in self._timestamps if t > cutoff]
+                if len(self._timestamps) < self._max:
+                    self._timestamps.append(now)
+                    return
+                # Wait until the oldest request expires
+                wait_time = self._timestamps[0] - cutoff + 0.05
+            time.sleep(wait_time)
+
+    @property
+    def current_count(self) -> int:
+        with self._lock:
+            cutoff = time.time() - self._window
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
+            return len(self._timestamps)
+
+
+# Shared rate limiters for public and private endpoints
+_public_limiter = _RateLimiter(max_requests=600, window_seconds=60.0)
+_private_limiter = _RateLimiter(max_requests=200, window_seconds=60.0)
+
+
+# ---------------------------------------------------------------------------
 # HTTP session singletons (lazy)
 # ---------------------------------------------------------------------------
 
@@ -278,6 +325,7 @@ def _get_auth_session() -> requests.Session:
 
 def _public_get(path: str, params: Optional[dict] = None) -> Any:
     """Make an unauthenticated GET request to the AsterDex futures API."""
+    _public_limiter.acquire()
     session = _get_public_session()
     url = f"{ASTER_FUTURES_BASE}{path}"
 
@@ -301,6 +349,7 @@ def _auth_request(method: str, path: str, params: Optional[dict] = None) -> Any:
 
     Note: AsterDex auth endpoints use /fapi/v1/, public use /fapi/v3/.
     """
+    _private_limiter.acquire()
     cfg = _require_auth()
     session = _get_auth_session()
     # Auth endpoints must use v1 (v3 returns signature errors)

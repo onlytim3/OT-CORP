@@ -541,6 +541,65 @@ def get_leverage(strategy_name: str) -> int:
     profile = profiles.get(active, LEVERAGE_CONSERVATIVE)
     return profile.get(strategy_name, profile.get("default", 1))
 
+def validate_leverage_profile() -> list[str]:
+    """Check the active leverage profile for dangerous configurations.
+
+    Returns a list of warnings. Called during daemon startup.
+    """
+    warnings: list[str] = []
+    profiles = {
+        "conservative": LEVERAGE_CONSERVATIVE,
+        "moderate": LEVERAGE_MODERATE,
+        "aggressive": LEVERAGE_AGGRESSIVE,
+        "greedy": LEVERAGE_GREEDY,
+    }
+    active = LEVERAGE_PROFILE
+    try:
+        from trading.db.store import get_setting
+        active = get_setting("trading_profile", LEVERAGE_PROFILE)
+    except Exception:
+        pass
+
+    profile = profiles.get(active, LEVERAGE_CONSERVATIVE)
+
+    # Check for strategies with leverage > 5x (high liquidation risk)
+    high_lev = {k: v for k, v in profile.items() if k != "default" and v > 5}
+    if high_lev:
+        for strat, lev in high_lev.items():
+            warnings.append(
+                f"LEVERAGE WARNING: {strat} at {lev}x — liquidation risk is significant. "
+                f"A {100/lev:.0f}% adverse move wipes the position."
+            )
+
+    # Check total portfolio leverage exposure
+    # With max_position_pct=25% and 22 strategies, worst case is many concurrent positions
+    enabled_count = sum(1 for k, v in STRATEGY_ENABLED.items() if v)
+    default_lev = profile.get("default", 1)
+    max_lev = max(profile.values()) if profile else 1
+    if max_lev >= 7:
+        warnings.append(
+            f"LEVERAGE WARNING: Profile '{active}' has max {max_lev}x leverage. "
+            f"Backtests don't capture exchange outages, cascading liquidations, "
+            f"or flash crashes beyond historical data."
+        )
+
+    # Check total leverage cap vs risk manager setting
+    total_cap = RISK.get("max_total_leverage", 5)
+    if default_lev > total_cap:
+        warnings.append(
+            f"LEVERAGE CONFLICT: Default leverage ({default_lev}x) exceeds "
+            f"risk manager cap ({total_cap}x). Risk manager will block most trades."
+        )
+
+    if active == "greedy":
+        warnings.append(
+            "LEVERAGE WARNING: 'greedy' profile is active — this accepts heavy losses "
+            "and possible liquidations. Switch to 'aggressive' for production use."
+        )
+
+    return warnings
+
+
 # --- Learning ---
 LEARNING = {
     "min_trades_for_adaptation": 20,    # Need 20+ trades before suggesting changes

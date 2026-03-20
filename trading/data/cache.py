@@ -1,10 +1,18 @@
-"""In-memory TTL cache for API data — prevents redundant API calls across strategies."""
+"""In-memory TTL cache for API data — prevents redundant API calls across strategies.
 
+Cache entries expire based on TTL. At cycle start, only expired entries are pruned
+rather than wiping everything — this lets strategies within the same cycle share
+data (e.g., 22 strategies all needing BTC OHLCV won't hit the API 22 times).
+"""
+
+import logging
 import time
 from functools import wraps
 
 _cache: dict[str, tuple[float, any]] = {}
 DEFAULT_TTL = 300  # 5 minutes
+
+log = logging.getLogger(__name__)
 
 
 def cached(ttl: int = DEFAULT_TTL):
@@ -26,7 +34,24 @@ def cached(ttl: int = DEFAULT_TTL):
 
 
 def clear_cache():
-    """Clear all cached data. Called at the start of each trading cycle."""
+    """Prune expired entries from the cache.
+
+    Called at the start of each trading cycle. Instead of wiping everything,
+    only removes entries whose TTL has passed. This means data fetched in the
+    current cycle (within TTL) is shared across strategies — preventing
+    redundant API calls when 22 strategies all need the same OHLCV data.
+    """
+    now = time.time()
+    expired = [k for k, (ts, _) in _cache.items() if now - ts >= DEFAULT_TTL]
+    for k in expired:
+        del _cache[k]
+    remaining = len(_cache)
+    if expired:
+        log.debug("Cache pruned: %d expired, %d retained", len(expired), remaining)
+
+
+def force_clear_cache():
+    """Force-clear all cached data. Use only when you need a completely fresh state."""
     _cache.clear()
 
 

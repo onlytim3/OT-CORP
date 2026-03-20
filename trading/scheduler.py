@@ -221,11 +221,22 @@ def run_trading_cycle():
 
         # ---------------------------------------------------------------
         # Phase 1: Sync positions from broker -> local DB (fixes risk checks)
+        # CRITICAL: If position sync fails, halt trading — risk checks
+        # depend on accurate position data.
         # ---------------------------------------------------------------
         try:
             sync_result = run_sync()
             console.print(f"[dim]Sync: {sync_result}[/dim]")
         except Exception as e:
+            from trading.execution.sync import SyncError
+            if isinstance(e, SyncError):
+                msg = f"HALTING CYCLE: Position sync failed — {e}"
+                log.error(msg)
+                console.print(f"[bold red]{msg}[/bold red]")
+                log_action("error", "sync_halt", details=msg)
+                _notify_safe(notify_error, msg, "position_sync")
+                return
+            # Non-sync errors (fill verification, pairing) are warnings
             log.warning("Sync warning: %s", e)
             console.print(f"[yellow]Sync warning: {e}[/yellow]")
 

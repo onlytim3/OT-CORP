@@ -29,6 +29,11 @@ from trading.learning.journal import record_outcome
 console = Console()
 
 
+class SyncError(Exception):
+    """Raised when position sync fails in a way that makes trading unsafe."""
+    pass
+
+
 # ---------------------------------------------------------------------------
 # 1. sync_positions — Alpaca (or paper) positions  -->  local DB
 # ---------------------------------------------------------------------------
@@ -52,7 +57,7 @@ def sync_positions() -> int:
     except Exception as exc:
         console.print(f"[red]sync_positions: failed to fetch broker positions: {exc}[/red]")
         log_action("error", "sync_positions_fetch", details=str(exc))
-        return 0
+        raise SyncError(f"Cannot fetch broker positions: {exc}") from exc
 
     # Build a set of symbols currently held at the broker.
     broker_symbols: set[str] = set()
@@ -437,23 +442,19 @@ def pair_trades() -> int:
 def run_sync() -> dict:
     """Run the full sync pipeline: positions -> fills -> pairing.
 
-    Each step is wrapped independently so a failure in one does not block
-    the others.
+    Position sync failures raise SyncError — callers must decide whether
+    to halt trading. Fill verification and trade pairing failures are
+    non-fatal and logged.
 
     Returns a summary dict with counts from each step.
     """
     console.rule("[bold]Sync Pipeline[/bold]")
     results: dict[str, int | str] = {}
 
-    # Step 1 — sync positions
-    try:
-        results["positions_synced"] = sync_positions()
-    except Exception as exc:
-        console.print(f"[red]run_sync: sync_positions crashed: {exc}[/red]")
-        log_action("error", "run_sync_positions", details=traceback.format_exc())
-        results["positions_synced"] = f"error: {exc}"
+    # Step 1 — sync positions (CRITICAL — raises SyncError on failure)
+    results["positions_synced"] = sync_positions()
 
-    # Step 2 — verify fills
+    # Step 2 — verify fills (non-fatal)
     try:
         results["fills_verified"] = verify_fills()
     except Exception as exc:
@@ -461,7 +462,7 @@ def run_sync() -> dict:
         log_action("error", "run_sync_fills", details=traceback.format_exc())
         results["fills_verified"] = f"error: {exc}"
 
-    # Step 3 — pair trades
+    # Step 3 — pair trades (non-fatal)
     try:
         results["trades_paired"] = pair_trades()
     except Exception as exc:
