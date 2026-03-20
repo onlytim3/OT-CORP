@@ -231,6 +231,27 @@ def api_status():
     positions = _add_position_ages(sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
     summary = get_action_log_summary()
 
+    # Enrich positions with leverage from their opening trades
+    try:
+        trades = get_trades(limit=200)
+        # Build map: symbol → max leverage from recent trades
+        symbol_leverage: dict[str, int] = {}
+        for t in trades:
+            lev = t.get("leverage")
+            if lev and lev > 1:
+                sym = t.get("symbol", "")
+                # Store the leverage, keep the highest if multiple trades
+                sym_flat = sym.replace("/", "")
+                symbol_leverage[sym] = max(symbol_leverage.get(sym, 1), lev)
+                symbol_leverage[sym_flat] = max(symbol_leverage.get(sym_flat, 1), lev)
+        for pos in positions:
+            psym = pos.get("symbol", "")
+            lev = symbol_leverage.get(psym) or symbol_leverage.get(psym.replace("/", ""))
+            if lev and lev > 1:
+                pos["leverage"] = lev
+    except Exception:
+        pass
+
     # Include P&L from daily_pnl as fallback for position-level P&L
     pnl_snapshot = {}
     try:
