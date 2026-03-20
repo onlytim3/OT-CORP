@@ -392,7 +392,6 @@ def run_trading_cycle():
                 blocked_count += 1
                 # Queue signal for execution when market opens (expires in 8h)
                 from trading.db.store import save_deferred_signal
-                from datetime import timedelta
                 expires = (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()
                 try:
                     save_deferred_signal(
