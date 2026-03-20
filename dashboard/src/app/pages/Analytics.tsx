@@ -438,6 +438,32 @@ export function Analytics() {
             </Card>
           )}
 
+          {/* News Interpretation fallback — from briefing data */}
+          {!intelligence?.news_analysis && intelligence?.news_interpretation && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <span className="size-2 rounded-full bg-[#4a9eff] animate-pulse" />
+                  News Interpretation
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+                  <div className="text-sm text-[#c0c0c0] whitespace-pre-wrap leading-relaxed">
+                    {intelligence.news_interpretation.split('\n').map((line: string, i: number) => {
+                      if (line.startsWith('## ')) return <h3 key={i} className="text-[#e8e8e8] font-semibold mt-3 mb-1">{line.replace('## ', '')}</h3>;
+                      if (line.startsWith('- BUY') || line.includes('bullish')) return <p key={i} className="text-[#00d4aa]">{line}</p>;
+                      if (line.startsWith('- SELL') || line.includes('bearish')) return <p key={i} className="text-[#ff4466]">{line}</p>;
+                      if (line.startsWith('- ') || line.startsWith('* ')) return <p key={i} className="pl-2 text-[#c0c0c0]">{line}</p>;
+                      if (line.match(/^\d+\./)) return <p key={i} className="pl-2 text-[#c0c0c0] font-medium">{line}</p>;
+                      return <p key={i}>{line}</p>;
+                    })}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Asset Sentiment Impacts */}
           {intelligence?.asset_impacts && Object.keys(intelligence.asset_impacts).length > 0 && (
             <Card>
