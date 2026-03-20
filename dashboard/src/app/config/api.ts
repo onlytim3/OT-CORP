@@ -153,6 +153,9 @@ export interface Intelligence {
   fear_greed: { value: number; classification: string; timestamp: string } | null;
   briefings: ActionItem[];
   regime_signals: { id: number; timestamp: string; strategy: string; signal: string; strength: number; data: Record<string, unknown> | null }[];
+  news_analysis?: { timestamp: string; interpretation: string; headline_count: number; source_count: number; regime: string };
+  asset_impacts?: Record<string, number>;
+  news_interpretation?: string;
 }
 
 export interface AgentStats {

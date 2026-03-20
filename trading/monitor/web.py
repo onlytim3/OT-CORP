@@ -920,24 +920,25 @@ def api_intelligence():
             regime_sigs.append(d)
         result["regime_signals"] = regime_sigs
 
-        # News analysis — latest LLM interpretation
+        # News analysis — latest LLM interpretation from news agent
         try:
             news_rows = conn.execute(
-                "SELECT * FROM action_log WHERE action = 'news_analysis' "
+                "SELECT * FROM action_log WHERE "
+                "(action = 'news_analysis' OR action LIKE '%news_interpretation%') "
                 "ORDER BY timestamp DESC LIMIT 1"
             ).fetchall()
             if news_rows:
                 news_data = dict(news_rows[0])
                 if isinstance(news_data.get("data"), str):
                     try:
-                        news_data["data"] = _json.loads(news_data["data"])
+                        news_data["data"] = json.loads(news_data["data"])
                     except Exception:
                         pass
                 data = news_data.get("data", {})
                 if isinstance(data, dict):
                     result["news_analysis"] = {
                         "timestamp": news_data.get("timestamp", ""),
-                        "interpretation": data.get("full_analysis", news_data.get("details", "")),
+                        "interpretation": data.get("full_analysis") or news_data.get("details", ""),
                         "headline_count": data.get("headline_count", 0),
                         "source_count": data.get("source_count", 0),
                         "regime": data.get("regime", ""),
@@ -945,23 +946,26 @@ def api_intelligence():
         except Exception:
             pass
 
-        # Asset impacts from latest briefing
+        # Asset impacts from latest briefing or news analysis
         try:
             briefing_rows = conn.execute(
-                "SELECT data FROM action_log WHERE action LIKE '%briefing%' "
-                "ORDER BY timestamp DESC LIMIT 1"
+                "SELECT data FROM action_log WHERE "
+                "(action LIKE '%briefing%' OR action = 'news_analysis') "
+                "AND data IS NOT NULL "
+                "ORDER BY timestamp DESC LIMIT 3"
             ).fetchall()
-            if briefing_rows:
-                bdata = briefing_rows[0]["data"]
+            for brow in briefing_rows:
+                bdata = brow["data"]
                 if isinstance(bdata, str):
                     try:
-                        bdata = _json.loads(bdata)
+                        bdata = json.loads(bdata)
                     except Exception:
-                        bdata = {}
-                if isinstance(bdata, dict) and bdata.get("asset_impacts"):
-                    result["asset_impacts"] = bdata["asset_impacts"]
-                if isinstance(bdata, dict) and bdata.get("news_interpretation"):
-                    result["news_interpretation"] = bdata["news_interpretation"][:1000]
+                        continue
+                if isinstance(bdata, dict):
+                    if bdata.get("asset_impacts") and "asset_impacts" not in result:
+                        result["asset_impacts"] = bdata["asset_impacts"]
+                    if bdata.get("news_interpretation") and "news_interpretation" not in result:
+                        result["news_interpretation"] = bdata["news_interpretation"][:1000]
         except Exception:
             pass
 

@@ -745,18 +745,47 @@ def run_trading_cycle():
         # Phase 6: Record daily P&L snapshot (proper daily return calc)
         # ---------------------------------------------------------------
         try:
-            positions = _get_positions()
+            log.info("Phase 6: recording P&L snapshot...")
+
+            # Get positions — tolerate failure
             pos_value = 0
-            for p in (positions or []):
-                mv = p.get("market_value") or 0
-                if not mv:
-                    qty = p.get("qty", 0) or 0
-                    price = p.get("current_price") or p.get("avg_cost") or 0
-                    mv = qty * price
-                pos_value += mv
-            fresh_account = _get_account()
-            cash = fresh_account.get("cash", 0) or 0
+            try:
+                positions = _get_positions()
+                for p in (positions or []):
+                    mv = p.get("market_value") or 0
+                    if not mv:
+                        qty = p.get("qty", 0) or 0
+                        price = p.get("current_price") or p.get("avg_cost") or 0
+                        mv = qty * price
+                    pos_value += mv
+            except Exception as pos_err:
+                log.warning("Phase 6: positions fetch failed (%s), using pos_value=0", pos_err)
+
+            # Get account cash — tolerate failure
+            cash = 0
+            try:
+                fresh_account = _get_account()
+                cash = float(fresh_account.get("cash", 0) or 0)
+            except Exception as acct_err:
+                log.warning("Phase 6: account fetch failed (%s), using cash=0", acct_err)
+
             pv = cash + pos_value
+
+            # If both failed, try to carry forward yesterday's value
+            if pv <= 0:
+                try:
+                    with get_db() as conn:
+                        last_row = conn.execute(
+                            "SELECT portfolio_value, cash, positions_value FROM daily_pnl ORDER BY date DESC LIMIT 1"
+                        ).fetchone()
+                    if last_row:
+                        pv = last_row["portfolio_value"]
+                        cash = last_row["cash"]
+                        pos_value = last_row["positions_value"]
+                        log.warning("Phase 6: using last known P&L values (pv=$%.2f)", pv)
+                except Exception:
+                    pv = INITIAL_CAPITAL
+                    cash = INITIAL_CAPITAL
 
             # Proper daily return: compare to yesterday's final portfolio value
             initial_str = get_setting("initial_capital")
@@ -777,12 +806,10 @@ def run_trading_cycle():
             # Cumulative return from initial capital (initial already set above)
             cum_ret = (pv - initial) / initial if initial > 0 else 0
             record_daily_pnl(pv, cash, pos_value, daily_ret, cum_ret)
-            log.info("P&L snapshot recorded: date=%s pv=$%.2f daily_ret=%.4f cum_ret=%.4f",
-                     datetime.now(timezone.utc).strftime("%Y-%m-%d"), pv, daily_ret, cum_ret)
-
-            # v1/v2/v3 purge migrations now run at daemon startup, not here
+            log.info("Phase 6 OK: date=%s pv=$%.2f cash=$%.2f pos=$%.2f daily=%.4f cum=%.4f",
+                     datetime.now(timezone.utc).strftime("%Y-%m-%d"), pv, cash, pos_value, daily_ret, cum_ret)
         except Exception as e:
-            log.error("P&L snapshot failed: %s", e)
+            log.error("P&L snapshot failed: %s", e, exc_info=True)
             console.print(f"[red]P&L snapshot FAILED: {e}[/red]")
 
         # ---------------------------------------------------------------

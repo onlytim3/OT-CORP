@@ -404,7 +404,7 @@ export function Analytics() {
 
         <TabsContent value="intelligence" className="space-y-6">
           {/* News Analysis — LLM interpretation */}
-          {(intelligence as Record<string, unknown>)?.news_analysis && (
+          {intelligence?.news_analysis && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -415,13 +415,13 @@ export function Analytics() {
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex items-center gap-4 text-xs text-[#888888] mb-3">
-                    <span>{((intelligence as Record<string, unknown>)?.news_analysis as Record<string, unknown>)?.headline_count ?? 0} headlines analyzed</span>
-                    <span>{((intelligence as Record<string, unknown>)?.news_analysis as Record<string, unknown>)?.source_count ?? 0} sources</span>
-                    <span>Regime: {String(((intelligence as Record<string, unknown>)?.news_analysis as Record<string, unknown>)?.regime ?? "unknown")}</span>
+                    <span>{intelligence.news_analysis.headline_count ?? 0} headlines analyzed</span>
+                    <span>{intelligence.news_analysis.source_count ?? 0} sources</span>
+                    <span>Regime: {intelligence.news_analysis.regime ?? "unknown"}</span>
                   </div>
                   <div className="p-4 rounded-lg bg-white/5 border border-white/10">
                     <div className="text-sm text-[#c0c0c0] whitespace-pre-wrap leading-relaxed">
-                      {String(((intelligence as Record<string, unknown>)?.news_analysis as Record<string, unknown>)?.interpretation ?? "").split('\n').map((line: string, i: number) => {
+                      {(intelligence.news_analysis.interpretation ?? "").split('\n').map((line: string, i: number) => {
                         if (line.startsWith('## ')) return <h3 key={i} className="text-[#e8e8e8] font-semibold mt-3 mb-1">{line.replace('## ', '')}</h3>;
                         if (line.startsWith('- BUY')) return <p key={i} className="text-[#00d4aa] font-medium">{line}</p>;
                         if (line.startsWith('- SELL')) return <p key={i} className="text-[#ff4466] font-medium">{line}</p>;
@@ -431,7 +431,7 @@ export function Analytics() {
                     </div>
                   </div>
                   <p className="text-xs text-[#666666] text-right">
-                    {new Date(String(((intelligence as Record<string, unknown>)?.news_analysis as Record<string, unknown>)?.timestamp ?? "")).toLocaleString()}
+                    {new Date(intelligence.news_analysis.timestamp ?? "").toLocaleString()}
                   </p>
                 </div>
               </CardContent>
@@ -439,12 +439,12 @@ export function Analytics() {
           )}
 
           {/* Asset Sentiment Impacts */}
-          {(intelligence as Record<string, unknown>)?.asset_impacts && Object.keys((intelligence as Record<string, unknown>)?.asset_impacts as Record<string, number> ?? {}).length > 0 && (
+          {intelligence?.asset_impacts && Object.keys(intelligence.asset_impacts).length > 0 && (
             <Card>
               <CardHeader><CardTitle>Asset Sentiment</CardTitle></CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  {Object.entries((intelligence as Record<string, unknown>)?.asset_impacts as Record<string, number> ?? {})
+                  {Object.entries(intelligence.asset_impacts)
                     .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
                     .slice(0, 15)
                     .map(([asset, score]) => (
