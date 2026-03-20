@@ -748,21 +748,24 @@ def run_trading_cycle():
             log.info("Phase 6: recording P&L snapshot...")
 
             # Get positions — tolerate failure
-            pos_value = 0
+            pos_value = 0.0
             try:
                 positions = _get_positions()
                 for p in (positions or []):
-                    mv = p.get("market_value") or 0
-                    if not mv:
-                        qty = p.get("qty", 0) or 0
-                        price = p.get("current_price") or p.get("avg_cost") or 0
-                        mv = qty * price
-                    pos_value += mv
+                    try:
+                        mv = float(p.get("market_value") or 0)
+                        if not mv:
+                            qty = float(p.get("qty") or 0)
+                            price = float(p.get("current_price") or p.get("avg_cost") or 0)
+                            mv = qty * price
+                        pos_value += mv
+                    except (TypeError, ValueError):
+                        continue
             except Exception as pos_err:
                 log.warning("Phase 6: positions fetch failed (%s), using pos_value=0", pos_err)
 
             # Get account cash — tolerate failure
-            cash = 0
+            cash = 0.0
             try:
                 fresh_account = _get_account()
                 cash = float(fresh_account.get("cash", 0) or 0)
@@ -779,38 +782,51 @@ def run_trading_cycle():
                             "SELECT portfolio_value, cash, positions_value FROM daily_pnl ORDER BY date DESC LIMIT 1"
                         ).fetchone()
                     if last_row:
-                        pv = last_row["portfolio_value"]
-                        cash = last_row["cash"]
-                        pos_value = last_row["positions_value"]
+                        pv = float(last_row["portfolio_value"])
+                        cash = float(last_row["cash"])
+                        pos_value = float(last_row["positions_value"])
                         log.warning("Phase 6: using last known P&L values (pv=$%.2f)", pv)
                 except Exception:
-                    pv = INITIAL_CAPITAL
-                    cash = INITIAL_CAPITAL
+                    pv = float(INITIAL_CAPITAL)
+                    cash = float(INITIAL_CAPITAL)
 
             # Proper daily return: compare to yesterday's final portfolio value
             initial_str = get_setting("initial_capital")
             if initial_str:
                 initial = float(initial_str)
             else:
-                initial = INITIAL_CAPITAL
+                initial = float(INITIAL_CAPITAL)
                 set_setting("initial_capital", str(initial))
             yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-            with get_db() as conn:
-                prev_row = conn.execute(
-                    "SELECT portfolio_value FROM daily_pnl WHERE date = ? LIMIT 1",
-                    (yesterday,)
-                ).fetchone()
-            prev_pv = prev_row["portfolio_value"] if prev_row else initial
-            daily_ret = (pv - prev_pv) / prev_pv if prev_pv > 0 else 0
+            prev_pv = initial
+            try:
+                with get_db() as conn:
+                    prev_row = conn.execute(
+                        "SELECT portfolio_value FROM daily_pnl WHERE date = ? LIMIT 1",
+                        (yesterday,)
+                    ).fetchone()
+                if prev_row:
+                    prev_pv = float(prev_row["portfolio_value"])
+            except Exception as prev_err:
+                log.warning("Phase 6: prev P&L lookup failed (%s), using initial", prev_err)
+            daily_ret = (pv - prev_pv) / prev_pv if prev_pv > 0 else 0.0
 
             # Cumulative return from initial capital (initial already set above)
-            cum_ret = (pv - initial) / initial if initial > 0 else 0
+            cum_ret = (pv - initial) / initial if initial > 0 else 0.0
             record_daily_pnl(pv, cash, pos_value, daily_ret, cum_ret)
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             log.info("Phase 6 OK: date=%s pv=$%.2f cash=$%.2f pos=$%.2f daily=%.4f cum=%.4f",
-                     datetime.now(timezone.utc).strftime("%Y-%m-%d"), pv, cash, pos_value, daily_ret, cum_ret)
+                     today_str, pv, cash, pos_value, daily_ret, cum_ret)
+            log_action(
+                "system", "pnl_recorded",
+                details=f"P&L saved: date={today_str} pv=${pv:.2f} cash=${cash:.2f} pos=${pos_value:.2f}",
+                data={"date": today_str, "portfolio_value": pv, "cash": cash, "positions_value": pos_value,
+                      "daily_return": daily_ret, "cumulative_return": cum_ret},
+            )
         except Exception as e:
             log.error("P&L snapshot failed: %s", e, exc_info=True)
             console.print(f"[red]P&L snapshot FAILED: {e}[/red]")
+            log_action("error", "pnl_failed", details=f"Phase 6 P&L recording failed: {e}")
 
         # ---------------------------------------------------------------
         # Phase 7: Dust cleanup
