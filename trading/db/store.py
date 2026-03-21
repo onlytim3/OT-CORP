@@ -1,9 +1,12 @@
 """SQLite database for trades, positions, P&L, journal, knowledge, and reviews."""
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger(__name__)
 
 from trading.config import DB_PATH
 
