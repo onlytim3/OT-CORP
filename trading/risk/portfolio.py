@@ -333,18 +333,21 @@ def _correlation_group_multiplier(signal, positions, portfolio_value):
         from trading.risk.manager import CORRELATION_GROUPS
     except ImportError:
         return 1.0
-    strategy = signal.strategy.split("+")[0] if hasattr(signal, 'strategy') else ""
+    # CORRELATION_GROUPS maps group→symbols (e.g. {"btc_ecosystem": {"BTC/USD", ...}})
+    # Match by signal SYMBOL, not strategy name
+    sig_symbol = signal.symbol if hasattr(signal, 'symbol') else ""
     my_group = None
-    for group, strats in CORRELATION_GROUPS.items():
-        if strategy in strats:
+    for group, symbols in CORRELATION_GROUPS.items():
+        if sig_symbol in symbols:
             my_group = group
             break
     if not my_group:
         return 1.0
-    group_strats = CORRELATION_GROUPS[my_group]
+    group_symbols = CORRELATION_GROUPS[my_group]
     group_exposure = 0
     for pos in (positions or []):
-        if any(s in (pos.get("strategy","") or "") for s in group_strats):
+        pos_symbol = pos.get("symbol", "")
+        if pos_symbol in group_symbols:
             group_exposure += abs(pos.get("market_value", 0))
     if portfolio_value <= 0:
         return 1.0
@@ -503,15 +506,12 @@ def calculate_order_size(
 
     # --- Factor 2: Confluence boost ---
     confluence_mult = _confluence_multiplier(signal)
-    order_value *= confluence_mult
 
     # --- Factor 3: Regime alignment ---
     regime_mult = _regime_alignment_multiplier(signal)
-    order_value *= regime_mult
 
     # --- Factor 4: Performance tilt ---
     perf_mult = _performance_multiplier(base_strategy)
-    order_value *= perf_mult
 
     # --- Factor 7: Volume-based sizing ---
     if signal.action == "buy":
@@ -522,14 +522,22 @@ def calculate_order_size(
             volume_mult = compute_volume_sizing_multiplier(aster_sym) if aster_sym else 1.0
         except Exception:
             volume_mult = 1.0
-        order_value *= volume_mult
     else:
         volume_mult = 1.0
 
     # --- Correlation group penalty ---
     corr_mult = _correlation_group_multiplier(signal, positions, portfolio_value)
     dd_mult = _drawdown_multiplier(portfolio_value)
-    order_value *= corr_mult * dd_mult
+
+    # Cap combined multiplier to prevent runaway sizing (was unbounded up to ~7x)
+    combined_mult = confluence_mult * regime_mult * perf_mult * volume_mult * corr_mult * dd_mult
+    MAX_COMBINED_MULTIPLIER = 5.0
+    if combined_mult > MAX_COMBINED_MULTIPLIER:
+        log.warning("Sizing multiplier capped: %.2fx → %.1fx (confluence=%.1f regime=%.2f perf=%.2f vol=%.2f corr=%.2f dd=%.2f)",
+                     combined_mult, MAX_COMBINED_MULTIPLIER,
+                     confluence_mult, regime_mult, perf_mult, volume_mult, corr_mult, dd_mult)
+        combined_mult = MAX_COMBINED_MULTIPLIER
+    order_value *= combined_mult
 
     # --- Liquidation safety check ---
     if leverage > 1:

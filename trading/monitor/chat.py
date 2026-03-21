@@ -227,7 +227,11 @@ def _gather_intent_data(msg: str, original: str) -> str:
 
 
 def _llm_respond(message: str, structured_data: str) -> str | None:
-    """Send message + gathered data to LLM for a conversational response."""
+    """Send message + ALL system data to LLM for deep analytical response.
+
+    The LLM has full reasoning powers — it receives comprehensive system state
+    and is encouraged to think deeply, cross-reference, and provide expert analysis.
+    """
     try:
         from trading.llm.engine import ask_llm, TRADING_SYSTEM_PROMPT
     except ImportError as e:
@@ -242,27 +246,36 @@ def _llm_respond(message: str, structured_data: str) -> str | None:
         log.debug("No LLM API keys configured (ANTHROPIC_API_KEY or GEMINI_API_KEY)")
         return None
 
-    # Also gather live system context
+    # Gather comprehensive system context — give LLM everything
     context = _gather_system_context()
+
+    # Also gather extended data: more trades, more signals, agent recs, knowledge
+    extended = _gather_extended_context(message)
 
     prompt = f"""The operator asks: "{message}"
 
-RELEVANT SYSTEM DATA (gathered from live queries):
-{structured_data if structured_data else "(No specific data matched — use the system context below)"}
+FOCUSED DATA (intent-matched):
+{structured_data if structured_data else "(No specific intent matched — reason freely over the full system state)"}
 
-CURRENT SYSTEM STATE:
+LIVE SYSTEM STATE:
 {json.dumps(context, indent=2, default=str)}
 
-Instructions:
-- Answer conversationally and naturally, like a knowledgeable trading co-pilot
-- Reference specific numbers, strategies, and timestamps from the data above
-- Be concise but thorough — highlight what matters most
-- Use markdown formatting (bold for key numbers, bullet points for lists)
-- If the data shows something concerning (large losses, risk blocks, system errors), proactively mention it
-- Don't just reformat the data — add insight, analysis, and actionable observations"""
+EXTENDED CONTEXT (recent history, agents, knowledge):
+{json.dumps(extended, indent=2, default=str)}
+
+INSTRUCTIONS — USE YOUR FULL REASONING POWERS:
+- Think step-by-step about the operator's question before answering
+- Cross-reference data: connect positions to P&L, strategies to signals, agent actions to outcomes
+- Provide your expert analytical opinion — don't just reformat data
+- If you notice concerning patterns (correlated losses, unusual drawdowns, strategy drift), flag them proactively
+- Reason about cause and effect: WHY did something happen, not just WHAT happened
+- If relevant, consider portfolio-level interactions and risk concentrations
+- Use markdown formatting (bold, tables, bullet points, headers for long responses)
+- Cite specific numbers, timestamps, and strategy names
+- If data is missing or inconclusive, say so — never fabricate"""
 
     try:
-        result = ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="chat")
+        result = ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="chat_full")
         if result and "LLM unavailable" not in result:
             return result
         log.warning("LLM returned unavailable response: %s", result[:100] if result else "None")
@@ -270,6 +283,66 @@ Instructions:
         log.warning("LLM call failed: %s", e)
 
     return None
+
+
+def _gather_extended_context(message: str) -> dict:
+    """Gather additional context beyond the base system state for deep reasoning."""
+    extended: dict = {}
+
+    # More trades for pattern analysis
+    try:
+        extended["trades_30d"] = get_trades(limit=50)
+    except Exception:
+        extended["trades_30d"] = []
+
+    # More P&L history
+    try:
+        extended["pnl_30d"] = get_daily_pnl(limit=30)
+    except Exception:
+        extended["pnl_30d"] = []
+
+    # Agent recommendations history
+    try:
+        extended["agent_recommendations"] = get_recommendation_history(limit=20)
+    except Exception:
+        extended["agent_recommendations"] = []
+
+    # Pending adaptations
+    try:
+        extended["pending_adaptations"] = get_pending_adaptations()
+    except Exception:
+        extended["pending_adaptations"] = []
+
+    # Recent reviews and journal
+    try:
+        extended["reviews"] = get_reviews(limit=3)
+    except Exception:
+        extended["reviews"] = []
+
+    try:
+        extended["journal"] = get_journal(limit=3)
+    except Exception:
+        extended["journal"] = []
+
+    # Knowledge base search (use the message itself as query)
+    try:
+        extended["knowledge"] = search_knowledge(message, limit=5)
+    except Exception:
+        extended["knowledge"] = []
+
+    # More signals for cross-referencing
+    try:
+        extended["signals_recent"] = get_signals(limit=30)
+    except Exception:
+        extended["signals_recent"] = []
+
+    # More system actions
+    try:
+        extended["actions_recent"] = get_action_log(limit=30)
+    except Exception:
+        extended["actions_recent"] = []
+
+    return extended
 
 
 # ---------------------------------------------------------------------------

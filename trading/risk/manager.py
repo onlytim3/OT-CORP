@@ -367,13 +367,28 @@ class RiskManager:
     def _check_directional_exposure(self, signal: Signal, order_value: float,
                                      positions: list[dict]) -> RiskCheck:
         """Check aggregate net directional exposure doesn't exceed limits."""
+        # Normalize positions: compute market_value and side if missing (paper mode compat)
+        def _pos_market_value(p):
+            mv = p.get("market_value")
+            if mv:
+                return mv
+            qty = p.get("qty", 0)
+            price = p.get("current_price") or p.get("avg_cost", 0)
+            return qty * price
+
+        def _pos_side(p):
+            side = p.get("side")
+            if side:
+                return side.lower()
+            return "long" if p.get("qty", 0) >= 0 else "short"
+
         long_value = sum(
-            p.get("market_value", 0) for p in positions
-            if p.get("side", "long") == "long"
+            abs(_pos_market_value(p)) for p in positions
+            if _pos_side(p) == "long"
         )
         short_value = sum(
-            abs(p.get("market_value", 0)) for p in positions
-            if p.get("side") == "short"
+            abs(_pos_market_value(p)) for p in positions
+            if _pos_side(p) == "short"
         )
 
         if signal.action == "buy":
@@ -471,14 +486,19 @@ class RiskManager:
         if signal.data and isinstance(signal.data, dict):
             new_leverage = signal.data.get("leverage", 1)
         total_notional = order_value * new_leverage
-        # Add existing positions' leveraged exposure
+        # Add existing positions' leveraged exposure — fail CLOSED on error
         try:
             from trading.execution.router import get_positions_from_aster
             for pos in get_positions_from_aster():
                 pos_lev = pos.get("leverage", 1)
                 total_notional += abs(pos.get("market_value", 0)) * pos_lev
-        except Exception:
-            pass
+        except Exception as e:
+            log.error("Leverage check: failed to fetch positions, blocking trade: %s", e)
+            return RiskCheck(
+                allowed=False,
+                reason=f"Cannot verify total leverage — position fetch failed: {e}",
+                signal=signal,
+            )
         if self.portfolio_value > 0 and total_notional / self.portfolio_value > 5.0:
             return RiskCheck(
                 allowed=False,
@@ -519,12 +539,23 @@ class RiskManager:
         positions = get_positions()
         for pos in positions:
             if pos["symbol"] == symbol:
-                loss_pct = (current_price - pos["avg_cost"]) / pos["avg_cost"]
+                avg_cost = pos["avg_cost"]
+                if avg_cost <= 0:
+                    continue
+                qty = pos.get("qty", 0)
+                is_short = qty < 0 or pos.get("side", "").lower() == "short"
+                if is_short:
+                    # Short: loss when price goes UP
+                    loss_pct = (avg_cost - current_price) / avg_cost
+                else:
+                    # Long: loss when price goes DOWN
+                    loss_pct = (current_price - avg_cost) / avg_cost
                 if loss_pct <= -self.rules["stop_loss_pct"]:
+                    close_action = "buy" if is_short else "sell"
                     return RiskCheck(
                         allowed=False,
-                        reason=f"Stop loss triggered: {symbol} at {loss_pct*100:.1f}% loss (threshold: -{self.rules['stop_loss_pct']*100:.0f}%)",
-                        signal=Signal("risk", symbol, "sell", 1.0, f"Stop loss at {loss_pct*100:.1f}%"),
+                        reason=f"Stop loss triggered: {symbol} ({'short' if is_short else 'long'}) at {loss_pct*100:.1f}% loss (threshold: -{self.rules['stop_loss_pct']*100:.0f}%)",
+                        signal=Signal("risk", symbol, close_action, 1.0, f"Stop loss at {loss_pct*100:.1f}%"),
                     )
         return None
 

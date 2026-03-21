@@ -170,12 +170,16 @@ def run_trading_cycle():
     clear_allocation_cache()  # Reset dynamic sizing caches (confluence, regime, perf)
 
     # Sync trading mode from DB (may have been changed via dashboard toggle)
+    # Store in a cycle-local variable — don't mutate the config module directly
     from trading.db.store import get_setting
     import trading.config as _cfg
     db_mode = get_setting("trading_mode")
-    if db_mode and db_mode != _cfg.TRADING_MODE:
-        log.info("Trading mode synced from DB: %s → %s", _cfg.TRADING_MODE, db_mode)
-        _cfg.TRADING_MODE = db_mode
+    if db_mode:
+        _cycle_trading_mode = db_mode
+        if db_mode != _cfg.TRADING_MODE:
+            log.info("Trading mode for this cycle: %s (config default: %s)", db_mode, _cfg.TRADING_MODE)
+    else:
+        _cycle_trading_mode = _cfg.TRADING_MODE
 
     # Apply operator overrides (strategy enable/disable, risk params)
     from trading.monitor.operator_hooks import apply_strategy_overrides, apply_risk_overrides
@@ -941,15 +945,37 @@ def run_trading_cycle():
                     log_action("risk_block", "margin_emergency_close", symbol=ma["symbol"],
                                details=f"Margin distance {ma['margin_distance']:.1%} — EMERGENCY CLOSE")
                     console.print(f"[bold red]MARGIN EMERGENCY: {ma['symbol']} at {ma['margin_distance']:.1%}[/bold red]")
+                    # Actually close the position
+                    try:
+                        from trading.execution.router import close_position
+                        close_result = close_position(ma["symbol"])
+                        log_action("trade", "margin_emergency_executed", symbol=ma["symbol"],
+                                   details=f"Emergency close executed: {close_result}")
+                        console.print(f"[bold red]EXECUTED emergency close for {ma['symbol']}[/bold red]")
+                    except Exception as close_err:
+                        log.error("FAILED to emergency close %s: %s", ma["symbol"], close_err)
+                        log_action("error", "margin_emergency_failed", symbol=ma["symbol"],
+                                   details=f"Emergency close FAILED: {close_err}")
                 elif ma["action"] == "reduce_50":
                     log_action("risk_block", "margin_reduce", symbol=ma["symbol"],
                                details=f"Margin distance {ma['margin_distance']:.1%} — reduce position 50%")
                     console.print(f"[yellow]MARGIN WARNING: {ma['symbol']} at {ma['margin_distance']:.1%}[/yellow]")
+                    # Actually reduce position by 50%
+                    try:
+                        from trading.execution.router import reduce_position
+                        reduce_result = reduce_position(ma["symbol"], fraction=0.5)
+                        log_action("trade", "margin_reduce_executed", symbol=ma["symbol"],
+                                   details=f"50% reduction executed: {reduce_result}")
+                        console.print(f"[yellow]EXECUTED 50% reduction for {ma['symbol']}[/yellow]")
+                    except Exception as reduce_err:
+                        log.error("FAILED to reduce %s: %s", ma["symbol"], reduce_err)
+                        log_action("error", "margin_reduce_failed", symbol=ma["symbol"],
+                                   details=f"Position reduction FAILED: {reduce_err}")
                 elif ma["action"] == "warn":
                     log_action("system", "margin_warn", symbol=ma["symbol"],
                                details=f"Margin distance {ma['margin_distance']:.1%}")
         except Exception as e:
-            log.debug("Margin monitor failed (non-fatal): %s", e)
+            log.error("Margin monitor failed: %s", e)
 
         # ---------------------------------------------------------------
         # Phase 8.2: Anomaly detection — track per-cycle metrics

@@ -11,18 +11,26 @@ def check_margin_health(positions: list[dict[str, Any]], mark_prices: dict[str, 
         leverage = pos.get("leverage", 1)
         if leverage <= 1:
             continue
-        entry_price = pos.get("entry_price") or pos.get("avg_price") or pos.get("avg_cost", 0)
+        # Normalize entry price across venue formats (entryPrice, entry_price, avg_price, avg_cost)
+        entry_price = (pos.get("entry_price") or pos.get("entryPrice")
+                       or pos.get("avg_price") or pos.get("avg_cost", 0))
         if not entry_price:
+            sym = pos.get("symbol", "?")
+            logger.warning("Margin check skipped for %s: no entry price available", sym)
             continue
         side = pos.get("side", "LONG").upper()
         liq_distance = 1.0 / leverage
         liq_price = entry_price * (1 - liq_distance) if side == "LONG" else entry_price * (1 + liq_distance)
-        mark = (mark_prices or {}).get(pos.get("symbol", ""), entry_price)
+        sym = pos.get("symbol", "?")
+        mark = (mark_prices or {}).get(sym, 0)
+        if not mark:
+            # Don't use entry_price as mark — it gives false safety readings
+            logger.warning("Margin check skipped for %s: no mark price available", sym)
+            continue
         if side == "LONG":
             margin_dist = (mark - liq_price) / mark if mark else 1.0
         else:
             margin_dist = (liq_price - mark) / mark if mark else 1.0
-        sym = pos.get("symbol", "?")
         if margin_dist < 0.05:
             actions.append({"symbol": sym, "action": "emergency_close", "margin_distance": margin_dist})
             logger.critical("EMERGENCY: %s margin %.1f%%", sym, margin_dist * 100)
@@ -39,13 +47,17 @@ def check_margin_safety(positions: list[dict], mark_prices: dict[str, float] | N
         leverage = pos.get("leverage", 1)
         if leverage <= 1:
             continue
-        entry_price = pos.get("entry_price") or pos.get("avg_price") or pos.get("avg_cost", 0)
+        entry_price = (pos.get("entry_price") or pos.get("entryPrice")
+                       or pos.get("avg_price") or pos.get("avg_cost", 0))
         if not entry_price:
             continue
         side = pos.get("side", "LONG").upper()
         liq_distance = 1.0 / leverage
         liq_price = entry_price * (1 - liq_distance) if side == "LONG" else entry_price * (1 + liq_distance)
-        mark = (mark_prices or {}).get(pos.get("symbol", ""), entry_price)
+        sym = pos.get("symbol", "?")
+        mark = (mark_prices or {}).get(sym, 0)
+        if not mark:
+            continue
         if side == "LONG":
             margin_dist = (mark - liq_price) / mark if mark else 1.0
         else:

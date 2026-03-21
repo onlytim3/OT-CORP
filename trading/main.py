@@ -115,13 +115,12 @@ def cmd_run(paper: bool = False):
                 # Compute SL/TP targets before executing
                 entry_price = signal.data.get("price") if signal.data else None
                 if not entry_price:
-                    # Estimate entry from order value and known prices
-                    entry_price = order_value  # Will be refined after fill
+                    # Try to get a real quote — never use order_value as a price
                     if "/" in signal.symbol:
                         try:
                             from trading.execution.router import get_crypto_quote
                             q = get_crypto_quote(signal.symbol)
-                            entry_price = q.get("mid") or entry_price
+                            entry_price = q.get("mid") or None
                         except Exception:
                             pass
 

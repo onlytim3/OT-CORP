@@ -689,7 +689,10 @@ def submit_order(
                          stop_order.get("orderId", "unknown"))
                 order_result["stop_order_id"] = stop_order.get("orderId")
             except Exception as e:
-                log.warning("Failed to place server-side stop-loss for %s: %s", aster_sym, e)
+                log.error("CRITICAL: Failed to place server-side stop-loss for %s @ $%.2f: %s",
+                          aster_sym, stop_loss_price, e)
+                order_result["stop_loss_failed"] = True
+                order_result["stop_loss_error"] = str(e)
 
         return order_result
 
