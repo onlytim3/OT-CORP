@@ -1885,15 +1885,28 @@ def api_sectors():
 
         sector_map = {
             "l1": {"BTC", "ETH"},
-            "alts": {"SOL", "AVAX", "DOT", "LINK", "ADA", "NEAR", "SUI", "APT"},
-            "meme": {"DOGE", "SHIB", "PEPE", "BONK", "WIF", "TRUMP"},
-            "defi": {"UNI", "AAVE", "INJ"},
-            "ai": {"FET", "RENDER", "TAO", "WLD"},
-            "stocks": {"AAPL", "TSLA", "NVDA", "GOOGL", "MSFT", "AMZN", "META"},
+            "alts": {"SOL", "AVAX", "DOT", "LINK", "ADA", "NEAR", "SUI", "APT",
+                     "MATIC", "POL", "ATOM", "XRP", "TRX", "TON", "HBAR", "SEI",
+                     "TIA", "INJ", "OP", "ARB", "FTM", "ALGO", "XLM", "VET",
+                     "ICP", "FIL", "SAND", "MANA", "LTC", "BCH", "ETC", "XMR",
+                     "ZEC", "DASH", "THETA", "EOS", "NEO", "QTUM", "ZIL", "ONE",
+                     "EGLD", "FLOW", "ROSE", "CELO", "KDA", "KAVA", "CKB", "IOTA"},
+            "meme": {"DOGE", "SHIB", "PEPE", "BONK", "WIF", "TRUMP", "FLOKI",
+                     "NEIRO", "TURBO", "BRETT", "MOG", "POPCAT", "MEW", "MYRO"},
+            "defi": {"UNI", "AAVE", "MKR", "CRV", "COMP", "SNX", "SUSHI",
+                     "YFI", "LDO", "RPL", "GMX", "DYDX", "JUP", "RAY",
+                     "PENDLE", "ENA", "ONDO", "1INCH", "BAL", "CAKE"},
+            "ai": {"FET", "RENDER", "TAO", "WLD", "RNDR", "AGIX", "OCEAN",
+                   "AKT", "AR", "GRT", "BITTENSOR"},
+            "gaming": {"AXS", "IMX", "GALA", "ENJ", "ILV", "PRIME", "PIXEL",
+                       "PORTAL", "RONIN", "BEAM"},
+            "stocks": {"AAPL", "TSLA", "NVDA", "GOOGL", "MSFT", "AMZN", "META",
+                       "AMD", "INTC", "NFLX", "CRM", "ORCL", "UBER", "COIN",
+                       "SQ", "PYPL", "DIS", "BA", "JPM", "GS", "V", "MA"},
             "commodities": {"GOLD", "SILVER", "OIL", "XAU", "XAG"},
         }
         sector_limits = {"l1": 0.50, "alts": 0.20, "defi": 0.25, "meme": 0.10,
-                        "ai": 0.15, "stocks": 0.20, "commodities": 0.15}
+                        "ai": 0.15, "gaming": 0.10, "stocks": 0.20, "commodities": 0.15}
 
         sectors: dict = {}
         for pos in positions:
