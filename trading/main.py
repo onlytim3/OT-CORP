@@ -307,6 +307,16 @@ def cmd_daemon(paper: bool = False, interval: int = 4):
         console.print(f"\n[bold red]STARTUP ABORTED: {e}[/bold red]")
         return
 
+    # Validate leverage profile
+    from trading.config import validate_leverage_profile
+    lev_warnings = validate_leverage_profile()
+    for w in lev_warnings:
+        console.print(f"  [yellow]⚠ {w}[/yellow]")
+    if lev_warnings:
+        console.print(f"  [yellow]⚠ {len(lev_warnings)} leverage warning(s) — review LEVERAGE_PROFILE setting[/yellow]")
+    else:
+        console.print("  [green]✓ Leverage profile validated[/green]")
+
     from trading.scheduler import start_daemon
     start_daemon(interval_hours=interval, paper=paper)
 

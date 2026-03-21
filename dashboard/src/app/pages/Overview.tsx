@@ -346,7 +346,7 @@ export function Overview() {
               <table className="w-full">
                 <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
-                    {['Symbol', 'Qty', 'Entry', 'Current', 'P&L', 'P&L %', 'Age'].map(h => (
+                    {['Symbol', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Age'].map(h => (
                       <th key={h} className={`${h === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>
                     ))}
                   </tr>
@@ -370,14 +370,14 @@ export function Overview() {
                         </div>
                       </td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className={`text-right py-3 px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
                         {(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${(pos.unrealized_pnl || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </td>
                       <td className={`text-right py-3 px-4 ${(pos.unrealized_pnl_pct || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
                         {(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{(pos.unrealized_pnl_pct || 0).toFixed(2)}%
                       </td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="text-right py-3 px-4 text-[#888888] text-sm">{pos.age || '-'}</td>
                     </tr>
                   ))}
