@@ -215,11 +215,29 @@ When mark price is unavailable, falls back to `entry_price`. For a position that
 - **Multi-timeframe confirmation calls external API during aggregation** — latency risk, silent failure
 - **Conflict margin threshold is absolute (0.15), not relative** — treats 0.5 vs 0.4 same as 0.95 vs 0.85
 - **Diversity bonus applied per-symbol** instead of portfolio-level — inflates conviction incorrectly
+- **Signal decay is linear and uniform** — 6-hour signal gets 0.5x strength regardless of signal type (orderbook snapshot vs multi-day trend). Should use type-specific decay curves.
 
-### 4.3 Whale Flow Latency
+### 4.3 Numerical Bugs in Strategies — HIGH
+
+| Strategy | Bug | Impact |
+|----------|-----|--------|
+| garch_volatility | Division by zero when `long_term_vol == 0` (line ~121) | NaN signal strength propagates |
+| kalman_trend | `final_slope_var` can go negative from numerical precision loss | `sqrt(negative)` → NaN |
+| hmm_regime | Missing `n_samples` key in cached JSON → crash (line ~78) | Strategy fails entirely |
+| pairs_trading | Returns `float("inf")` half-life on broken mean-reversion | Ambiguous downstream behavior |
+
+### 4.4 Whale Flow Latency
 **File**: `trading/strategy/whale_flow.py`
 
-Takes 3 order book snapshots with `time.sleep(2)` between each = 4+ seconds. In crypto markets, orderbook changes sub-second.
+Takes 3 order book snapshots with `time.sleep(2)` between each = 4+ seconds. Blocks the entire aggregator. In crypto markets, orderbook changes sub-second.
+
+### 4.5 Learning System Largely Ineffective — HIGH
+
+- **Parameter adaptation covers only 2 of 22 strategies** (`rsi_divergence`, `dxy_dollar`). New strategies are explicitly excluded.
+- **Win rate used as sole metric** — ignores profit factor. A 38% win-rate strategy with 4x profit factor gets flagged as failing.
+- **Applied changes are irreversible** — mutations to in-memory config with no rollback mechanism.
+- **Attribution assumes strength = contribution** — lucky signals credited equally to skilled signals. No null-hypothesis comparison.
+- **Circuit breaker lost-update race condition** — concurrent writes to JSON state in settings table can lose increments (read-modify-write without locking).
 
 ---
 
@@ -313,16 +331,33 @@ Exception messages returned to API clients can reveal internal paths, library ve
 
 ## 7. Database
 
-### 7.1 Missing Logger — HIGH
-**File**: `trading/db/store.py`
+### 7.1 SQL Injection in ALTER TABLE — MEDIUM
+**File**: `trading/db/store.py:288`
 
-No `logging` import. If any DB operation fails silently, there's no way to diagnose.
+```python
+conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {coltype}")
+```
 
-### 7.2 SQL Pattern Fragile (Not Injection) — MEDIUM
-Dynamic `IN` clause construction with f-strings is parameterized correctly but fragile for future modifications.
+Currently safe (hardcoded values), but the pattern is dangerous and could be copied elsewhere.
 
-### 7.3 No Index on Common Queries — MEDIUM
-Missing indexes on `trades.strategy`, `trades.symbol`, `daily_pnl.date` — slow queries as data grows.
+### 7.2 Financial Data Stored as REAL — MEDIUM
+All price, qty, and pnl columns use `REAL` (IEEE 754 float). For financial data, $0.01 can't be exactly represented. Should use INTEGER (cents) or DECIMAL.
+
+### 7.3 Missing Foreign Keys and Cascades — MEDIUM
+- `strategy_attribution.trade_id` has no FK constraint — can reference non-existent trades
+- `journal.trade_id` has no CASCADE DELETE — orphaned entries accumulate
+- `trade_analyses.trade_id` similarly orphaned
+
+### 7.4 Missing Indexes — MEDIUM
+Missing: `trades(symbol, closed_at)`, `signals(symbol, timestamp)`, `positions(strategy)`, `strategy_attribution(strategy, timestamp)`.
+
+### 7.5 Timestamp as TEXT — LOW
+All timestamps stored as ISO-format TEXT instead of INTEGER epoch. Range queries and sorting are slower and lexicographically incorrect for fractional seconds.
+
+### 7.6 Daily P&L Manual Retry Spinlock — LOW
+**File**: `trading/db/store.py:435-458`
+
+Manual retry with 0.5s/1.0s sleep on SQLite BUSY. Should use `PRAGMA busy_timeout=10000` instead.
 
 ---
 
