@@ -110,7 +110,7 @@ class GARCHVolatilityStrategy(Strategy):
                 window = min(252, len(returns))
                 long_term_vol = float(np.std(returns[-window:])) * np.sqrt(365)
 
-                if long_term_vol == 0:
+                if long_term_vol <= 0:
                     signals.append(Signal(
                         strategy=self.name, symbol=alpaca_symbol,
                         action="hold", strength=0.0,
@@ -118,6 +118,7 @@ class GARCHVolatilityStrategy(Strategy):
                     ))
                     continue
 
+                # Safe division — zero check is above
                 vol_ratio = current_garch_vol / long_term_vol
 
                 # Vol regime classification

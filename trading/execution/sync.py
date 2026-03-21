@@ -9,9 +9,12 @@ Bridges the gap between Alpaca broker state and local DB state:
 
 from __future__ import annotations
 
+import logging
 import traceback
 
 from rich.console import Console
+
+log = logging.getLogger(__name__)
 
 from trading.db.store import (
     close_trade,
@@ -372,8 +375,8 @@ def pair_trades() -> int:
                         strategy_name = buy.get("strategy", "")
                         if strategy_name:
                             record_trade_result(strategy_name, is_loss=(pnl < 0))
-                    except Exception:
-                        pass
+                    except Exception as cb_err:
+                        log.warning("Circuit breaker record failed for %s: %s", symbol, cb_err)
 
                     # Post-trade review via LLM (best-effort, non-blocking)
                     try:

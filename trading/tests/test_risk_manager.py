@@ -34,7 +34,8 @@ class TestAccountChecks(unittest.TestCase):
         })
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=[]):
+             patch("trading.risk.manager.get_trades", return_value=[]), \
+             patch("trading.execution.router.get_positions_from_aster", return_value=[]):
             result = rm.check_trade(_make_signal(), 5000)
         self.assertTrue(result.allowed)
 
@@ -88,7 +89,8 @@ class TestPositionSize(unittest.TestCase):
         })
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=[]):
+             patch("trading.risk.manager.get_trades", return_value=[]), \
+             patch("trading.execution.router.get_positions_from_aster", return_value=[]):
             result = rm.check_trade(_make_signal("BTC/USD", "buy"), 10000)
         self.assertTrue(result.allowed)
 

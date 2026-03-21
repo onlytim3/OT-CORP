@@ -132,10 +132,11 @@ class KalmanTrendStrategy(Strategy):
                 # Standardize slope by its uncertainty
                 final_slope = slopes[-1]
                 final_slope_var = slope_vars[-1]
-                if final_slope_var <= 0:
+                # Guard against negative variance from numerical instability
+                if final_slope_var <= 1e-12:
                     slope_z = 0.0
                 else:
-                    slope_z = final_slope / np.sqrt(final_slope_var)
+                    slope_z = final_slope / np.sqrt(max(final_slope_var, 1e-12))
 
                 current_price = close[-1]
 

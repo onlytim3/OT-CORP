@@ -69,11 +69,14 @@ def _try_cached_model(features: np.ndarray):
 
     try:
         cached_data = json.loads(cached)
+        # Validate required keys exist before accessing
+        if not all(k in cached_data for k in ("fitted_at", "n_samples", "means", "covars", "transmat")):
+            return None, None, None
         fitted_at = datetime.fromisoformat(cached_data["fitted_at"])
         hours_since = (datetime.now(timezone.utc) - fitted_at).total_seconds() / 3600
         if hours_since >= 24:
             return None, None, None
-        if cached_data["n_samples"] == 0:
+        if cached_data.get("n_samples", 0) == 0:
             return None, None, None
         if abs(len(features) - cached_data["n_samples"]) / cached_data["n_samples"] >= 0.1:
             return None, None, None
