@@ -14,9 +14,9 @@ OT-CORP is an ambitious autonomous algorithmic trading system with sophisticated
 
 | Severity | Count | Examples |
 |----------|-------|---------|
-| **CRITICAL** | 12 | No API authentication, entry price bug, margin actions not executed, prompt injection |
-| **HIGH** | 16 | Race conditions, partial fill logic, leverage misconfiguration, circuit breaker unhooked |
-| **MEDIUM** | 22 | Cache invalidation, token budgeting, error swallowing, symbol normalization |
+| **CRITICAL** | 14 | No API auth, entry price bug, margin actions not executed, correlation penalty broken, prompt injection |
+| **HIGH** | 19 | Race conditions, leverage fails open, directional exposure broken, circuit breaker unhooked |
+| **MEDIUM** | 24 | Cache invalidation, token budgeting, error swallowing, symbol normalization |
 | **LOW** | 18 | Log formatting, magic numbers, code style |
 
 ---
@@ -132,10 +132,24 @@ Thread releases lock then sleeps, allowing other threads to pass before wait com
 
 Applies the NEW symbol's leverage factor to EXISTING positions, miscalculating effective exposure in mixed-leverage portfolios.
 
-### 3.2 Correlation Groups Cover Only 8 Symbols — HIGH
-**File**: `trading/risk/manager.py:340-365`
+### 3.2 Correlation Group Penalty Is Broken — CRITICAL
+**Files**: `trading/risk/manager.py:340-365`, `trading/risk/portfolio.py:336-341`
 
-~99% of tradeable symbols have no correlation group. System can build massive correlated exposure in small-cap altcoins completely unchecked.
+Two compounding issues:
+1. `CORRELATION_GROUPS` contains **asset symbols** but `_correlation_group_multiplier()` tries to match against **strategy names** — data structure mismatch means the multiplier **always returns 1.0x** (no penalty ever applies)
+2. Only 8 symbols have correlation groups defined. ~99% of tradeable symbols are completely unchecked.
+
+**Impact**: Portfolio can become 100% correlated (e.g., all BTC ecosystem) with zero penalty.
+
+### 3.2b Leverage Check Fails Open — HIGH
+**File**: `trading/risk/manager.py:475-481`
+
+`_check_total_leverage_risk()` wraps entire logic in try/except. On any data source failure, the leverage check is **silently skipped**. Leverage can balloon to 10x+ undetected.
+
+### 3.2c Directional Exposure Broken in Paper Mode — HIGH
+**File**: `trading/risk/manager.py:371-382`
+
+Code reads `p.get("market_value")` and `p.get("side")` — fields that exist in live AsterDex data but **not in the DB schema** used by paper mode. All `.get()` calls return 0/default, making directional exposure checks ineffective in paper trading.
 
 ### 3.3 Drawdown Check Vulnerable to Data Gaps — HIGH
 **File**: `trading/risk/manager.py:420-433`
@@ -164,12 +178,21 @@ Loss calculation `(current_price - avg_cost) / avg_cost` is correct for longs bu
 
 `record_trade_result()` is defined but **never called anywhere** in the codebase. The circuit breaker exists as dead code — it can never trip.
 
-### 3.8 Missing Risk Checks
+### 3.8 Margin Monitor Uses Entry Price as Fallback — HIGH
+**File**: `trading/risk/margin_monitor.py:20,48`
+
+When mark price is unavailable, falls back to `entry_price`. For a position that moved significantly, this makes margin distance calculations meaningless. Example: Long 10x at $100, actual price $95, but using $100 reports 9% margin distance (safe) when real distance is 4.2% (danger).
+
+### 3.9 Missing Risk Checks
+- No Value-at-Risk (VaR) modeling
 - No funding rate bleed risk
 - No mark-price vs index-price divergence check
 - No counterparty/exchange health check
 - No slippage budget before entry
 - No margin interest accrual tracking
+- No stress testing / reverse stress testing
+- No per-trade maximum dollar loss enforcement
+- No position hold time limits for re-evaluation
 
 ---
 
@@ -346,13 +369,13 @@ No end-to-end test that exercises signal → aggregate → risk check → execut
 |-----------|-------|-----------------|
 | Core Engine | 4/10 | Config mutation, entry price bug, margin inaction |
 | Execution | 4/10 | No idempotency, undefined logger, SL fire-and-forget |
-| Risk Management | 5/10 | Leverage calc bugs, unhooked circuit breaker, data gaps |
+| Risk Management | 4/10 | Correlation penalty broken, leverage fails open, circuit breaker dead, data gaps |
 | Strategies | 7/10 | Good signal quality, aggregation weight issues |
 | Data Layer | 4/10 | Silent failures, no validation, stale cache |
 | Intelligence/LLM | 3/10 | Prompt injection, no guardrails, no budget |
 | Security | 1/10 | No auth, auto-execute actions, open CORS |
 | Testing | 2/10 | Sparse coverage, no integration tests |
-| **Overall** | **3.8/10** | **Not production-ready** |
+| **Overall** | **3.5/10** | **Not production-ready** |
 
 ---
 
@@ -367,12 +390,16 @@ No end-to-end test that exercises signal → aggregate → risk check → execut
 6. Hook circuit breaker `record_trade_result()` into trade completion
 
 ### Week 2 — Stabilize Risk
-7. Fix leverage calculation for mixed-leverage portfolios
-8. Cap confluence multiplier stack to 5x total
-9. Add anti-injection preamble to all LLM prompts
-10. Make config immutable after startup (copy-on-read pattern)
-11. Implement human approval queue for autonomous strategy changes
-12. Add bounds checking to all API query parameters
+7. Fix correlation group data structure mismatch (symbols vs strategies)
+8. Fix leverage check fail-open (remove bare try/except, validate data)
+9. Fix directional exposure to use consistent data source (not broken in paper mode)
+10. Fix leverage calculation for mixed-leverage portfolios
+11. Cap confluence multiplier stack to 5x total
+12. Add anti-injection preamble to all LLM prompts
+13. Make config immutable after startup (copy-on-read pattern)
+14. Implement human approval queue for autonomous strategy changes
+15. Add bounds checking to all API query parameters
+16. Fix margin monitor to never fall back to entry price (require mark price or block)
 
 ### Week 3 — Harden Execution
 13. Adjust SL/TP for partial fills (not just log)
