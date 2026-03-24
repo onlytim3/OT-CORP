@@ -42,6 +42,7 @@ from trading.db.store import (
     resolve_recommendation, get_recommendation_history,
     insert_knowledge, insert_backtest_result, get_last_backtest,
     get_strategies_needing_backtest,
+    get_setting, set_setting,
 )
 
 log = logging.getLogger(__name__)
@@ -127,7 +128,128 @@ def set_threshold(name: str, value: float) -> float:
         details=f"{name}: {current} → {clamped}",
         data={"threshold": name, "old": current, "new": clamped},
     )
+    # Persist threshold to DB so it survives restarts
+    _persist_thresholds()
     return clamped
+
+
+# ---------------------------------------------------------------------------
+# State persistence — survive process restarts / deploys
+# ---------------------------------------------------------------------------
+
+_DB_KEY_THRESHOLDS = "autonomous_thresholds"
+_DB_KEY_STRATEGY_ENABLED = "autonomous_strategy_enabled"
+_DB_KEY_STRATEGY_BUDGETS = "autonomous_strategy_budgets"
+_DB_KEY_RISK_OVERRIDES = "autonomous_risk_overrides"
+
+# Track which RISK keys were changed by autonomous (vs. config defaults)
+_risk_overrides: dict[str, float] = {}
+
+
+def _persist_thresholds():
+    """Save current threshold overrides to DB."""
+    try:
+        if _threshold_overrides:
+            set_setting(_DB_KEY_THRESHOLDS, json.dumps(_threshold_overrides))
+    except Exception:
+        log.debug("Failed to persist thresholds", exc_info=True)
+
+
+def _persist_strategy_enabled():
+    """Save autonomous strategy enable/disable overrides to DB."""
+    try:
+        set_setting(_DB_KEY_STRATEGY_ENABLED, json.dumps(
+            {k: v for k, v in STRATEGY_ENABLED.items()}
+        ))
+    except Exception:
+        log.debug("Failed to persist strategy enabled state", exc_info=True)
+
+
+def _persist_strategy_budgets():
+    """Save strategy budget overrides to DB."""
+    try:
+        from trading.risk.portfolio import STRATEGY_BUDGETS
+        set_setting(_DB_KEY_STRATEGY_BUDGETS, json.dumps(
+            {k: round(v, 6) for k, v in STRATEGY_BUDGETS.items()}
+        ))
+    except Exception:
+        log.debug("Failed to persist strategy budgets", exc_info=True)
+
+
+def _persist_risk_overrides():
+    """Save risk parameter overrides to DB."""
+    try:
+        if _risk_overrides:
+            set_setting(_DB_KEY_RISK_OVERRIDES, json.dumps(
+                {k: round(v, 6) for k, v in _risk_overrides.items()}
+            ))
+    except Exception:
+        log.debug("Failed to persist risk overrides", exc_info=True)
+
+
+def load_persisted_state():
+    """Load autonomous state from DB, applying overrides to runtime dicts.
+
+    Call this on startup (e.g. from scheduler or daemon) so that autonomous
+    changes survive process restarts and Render deploys.
+    """
+    loaded = []
+
+    # 1. Thresholds
+    try:
+        raw = get_setting(_DB_KEY_THRESHOLDS)
+        if raw:
+            saved = json.loads(raw)
+            for k, v in saved.items():
+                if k in _DEFAULT_THRESHOLDS:
+                    _threshold_overrides[k] = float(v)
+            if saved:
+                loaded.append(f"thresholds({len(saved)})")
+    except Exception:
+        log.debug("Failed to load persisted thresholds", exc_info=True)
+
+    # 2. Strategy enabled/disabled
+    try:
+        raw = get_setting(_DB_KEY_STRATEGY_ENABLED)
+        if raw:
+            saved = json.loads(raw)
+            for k, v in saved.items():
+                if k in STRATEGY_ENABLED:
+                    STRATEGY_ENABLED[k] = bool(v)
+            if saved:
+                loaded.append(f"strategy_enabled({len(saved)})")
+    except Exception:
+        log.debug("Failed to load persisted strategy enabled", exc_info=True)
+
+    # 3. Strategy budgets
+    try:
+        raw = get_setting(_DB_KEY_STRATEGY_BUDGETS)
+        if raw:
+            saved = json.loads(raw)
+            from trading.risk.portfolio import STRATEGY_BUDGETS
+            for k, v in saved.items():
+                STRATEGY_BUDGETS[k] = float(v)
+            if saved:
+                loaded.append(f"budgets({len(saved)})")
+    except Exception:
+        log.debug("Failed to load persisted strategy budgets", exc_info=True)
+
+    # 4. Risk parameter overrides
+    try:
+        raw = get_setting(_DB_KEY_RISK_OVERRIDES)
+        if raw:
+            saved = json.loads(raw)
+            for k, v in saved.items():
+                if k in RISK:
+                    RISK[k] = float(v)
+                    _risk_overrides[k] = float(v)
+            if saved:
+                loaded.append(f"risk({len(saved)})")
+    except Exception:
+        log.debug("Failed to load persisted risk overrides", exc_info=True)
+
+    if loaded:
+        log.info("AUTONOMOUS STATE RESTORED: %s", ", ".join(loaded))
 
 
 # --- Fixed constants (not tunable) ---
@@ -984,10 +1106,10 @@ def _evaluate_outcomes():
 
             elif action == "adjust_threshold":
                 # Check if the threshold is still set to the expected value
-                param = data.get("param", "")
+                param = data.get("threshold_name", "") or data.get("param", "")
                 expected = data.get("new_value")
                 if param and expected is not None:
-                    actual = get_threshold(param) if param in _THRESHOLDS else None
+                    actual = get_threshold(param) if param in _DEFAULT_THRESHOLDS else None
                     if actual is not None and abs(actual - expected) < 0.001:
                         outcome = "positive"
                     else:
@@ -1191,6 +1313,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     if param in RISK:
                         old = RISK[param]
                         RISK[param] = value
+                        _risk_overrides[param] = value
                         log.warning("RISK TIGHTENED: %s = %s → %s", param, old, value)
                 result = f"Tightened {len(adjustments)} risk parameters"
 
@@ -1211,6 +1334,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     current = STRATEGY_BUDGETS.get(target, DEFAULT_BUDGET)
                     new_budget = round(current * mult, 4)
                     STRATEGY_BUDGETS[target] = new_budget
+                    data["new_budget"] = new_budget  # Store for outcome evaluation
                     result = f"Reduced {target} budget: {current:.4f} → {new_budget:.4f}"
                     log.info("BUDGET REDUCED: %s", result)
                 except Exception as e:
@@ -1223,6 +1347,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     current = STRATEGY_BUDGETS.get(target, DEFAULT_BUDGET)
                     new_budget = round(min(current * mult, 0.12), 4)  # Cap at 12%
                     STRATEGY_BUDGETS[target] = new_budget
+                    data["new_budget"] = new_budget  # Store for outcome evaluation
                     result = f"Increased {target} budget: {current:.4f} → {new_budget:.4f}"
                     log.info("BUDGET INCREASED: %s", result)
                 except Exception as e:
@@ -1297,6 +1422,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     if "stop_loss_pct" in RISK:
                         old_sl = RISK["stop_loss_pct"]
                         RISK["stop_loss_pct"] = round(old_sl * 0.8, 4)  # 20% tighter
+                        _risk_overrides["stop_loss_pct"] = RISK["stop_loss_pct"]
                         log.warning("EVENT RISK: Tightened stop_loss_pct %s → %s", old_sl, RISK["stop_loss_pct"])
                     result = f"Event risk: reduced sizing by {sizing_mult:.0%} on {adjusted} strategies, tightened stops"
                     log.warning("EVENT RISK APPLIED: %s — %s", result, rec["reasoning"][:100])
@@ -1518,6 +1644,13 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 "reasoning": rec["reasoning"][:500],
             },
         )
+
+    # Persist all state changes to DB so they survive restarts
+    if applied:
+        _persist_strategy_enabled()
+        _persist_strategy_budgets()
+        _persist_risk_overrides()
+        # Thresholds are persisted inline in set_threshold()
 
     return applied
 
@@ -2007,6 +2140,10 @@ def run_autonomous_cycle() -> dict:
     Returns summary of actions taken.
     """
     log.info("Autonomous improvement cycle started")
+
+    # Restore persisted state (strategy enables, thresholds, budgets, risk)
+    # so that previous cycle's changes survive process restarts
+    load_persisted_state()
 
     all_recommendations = []
     agent_results = {}

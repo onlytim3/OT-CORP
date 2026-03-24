@@ -1537,6 +1537,14 @@ def start_daemon(interval_hours=4, paper=False):
 
     init_db()
 
+    # Restore autonomous agent state (strategy enables, thresholds, budgets, risk)
+    # so changes from previous cycles survive process restarts / deploys
+    try:
+        from trading.intelligence.autonomous import load_persisted_state
+        load_persisted_state()
+    except Exception as e:
+        log.warning("Could not restore autonomous state: %s", e)
+
     # Initialize persistent profit tracker
     _get_profit_tracker()
 
