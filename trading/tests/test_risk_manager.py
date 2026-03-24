@@ -1,7 +1,7 @@
 """Tests for trading.risk.manager — risk checks, position limits, leverage awareness."""
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from trading.risk.manager import RiskManager, LEVERAGE_FACTORS
 from trading.strategy.base import Signal
@@ -9,6 +9,7 @@ from trading.strategy.base import Signal
 
 def _make_signal(symbol="BTC/USD", action="buy", strength=0.8):
     return Signal(strategy="test", symbol=symbol, action=action, strength=strength, reason="test")
+
 
 
 class TestAccountChecks(unittest.TestCase):
@@ -35,8 +36,12 @@ class TestAccountChecks(unittest.TestCase):
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
              patch("trading.risk.manager.get_trades", return_value=[]), \
-             patch("trading.execution.router.get_positions_from_aster", return_value=[]):
-            result = rm.check_trade(_make_signal(), 5000)
+             patch("trading.execution.router.get_positions_from_aster", return_value=[]), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
+            result = rm.check_trade(_make_signal("BTC/USD", "buy"), 5000)
         self.assertTrue(result.allowed)
 
 
@@ -58,27 +63,35 @@ class TestPositionSize(unittest.TestCase):
             "trading_blocked": False, "status": "ACTIVE",
             "buying_power": 100000, "cash": 50000,
         })
-        # Try to buy 40% of portfolio in BTC (max is 33%)
+        # Try to buy 40% of portfolio in BTC (max is 25%)
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=[]):
+             patch("trading.risk.manager.get_trades", return_value=[]), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("BTC/USD", "buy"), 40000)
         self.assertFalse(result.allowed)
         self.assertIn("position size", result.reason.lower())
 
     def test_leveraged_etf_effective_exposure(self):
-        """UGL (2x gold) at $15K notional = $30K effective — should hit 33% limit on $100K portfolio."""
+        """UGL (2x gold) at $15K notional = $30K effective — should hit 25% limit on $100K portfolio."""
         rm = RiskManager(100000, account={
             "trading_blocked": False, "status": "ACTIVE",
             "buying_power": 50000, "cash": 50000,
         })
-        # Existing $10K in UGL + buying $8K more = $18K * 2x = $36K effective > $33K limit
+        # Existing $10K in UGL + buying $8K more = $18K * 2x = $36K effective > $25K limit
         existing_positions = [
             {"symbol": "UGL", "qty": 200, "current_price": 50.0, "avg_cost": 48.0},
         ]
         with patch("trading.risk.manager.get_positions", return_value=existing_positions), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=[]):
+             patch("trading.risk.manager.get_trades", return_value=[]), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("UGL", "buy"), 8000)
         self.assertFalse(result.allowed)
 
@@ -90,7 +103,11 @@ class TestPositionSize(unittest.TestCase):
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
              patch("trading.risk.manager.get_trades", return_value=[]), \
-             patch("trading.execution.router.get_positions_from_aster", return_value=[]):
+             patch("trading.execution.router.get_positions_from_aster", return_value=[]), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("BTC/USD", "buy"), 10000)
         self.assertTrue(result.allowed)
 
@@ -108,7 +125,11 @@ class TestCryptoExposure(unittest.TestCase):
         ]
         with patch("trading.risk.manager.get_positions", return_value=existing), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
-             patch("trading.risk.manager.get_trades", return_value=[]):
+             patch("trading.risk.manager.get_trades", return_value=[]), \
+             patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
+             patch("trading.risk.manager.check_spread", return_value=1.0), \
+             patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("SOL/USD", "buy"), 10000)
         self.assertFalse(result.allowed)
         self.assertIn("crypto", result.reason.lower())
@@ -128,6 +149,7 @@ class TestCorrelationGroup(unittest.TestCase):
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
              patch("trading.risk.manager.get_trades", return_value=[]), \
              patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
              patch("trading.risk.manager.check_spread", return_value=1.0), \
              patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("LTC/USD", "buy"), 10000)
@@ -146,6 +168,7 @@ class TestCashReserve(unittest.TestCase):
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
              patch("trading.risk.manager.get_trades", return_value=[]), \
              patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
              patch("trading.risk.manager.check_spread", return_value=1.0), \
              patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("BTC/USD", "buy"), 5000)
@@ -167,6 +190,7 @@ class TestTradeCount(unittest.TestCase):
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
              patch("trading.risk.manager.get_trades", return_value=trades), \
              patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
+             patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
              patch("trading.risk.manager.check_spread", return_value=1.0), \
              patch("trading.risk.manager.check_market_impact", return_value=True):
             result = rm.check_trade(_make_signal("BTC/USD", "buy"), 5000)
