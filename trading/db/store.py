@@ -34,6 +34,21 @@ def symbol_variants(sym: str) -> list[str]:
     return list({sym, flat, slash})
 
 
+def normalize_symbol(sym: str) -> str:
+    """Canonicalise a symbol to the slash form used by CRYPTO_SYMBOLS.
+
+    e.g. ``"AVAXUSD"`` → ``"AVAX/USD"``, ``"BTCUSD"`` → ``"BTC/USD"``.
+    Already-slashed symbols are returned unchanged.
+    """
+    if not sym or "/" in sym:
+        return sym
+    for suffix in ("USDT", "USD"):
+        if sym.upper().endswith(suffix):
+            base = sym[: len(sym) - len(suffix)]
+            return f"{base}/{suffix}"
+    return sym
+
+
 def _ensure_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 

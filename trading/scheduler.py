@@ -31,7 +31,7 @@ from rich.console import Console
 from trading.config import TRADING_MODE, RISK, INITIAL_CAPITAL
 from trading.db.store import (
     init_db, get_db, insert_trade, insert_signal, log_action,
-    record_daily_pnl, get_action_log, get_daily_pnl,
+    normalize_symbol, record_daily_pnl, get_action_log, get_daily_pnl,
     get_setting, set_setting,
 )
 
@@ -1161,7 +1161,7 @@ def check_stop_losses():
         # -- 1. Take-profit / trailing stop checks --
         profit_actions = check_profit_targets(positions, tracker)
         for action in profit_actions:
-            symbol = action["symbol"]
+            symbol = normalize_symbol(action["symbol"])
             reason = action["reason"]
             pos_side = action.get("pos_side", "long")
             exit_side = "buy" if pos_side == "short" else "sell"
@@ -1208,9 +1208,9 @@ def check_stop_losses():
         for pos in positions:
             pnl_pct = pos.get("unrealized_pnl_pct", 0) / 100 if pos.get("unrealized_pnl_pct") else 0
             if pnl_pct <= -RISK["stop_loss_pct"]:
-                symbol = pos["symbol"]
+                symbol = normalize_symbol(pos["symbol"])
                 # Skip if already exited by profit manager above
-                if any(a["symbol"] == symbol for a in profit_actions):
+                if any(normalize_symbol(a["symbol"]) == symbol for a in profit_actions):
                     continue
 
                 pos_side = pos.get("side", "long")
@@ -1263,9 +1263,9 @@ def check_stop_losses():
             from trading.data.aster import alpaca_to_aster
 
             vol_exit_ratio = RISK.get("volume_exit_ratio", 0.20)
-            already_sold = {a["symbol"] for a in profit_actions}
+            already_sold = {normalize_symbol(a["symbol"]) for a in profit_actions}
             for pos in positions:
-                symbol = pos["symbol"]
+                symbol = normalize_symbol(pos["symbol"])
                 if symbol in already_sold:
                     continue
                 aster_sym = alpaca_to_aster(symbol)

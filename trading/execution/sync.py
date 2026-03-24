@@ -23,6 +23,7 @@ from trading.db.store import (
     get_positions,
     log_action,
     remove_position,
+    symbol_variants,
     update_trade_status,
     upsert_position,
 )
@@ -429,19 +430,26 @@ def pair_trades() -> int:
         console.print("[dim]pair_trades: no open trades to pair[/dim]")
         return 0
 
-    # Bucket by symbol, separating buys and sells.
+    # Bucket by canonical symbol (flat form, e.g. "AVAXUSD"), separating buys
+    # and sells.  Entries may be stored as "AVAX/USD" while exits use "AVAXUSD"
+    # — normalising to the flat form ensures they land in the same bucket.
     buys_by_symbol: dict[str, list[dict]] = {}
     sells_by_symbol: dict[str, list[dict]] = {}
+
+    def _canonical(sym: str) -> str:
+        """Normalise to flat uppercase form for bucketing (AVAX/USD -> AVAXUSD)."""
+        return sym.replace("/", "").upper() if sym else ""
 
     for trade in open_trades:
         symbol = trade.get("symbol")
         side = trade.get("side", "").lower()
         if not symbol:
             continue
+        key = _canonical(symbol)
         if side == "buy":
-            buys_by_symbol.setdefault(symbol, []).append(trade)
+            buys_by_symbol.setdefault(key, []).append(trade)
         elif side in ("sell", "short"):
-            sells_by_symbol.setdefault(symbol, []).append(trade)
+            sells_by_symbol.setdefault(key, []).append(trade)
 
     # Sort each bucket by timestamp ascending (oldest first = FIFO).
     for sym in buys_by_symbol:
