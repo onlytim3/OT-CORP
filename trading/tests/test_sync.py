@@ -101,6 +101,20 @@ class TestPairTradesLogic(unittest.TestCase):
         paired, closed, reduced = self._run_pair_trades(trades)
         self.assertEqual(paired, 0)
 
+    def test_cross_format_symbols_paired(self):
+        """AVAX/USD buy + AVAXUSD sell should pair (different symbol formats)."""
+        trades = [
+            {"id": 1, "symbol": "AVAX/USD", "side": "buy", "qty": 5.0,
+             "price": 30.0, "total": 150.0, "timestamp": "2026-03-10T10:00:00"},
+            {"id": 2, "symbol": "AVAXUSD", "side": "sell", "qty": 5.0,
+             "price": 35.0, "total": 175.0, "timestamp": "2026-03-11T10:00:00"},
+        ]
+        paired, closed, reduced = self._run_pair_trades(trades)
+        self.assertEqual(paired, 1)
+        closed_ids = {c["id"] for c in closed}
+        self.assertIn(1, closed_ids)
+        self.assertIn(2, closed_ids)
+
     def test_pnl_calculation(self):
         """Verify P&L is correctly computed."""
         trades = [
