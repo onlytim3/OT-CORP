@@ -1145,16 +1145,23 @@ def check_stop_losses():
                 continue
 
             if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                sell_price = float(order.get("filled_avg_price") or 0)
                 insert_trade(
                     symbol=symbol,
                     side="sell",
                     qty=action["qty"],
-                    price=float(order.get("filled_avg_price") or 0),
-                    total=action["qty"] * float(order.get("filled_avg_price") or 0),
+                    price=sell_price,
+                    total=action["qty"] * sell_price,
                     strategy=f"profit_mgmt_{action['action']}",
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
                 )
+                # Immediately close matching buy trades so open/recent tables stay in sync
+                try:
+                    from trading.db.store import close_matching_buy_trades
+                    close_matching_buy_trades(symbol, sell_price, action["qty"])
+                except Exception as cmt_err:
+                    log.warning("close_matching_buy_trades failed for %s: %s", symbol, cmt_err)
                 log_action("trade", f"{action['action']}_sell", symbol=symbol, result=order["status"])
                 tracker.remove(symbol)
                 try:
@@ -1186,16 +1193,23 @@ def check_stop_losses():
                     continue
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                    sl_price = float(order.get("filled_avg_price") or 0)
                     insert_trade(
                         symbol=symbol,
                         side="sell",
                         qty=pos["qty"],
-                        price=float(order.get("filled_avg_price") or 0),
-                        total=pos["qty"] * float(order.get("filled_avg_price") or 0),
+                        price=sl_price,
+                        total=pos["qty"] * sl_price,
                         strategy="stop_loss",
                         status=order["status"],
                         alpaca_order_id=order.get("id"),
                     )
+                    # Immediately close matching buy trades so open/recent tables stay in sync
+                    try:
+                        from trading.db.store import close_matching_buy_trades
+                        close_matching_buy_trades(symbol, sl_price, pos["qty"])
+                    except Exception as cmt_err:
+                        log.warning("close_matching_buy_trades failed for %s: %s", symbol, cmt_err)
                     log_action("trade", "stop_loss_sell", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
                     try:
@@ -1255,16 +1269,23 @@ def check_stop_losses():
                     continue
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                    vol_exit_price = float(order.get("filled_avg_price") or 0)
                     insert_trade(
                         symbol=symbol,
                         side="sell",
                         qty=pos["qty"],
-                        price=float(order.get("filled_avg_price") or 0),
-                        total=pos["qty"] * float(order.get("filled_avg_price") or 0),
+                        price=vol_exit_price,
+                        total=pos["qty"] * vol_exit_price,
                         strategy="volume_exit",
                         status=order["status"],
                         alpaca_order_id=order.get("id"),
                     )
+                    # Immediately close matching buy trades so open/recent tables stay in sync
+                    try:
+                        from trading.db.store import close_matching_buy_trades
+                        close_matching_buy_trades(symbol, vol_exit_price, pos["qty"])
+                    except Exception as cmt_err:
+                        log.warning("close_matching_buy_trades failed for %s: %s", symbol, cmt_err)
                     log_action("trade", "volume_exit_sell", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
                     already_sold.add(symbol)

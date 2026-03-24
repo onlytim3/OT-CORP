@@ -96,9 +96,11 @@ export interface Trade {
   price: number;
   total: number;
   strategy: string;
+  status: string;
   pnl: number | null;
   pnl_pct: number | null;
   closed_at: string | null;
+  is_open: boolean;
   leverage: number | null;
   stop_loss_price: number | null;
   take_profit_price: number | null;

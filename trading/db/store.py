@@ -386,6 +386,67 @@ def close_trade(trade_id, close_price, pnl):
         )
 
 
+def close_matching_buy_trades(symbol: str, sell_price: float, sell_qty: float) -> int:
+    """Immediately close open buy trades for *symbol* when a sell executes.
+
+    Uses FIFO ordering (oldest buys first) so trade pairing stays consistent
+    with pair_trades().  This eliminates the window where a sell has been
+    recorded but the corresponding buy still appears 'open'.
+
+    Returns the number of buy trades closed.
+    """
+    with get_db() as conn:
+        # Normalise symbol variants (BTC/USD vs BTCUSD)
+        sym_flat = symbol.replace("/", "")
+        sym_slash = symbol[:3] + "/" + symbol[3:] if "/" not in symbol and len(symbol) >= 6 else symbol
+        variants = list({symbol, sym_flat, sym_slash})
+        placeholders = ",".join("?" for _ in variants)
+
+        rows = conn.execute(
+            f"SELECT id, qty, price FROM trades "
+            f"WHERE symbol IN ({placeholders}) AND side='buy' "
+            f"AND status IN ('filled', 'pending') AND closed_at IS NULL "
+            f"ORDER BY timestamp ASC",
+            variants,
+        ).fetchall()
+
+        remaining = sell_qty
+        closed = 0
+        now = _now()
+
+        for row in rows:
+            if remaining <= 0:
+                break
+            buy_id = row["id"]
+            buy_qty = row["qty"] or 0
+            buy_price = row["price"] or 0
+
+            if buy_qty <= 0 or buy_price <= 0:
+                continue
+
+            matched = min(buy_qty, remaining)
+            pnl = (sell_price - buy_price) * matched
+
+            if matched >= buy_qty:
+                # Fully consumed
+                conn.execute(
+                    "UPDATE trades SET closed_at=?, close_price=?, pnl=?, status='closed' WHERE id=?",
+                    (now, sell_price, pnl, buy_id),
+                )
+            else:
+                # Partially consumed — reduce qty, don't close
+                new_qty = buy_qty - matched
+                conn.execute(
+                    "UPDATE trades SET qty=?, total=? WHERE id=?",
+                    (new_qty, new_qty * buy_price, buy_id),
+                )
+
+            remaining -= matched
+            closed += 1
+
+        return closed
+
+
 def get_trades(limit=50, strategy=None):
     with get_db() as conn:
         if strategy:

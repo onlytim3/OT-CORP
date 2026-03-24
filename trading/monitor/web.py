@@ -18,7 +18,7 @@ from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TI
 from trading.db.store import (
     init_db, get_db, get_trades, get_positions, get_daily_pnl,
     get_signals, get_action_log, get_action_log_summary,
-    get_journal, get_reviews, get_setting,
+    get_journal, get_reviews, get_setting, get_open_trades,
 )
 from trading.execution.router import get_account, get_positions_from_aster as get_positions_from_alpaca
 
@@ -89,6 +89,74 @@ def _safe_positions():
     except Exception:
         log.exception("Failed to fetch positions from Alpaca")
         return []
+
+
+def _reconcile_orphan_trades(broker_positions: list) -> int:
+    """Close open buy trades whose symbol no longer exists at the broker.
+
+    This catches the edge case where a position was closed (stop-loss,
+    take-profit, manual) but ``pair_trades()`` hasn't run yet, leaving
+    the buy trade as 'open' in the trades table while the recent trades
+    table already shows the sell.
+
+    Returns the number of orphan trades closed.
+    """
+    try:
+        open_trades = get_open_trades()
+        if not open_trades:
+            return 0
+
+        # Build set of symbols currently held at the broker (all variants)
+        held: set[str] = set()
+        for p in broker_positions:
+            sym = p.get("symbol", "")
+            held.add(sym)
+            held.add(sym.replace("/", ""))
+            if "/" not in sym and len(sym) >= 6:
+                held.add(sym[:3] + "/" + sym[3:])
+
+        # Find open buy trades for symbols no longer at broker
+        orphan_buys = [
+            t for t in open_trades
+            if t.get("side", "").lower() == "buy"
+            and t.get("symbol", "") not in held
+            and t.get("symbol", "").replace("/", "") not in held
+        ]
+
+        if not orphan_buys:
+            return 0
+
+        from trading.db.store import close_trade
+        closed = 0
+        for t in orphan_buys:
+            # Use the most recent sell price for this symbol from DB, or mark as zero P&L
+            try:
+                with get_db() as conn:
+                    sym = t["symbol"]
+                    sym_flat = sym.replace("/", "")
+                    sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
+                    variants = list({sym, sym_flat, sym_slash})
+                    placeholders = ",".join("?" for _ in variants)
+                    row = conn.execute(
+                        f"SELECT price FROM trades WHERE symbol IN ({placeholders}) "
+                        f"AND side='sell' ORDER BY timestamp DESC LIMIT 1",
+                        variants,
+                    ).fetchone()
+                exit_price = row["price"] if row and row["price"] else (t.get("price") or 0)
+            except Exception:
+                exit_price = t.get("price") or 0
+
+            buy_price = t.get("price") or 0
+            qty = t.get("qty") or 0
+            pnl = (exit_price - buy_price) * qty if buy_price > 0 else 0
+            close_trade(t["id"], exit_price, round(pnl, 2))
+            closed += 1
+            log.info("Reconciled orphan trade #%d %s (P&L $%.2f)", t["id"], t.get("symbol"), pnl)
+
+        return closed
+    except Exception:
+        log.debug("Orphan trade reconciliation error", exc_info=True)
+        return 0
 
 
 def _add_position_ages(positions: list) -> list:
@@ -228,8 +296,12 @@ def dashboard():
 def api_status():
     """JSON endpoint for programmatic access / auto-refresh."""
     account = _safe_account()
-    positions = _add_position_ages(sorted(_safe_positions(), key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
+    raw_positions = _safe_positions()
+    positions = _add_position_ages(sorted(raw_positions, key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
     summary = get_action_log_summary()
+
+    # Reconcile orphan trades — close buy trades for positions no longer at broker
+    _reconcile_orphan_trades(raw_positions)
 
     # Enrich positions with leverage from their opening trades
     try:
@@ -307,6 +379,9 @@ def api_trades():
         pnl = t.get("pnl")
         qty = abs(t.get("qty", 0) or 0)
         side = t.get("side", "")
+
+        # Mark each trade with consistent open/closed status
+        t["is_open"] = (t.get("closed_at") is None and t.get("status") != "closed")
 
         # If sell trade has no P&L, compute from buy entry price
         if pnl is None and side == "sell" and price > 0 and qty > 0:
