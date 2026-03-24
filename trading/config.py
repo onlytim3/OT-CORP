@@ -64,7 +64,7 @@ STRATEGIES_DIR = KNOWLEDGE_DIR / "strategies"
 RISK = {
     "risk_per_trade_pct": 0.01,     # Risk 1% of portfolio per trade (loss at stop = 1%)
     "max_position_pct": 0.25,       # Max 25% of portfolio per position (leverage-aware sizing needs room)
-    "stop_loss_pct": 0.07,          # 7% stop loss (fallback if ATR unavailable)
+    "stop_loss_pct": 0.05,          # 5% stop loss (tightened from 7% — losses must be smaller than wins)
     "max_daily_loss_pct": 0.05,     # 5% max daily loss
     "max_drawdown_pct": 0.20,       # 20% max total drawdown → halt trading
     "min_cash_reserve_pct": 0.05,   # Keep 5% in cash (aggressive deployment)

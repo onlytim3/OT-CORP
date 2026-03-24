@@ -138,7 +138,7 @@ def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None, 
             log.warning("Failed to set leverage %dx for %s: %s", leverage, symbol, e)
     from trading.execution.router import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty,
-                        stop_loss_price=stop_loss_price)
+                        stop_loss_price=stop_loss_price, leverage=leverage)
 
 
 def _notify_safe(func, *args, **kwargs):

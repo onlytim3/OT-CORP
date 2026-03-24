@@ -75,8 +75,8 @@ class TestCheckProfitTargets(unittest.TestCase):
             "symbol": "BTC/USD",
             "qty": 0.5,
             "avg_cost": 80000.0,
-            "current_price": 92500.0,  # 15.625% gain -> above 15% TP
-            "unrealized_pnl_pct": 15.625,
+            "current_price": 96500.0,  # 20.625% gain -> above 20% TP
+            "unrealized_pnl_pct": 20.625,
         }]
         with patch("trading.risk.profit_manager.save_watermark"):
             actions = check_profit_targets(positions, tracker)
@@ -94,39 +94,45 @@ class TestCheckProfitTargets(unittest.TestCase):
         with patch("trading.risk.profit_manager.save_watermark"):
             tracker.update("ETH/USD", 4500.0)
 
+        # With new params: activation=12%, trail=5%, high watermark=4500
         positions = [{
             "symbol": "ETH/USD",
             "qty": 5.0,
             "avg_cost": 4000.0,
-            # current_price must be:
-            # - above 8% gain from cost (4000 * 1.08 = 4320)
-            # - more than 4% below high watermark of 4500 (4500 * 0.96 = 4320)
-            "current_price": 4310.0,  # gain = 7.75%... need > 8%
-            "unrealized_pnl_pct": 7.75,
+            # Need gain >= 12%: price >= 4480
+            # Need drawdown >= 5% from 4500: price <= 4275
+            "current_price": 4490.0,  # gain = 12.25%, drawdown = 0.22%
+            "unrealized_pnl_pct": 12.25,
         }]
-        # Actually, 4310 / 4000 = 7.75% which is below 8% activation.
-        # Let's use a price that's above 8% gain but below the trail
-        positions[0]["current_price"] = 4330.0  # gain = 8.25%, high=4500, drawdown = 3.78%
 
         with patch("trading.risk.profit_manager.save_watermark"):
             actions = check_profit_targets(positions, tracker)
 
-        # 3.78% drawdown < 4% trail -> should NOT trigger
+        # 0.22% drawdown < 5% trail -> should NOT trigger
         self.assertEqual(len(actions), 0)
 
-        # Now use a price that triggers the trail
-        positions[0]["current_price"] = 4310.0  # gain = 7.75% -> below activation, no trigger
+        # Now use a price above 12% gain AND > 5% below high
+        # gain >= 12%: price >= 4480
+        # drawdown >= 5% from 4500: price <= 4275
+        # Both conditions met: price = 4275 → gain = 6.875% (below 12% activation!)
+        # Actually impossible with high=4500 and avg_cost=4000 to have both.
+        # Push watermark higher first:
+        with patch("trading.risk.profit_manager.save_watermark"):
+            tracker.update("ETH/USD", 5100.0)  # New high
 
-        # Use a price above activation with drawdown > 4%
-        positions[0]["current_price"] = 4321.0  # gain = 8.025%
-        # drawdown = (4500 - 4321) / 4500 = 3.98% -> still below 4%
+        # Now: gain >= 12%: price >= 4480, drawdown >= 5% from 5100: price <= 4845
+        positions[0]["current_price"] = 4840.0  # gain = 21% (above 12%), drawdown = 5.1%
+        with patch("trading.risk.profit_manager.save_watermark"):
+            actions = check_profit_targets(positions, tracker)
+        # 21% gain > 20% TP → take_profit fires first (before trailing stop check)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action"], "take_profit")
 
-        positions[0]["current_price"] = 4315.0  # gain = 7.875% -> below 8%, no activation
-        # Need: gain >= 8% AND drawdown >= 4%
-        # gain >= 8%: price >= 4320
-        # drawdown >= 4% from 4500: price <= 4320
-        # Exactly at boundary: price = 4320, gain = 8%, drawdown = 4%
-        positions[0]["current_price"] = 4320.0
+        # Test actual trailing stop: gain >= 12% but < 20%, drawdown >= 5%
+        with patch("trading.risk.profit_manager.save_watermark"):
+            tracker.update("ETH/USD", 5000.0)  # Reset high
+        # gain >= 12%: price >= 4480, drawdown >= 5% from 5000: price <= 4750
+        positions[0]["current_price"] = 4700.0  # gain = 17.5%, drawdown = 6%
         with patch("trading.risk.profit_manager.save_watermark"):
             actions = check_profit_targets(positions, tracker)
         self.assertEqual(len(actions), 1)
