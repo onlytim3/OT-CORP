@@ -11,6 +11,29 @@ log = logging.getLogger(__name__)
 from trading.config import DB_PATH
 
 
+def symbol_variants(sym: str) -> list[str]:
+    """Generate all plausible symbol variants for matching.
+
+    Handles arbitrary base lengths (e.g. BTC/USD, DYDX/USD, GOOG/USD)
+    by stripping known quote suffixes rather than assuming a 3-char base.
+
+    Returns a deduplicated list: [original, flat, slash-form].
+    """
+    if not sym:
+        return []
+    flat = sym.replace("/", "")
+    # Try to recover the slash form from a flat symbol
+    slash = sym  # default: keep as-is
+    if "/" not in sym:
+        for suffix in ("USDT", "USD"):
+            if sym.upper().endswith(suffix):
+                base = sym[: len(sym) - len(suffix)]
+                quote = sym[len(sym) - len(suffix):]
+                slash = f"{base}/{quote}"
+                break
+    return list({sym, flat, slash})
+
+
 def _ensure_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -402,10 +425,8 @@ def close_matching_entry_trades(symbol: str, exit_price: float, exit_qty: float,
     entry_side = "buy" if exit_side == "sell" else "sell"
 
     with get_db() as conn:
-        # Normalise symbol variants (BTC/USD vs BTCUSD)
-        sym_flat = symbol.replace("/", "")
-        sym_slash = symbol[:3] + "/" + symbol[3:] if "/" not in symbol and len(symbol) >= 6 else symbol
-        variants = list({symbol, sym_flat, sym_slash})
+        # Normalise symbol variants (BTC/USD vs BTCUSD, DYDX/USD vs DYDXUSD)
+        variants = symbol_variants(symbol)
         placeholders = ",".join("?" for _ in variants)
 
         rows = conn.execute(
