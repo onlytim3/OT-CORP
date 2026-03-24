@@ -386,15 +386,21 @@ def close_trade(trade_id, close_price, pnl):
         )
 
 
-def close_matching_buy_trades(symbol: str, sell_price: float, sell_qty: float) -> int:
-    """Immediately close open buy trades for *symbol* when a sell executes.
+def close_matching_entry_trades(symbol: str, exit_price: float, exit_qty: float, exit_side: str) -> int:
+    """Immediately close open entry trades for *symbol* when an exit executes.
 
-    Uses FIFO ordering (oldest buys first) so trade pairing stays consistent
-    with pair_trades().  This eliminates the window where a sell has been
-    recorded but the corresponding buy still appears 'open'.
+    For futures trading, entries can be either buy (long) or sell (short).
+    The *exit_side* determines which entries to close:
+      - exit_side='sell' closes open buys  (long exit)
+      - exit_side='buy'  closes open sells (short cover / buy-to-cover)
 
-    Returns the number of buy trades closed.
+    Uses FIFO ordering (oldest entries first) so trade pairing stays
+    consistent with pair_trades().
+
+    Returns the number of entry trades closed.
     """
+    entry_side = "buy" if exit_side == "sell" else "sell"
+
     with get_db() as conn:
         # Normalise symbol variants (BTC/USD vs BTCUSD)
         sym_flat = symbol.replace("/", "")
@@ -404,47 +410,56 @@ def close_matching_buy_trades(symbol: str, sell_price: float, sell_qty: float) -
 
         rows = conn.execute(
             f"SELECT id, qty, price FROM trades "
-            f"WHERE symbol IN ({placeholders}) AND side='buy' "
+            f"WHERE symbol IN ({placeholders}) AND side=? "
             f"AND status IN ('filled', 'pending') AND closed_at IS NULL "
             f"ORDER BY timestamp ASC",
-            variants,
+            variants + [entry_side],
         ).fetchall()
 
-        remaining = sell_qty
+        remaining = exit_qty
         closed = 0
         now = _now()
 
         for row in rows:
             if remaining <= 0:
                 break
-            buy_id = row["id"]
-            buy_qty = row["qty"] or 0
-            buy_price = row["price"] or 0
+            entry_id = row["id"]
+            entry_qty = row["qty"] or 0
+            entry_price = row["price"] or 0
 
-            if buy_qty <= 0 or buy_price <= 0:
+            if entry_qty <= 0 or entry_price <= 0:
                 continue
 
-            matched = min(buy_qty, remaining)
-            pnl = (sell_price - buy_price) * matched
+            matched = min(entry_qty, remaining)
+            if entry_side == "buy":
+                pnl = (exit_price - entry_price) * matched
+            else:
+                # Short entry: profit when price drops
+                pnl = (entry_price - exit_price) * matched
 
-            if matched >= buy_qty:
+            if matched >= entry_qty:
                 # Fully consumed
                 conn.execute(
                     "UPDATE trades SET closed_at=?, close_price=?, pnl=?, status='closed' WHERE id=?",
-                    (now, sell_price, pnl, buy_id),
+                    (now, exit_price, pnl, entry_id),
                 )
             else:
                 # Partially consumed — reduce qty, don't close
-                new_qty = buy_qty - matched
+                new_qty = entry_qty - matched
                 conn.execute(
                     "UPDATE trades SET qty=?, total=? WHERE id=?",
-                    (new_qty, new_qty * buy_price, buy_id),
+                    (new_qty, new_qty * entry_price, entry_id),
                 )
 
             remaining -= matched
             closed += 1
 
         return closed
+
+
+def close_matching_buy_trades(symbol: str, sell_price: float, sell_qty: float) -> int:
+    """Backward-compatible wrapper: close open buys when a sell executes."""
+    return close_matching_entry_trades(symbol, sell_price, sell_qty, exit_side="sell")
 
 
 def get_trades(limit=50, strategy=None):

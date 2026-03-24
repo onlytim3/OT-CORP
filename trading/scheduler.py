@@ -1663,46 +1663,57 @@ def start_daemon(interval_hours=4, paper=False):
         log.error("P&L v3 startup purge failed: %s", e)
 
     # -----------------------------------------------------------------------
-    # One-time orphan trade cleanup — close stale open buys from before
-    # sell-tracking was added.  Runs once per DB then sets a flag.
+    # One-time orphan trade cleanup — close stale open entries (buy AND
+    # sell/short) from before sell-tracking was added.  Futures trading
+    # means both sides can be open entries.  Runs once then sets a flag.
     # -----------------------------------------------------------------------
     try:
-        if not get_setting("orphan_cleanup_v1_done"):
+        if not get_setting("orphan_cleanup_v2_done"):
             from trading.db.store import get_open_trades, close_trade
-            log.info("Running one-time orphan trade cleanup v1...")
+            log.info("Running one-time orphan trade cleanup v2...")
             open_trades = get_open_trades()
-            open_buys = [t for t in open_trades if t.get("side", "").lower() == "buy"]
             cleaned = 0
-            for buy in open_buys:
-                sym = buy.get("symbol", "")
+            for entry in open_trades:
+                side = entry.get("side", "").lower()
+                if side not in ("buy", "sell", "short"):
+                    continue
+                closing_side = "sell" if side == "buy" else "buy"
+                sym = entry.get("symbol", "")
                 sym_flat = sym.replace("/", "")
                 sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
                 variants = list({sym, sym_flat, sym_slash})
                 placeholders = ",".join("?" for _ in variants)
-                buy_ts = buy.get("timestamp", "")
+                entry_ts = entry.get("timestamp", "")
                 with get_db() as db:
-                    # Check if there's a sell OR a newer buy for this symbol
-                    sell_row = db.execute(
+                    # Check if there's an opposite-side trade (exit) after this entry
+                    exit_row = db.execute(
                         f"SELECT price FROM trades WHERE symbol IN ({placeholders}) "
-                        f"AND side='sell' AND timestamp > ? LIMIT 1",
-                        variants + [buy_ts],
+                        f"AND side=? AND timestamp > ? LIMIT 1",
+                        variants + [closing_side, entry_ts],
                     ).fetchone()
-                    newer_buy = db.execute(
+                    # Or a newer same-side entry (re-entry after unknown close)
+                    newer_entry = db.execute(
                         f"SELECT id FROM trades WHERE symbol IN ({placeholders}) "
-                        f"AND side='buy' AND timestamp > ? AND id != ? LIMIT 1",
-                        variants + [buy_ts, buy["id"]],
+                        f"AND side=? AND timestamp > ? AND id != ? LIMIT 1",
+                        variants + [side, entry_ts, entry["id"]],
                     ).fetchone()
-                if sell_row or newer_buy:
-                    exit_price = sell_row["price"] if sell_row and sell_row["price"] else (buy.get("price") or 0)
-                    buy_price = buy.get("price") or 0
-                    qty = buy.get("qty") or 0
-                    pnl = (exit_price - buy_price) * qty if buy_price > 0 else 0.0
-                    close_trade(buy["id"], exit_price, round(pnl, 2))
+                if exit_row or newer_entry:
+                    exit_price = exit_row["price"] if exit_row and exit_row["price"] else (entry.get("price") or 0)
+                    entry_price = entry.get("price") or 0
+                    qty = entry.get("qty") or 0
+                    if entry_price > 0:
+                        if side == "buy":
+                            pnl = (exit_price - entry_price) * qty
+                        else:
+                            pnl = (entry_price - exit_price) * qty
+                    else:
+                        pnl = 0.0
+                    close_trade(entry["id"], exit_price, round(pnl, 2))
                     cleaned += 1
-            set_setting("orphan_cleanup_v1_done", "true")
-            log.info("Orphan cleanup v1 complete: closed %d stale buy trades", cleaned)
+            set_setting("orphan_cleanup_v2_done", "true")
+            log.info("Orphan cleanup v2 complete: closed %d stale entry trades", cleaned)
     except Exception as e:
-        log.error("Orphan cleanup v1 failed: %s", e)
+        log.error("Orphan cleanup v2 failed: %s", e)
 
     # Run startup validation backtest (if enabled)
     _run_startup_validation()
