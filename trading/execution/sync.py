@@ -257,18 +257,170 @@ def _reduce_trade_qty(trade_id: int, new_qty: float, new_total: float) -> None:
         )
 
 
+def _pair_one_direction(
+    entries: list[dict],
+    exits: list[dict],
+    symbol: str,
+    entry_side: str,
+) -> int:
+    """Pair entry trades with opposite-side exit trades using FIFO order.
+
+    *entry_side* is ``"buy"`` for longs or ``"sell"`` for shorts.
+    P&L is direction-aware: longs profit when price rises, shorts when it drops.
+
+    Returns the number of pairings made.
+    """
+    entry_idx = 0
+    paired = 0
+
+    for exit_trade in exits:
+        exit_remaining: float = exit_trade.get("qty", 0)
+        exit_total_pnl: float = 0.0
+
+        while exit_remaining > 0 and entry_idx < len(entries):
+            entry = entries[entry_idx]
+            entry_id = entry["id"]
+            exit_id = exit_trade["id"]
+
+            entry_price = entry.get("price") or 0
+            exit_price = exit_trade.get("price") or 0
+            entry_qty: float = entry.get("qty", 0)
+
+            if entry_qty <= 0 or entry_price <= 0 or exit_price <= 0:
+                entry_idx += 1
+                continue
+
+            matched_qty = min(entry_qty, exit_remaining)
+            if entry_side == "buy":
+                pnl = (exit_price - entry_price) * matched_qty
+            else:
+                # Short: profit when price drops
+                pnl = (entry_price - exit_price) * matched_qty
+            exit_total_pnl += pnl
+
+            try:
+                if matched_qty >= entry_qty:
+                    close_trade(entry_id, exit_price, pnl)
+                    entry_idx += 1
+                else:
+                    remaining_qty = entry_qty - matched_qty
+                    _reduce_trade_qty(
+                        entry_id,
+                        remaining_qty,
+                        remaining_qty * entry_price,
+                    )
+                    entry["qty"] = remaining_qty
+                    entry["total"] = remaining_qty * entry_price
+
+                exit_remaining -= matched_qty
+
+                exit_label = "sell" if entry_side == "buy" else "buy-to-cover"
+                console.print(
+                    f"[green]pair_trades: {symbol} {entry_side} #{entry_id} + {exit_label} #{exit_id} "
+                    f"matched {matched_qty} units -> P&L ${pnl:+.2f}[/green]"
+                )
+                log_action(
+                    "trade",
+                    "trade_paired",
+                    symbol=symbol,
+                    details=(
+                        f"{entry_side.capitalize()} #{entry_id} @ ${entry_price:.2f} paired with "
+                        f"{exit_label} #{exit_id} @ ${exit_price:.2f}, "
+                        f"matched_qty {matched_qty}, P&L ${pnl:+.2f}"
+                    ),
+                )
+
+                try:
+                    record_outcome(
+                        trade_id=entry_id,
+                        pnl=pnl,
+                        exit_price=exit_price,
+                        entry_price=entry_price,
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]pair_trades: journal record_outcome failed for trade "
+                        f"{entry_id}: {exc}[/yellow]"
+                    )
+
+                try:
+                    from trading.strategy.circuit_breaker import record_trade_result
+                    strategy_name = entry.get("strategy", "")
+                    if strategy_name:
+                        record_trade_result(strategy_name, is_loss=(pnl < 0))
+                except Exception as cb_err:
+                    log.warning("Circuit breaker record failed for %s: %s", symbol, cb_err)
+
+                try:
+                    from trading.llm.engine import generate_post_trade_review
+                    from trading.db.store import insert_trade_analysis
+                    trade_dict = {
+                        "id": entry_id, "symbol": symbol,
+                        "side": entry_side, "price": entry_price,
+                        "strategy": entry.get("strategy", "unknown"),
+                        "entry_reasoning": entry.get("entry_reasoning", ""),
+                    }
+                    market_conds = {
+                        "exit_price": exit_price,
+                        "exit_trade_id": exit_id,
+                        "matched_qty": matched_qty,
+                    }
+                    review = generate_post_trade_review(
+                        trade_dict,
+                        entry.get("entry_reasoning", ""),
+                        pnl,
+                        market_conds,
+                    )
+                    if review and "LLM unavailable" not in review:
+                        insert_trade_analysis(
+                            entry_id, review,
+                            {"pnl": pnl, "exit_price": exit_price},
+                            source="post_trade_review",
+                        )
+                except Exception as ptf:
+                    log.debug("Post-trade review failed (non-fatal): %s", ptf)
+
+                paired += 1
+
+            except Exception as exc:
+                exit_label = "sell" if entry_side == "buy" else "buy-to-cover"
+                console.print(
+                    f"[red]pair_trades: failed to pair {symbol} {entry_side} #{entry_id} "
+                    f"with {exit_label} #{exit_id}: {exc}[/red]"
+                )
+                log_action(
+                    "error",
+                    "pair_trades_error",
+                    symbol=symbol,
+                    details=f"{entry_side.capitalize()} #{entry_id}, Exit #{exit_id}: {exc}",
+                )
+                entry_idx += 1
+                break
+
+        # Close the exit trade with accumulated P&L
+        try:
+            close_trade(exit_trade["id"], exit_trade.get("price", 0), exit_total_pnl)
+        except Exception as exc:
+            console.print(
+                f"[red]pair_trades: failed to close exit #{exit_trade['id']}: {exc}[/red]"
+            )
+
+    return paired
+
+
 def pair_trades() -> int:
-    """Match open buy trades with corresponding sell trades using FIFO order.
+    """Match open entry trades with opposite-side exit trades using FIFO order.
 
-    For each symbol that has both an unclosed buy AND an unclosed sell the
-    function walks buys oldest-first, consuming sell quantity against them:
+    Handles both directions for futures trading:
+      - Long entries (buy) paired with sell exits
+      - Short entries (sell) paired with buy-to-cover exits
 
-      - If sell_qty >= buy_qty: the buy is fully matched and closed.
-      - If sell_qty < buy_qty: the buy is *partially* matched -- its qty is
-        reduced by the matched amount and it stays open for future pairing.
-      - The sell trade is always fully closed (it represents a completed exit).
-      - P&L is computed on the matched quantity only:
-            matched_qty * (sell_price - buy_price)
+    For each direction, an entry trade that precedes an opposite-side trade
+    is considered an entry/exit pair. FIFO ordering is used.
+
+    P&L is direction-aware:
+      - Long:  (exit_price - entry_price) * qty
+      - Short: (entry_price - exit_price) * qty
 
     Returns the number of pairings made.
     """
@@ -288,7 +440,7 @@ def pair_trades() -> int:
             continue
         if side == "buy":
             buys_by_symbol.setdefault(symbol, []).append(trade)
-        elif side == "sell":
+        elif side in ("sell", "short"):
             sells_by_symbol.setdefault(symbol, []).append(trade)
 
     # Sort each bucket by timestamp ascending (oldest first = FIFO).
@@ -299,146 +451,28 @@ def pair_trades() -> int:
 
     paired = 0
 
+    # Direction 1: Long entries (buys) closed by sell exits
+    # For each symbol, sells that appear AFTER open buys are exits.
     for symbol, sells in sells_by_symbol.items():
         buys = buys_by_symbol.get(symbol, [])
         if not buys:
             continue
+        # Only sells that come AFTER the oldest open buy are potential exits
+        oldest_buy_ts = buys[0].get("timestamp", "")
+        exit_sells = [s for s in sells if s.get("timestamp", "") > oldest_buy_ts]
+        if exit_sells:
+            paired += _pair_one_direction(buys, exit_sells, symbol, entry_side="buy")
 
-        buy_idx = 0
-        for sell in sells:
-            sell_remaining: float = sell.get("qty", 0)
-            sell_total_pnl: float = 0.0  # accumulate P&L across partial matches
-
-            # Consume sell quantity against buys until it is exhausted.
-            while sell_remaining > 0 and buy_idx < len(buys):
-                buy = buys[buy_idx]
-                buy_trade_id = buy["id"]
-                sell_trade_id = sell["id"]
-
-                buy_price = buy.get("price") or 0
-                sell_price = sell.get("price") or 0
-                buy_qty: float = buy.get("qty", 0)
-
-                if buy_qty <= 0 or buy_price <= 0 or sell_price <= 0:
-                    buy_idx += 1
-                    continue
-
-                matched_qty = min(buy_qty, sell_remaining)
-                pnl = (sell_price - buy_price) * matched_qty
-                sell_total_pnl += pnl
-
-                try:
-                    if matched_qty >= buy_qty:
-                        # Buy is fully consumed -- close it.
-                        close_trade(buy_trade_id, sell_price, pnl)
-                        buy_idx += 1
-                    else:
-                        # Buy is only partially consumed -- reduce its qty.
-                        remaining_buy_qty = buy_qty - matched_qty
-                        _reduce_trade_qty(
-                            buy_trade_id,
-                            remaining_buy_qty,
-                            remaining_buy_qty * buy_price,
-                        )
-                        # Update the in-memory dict so subsequent iterations
-                        # within this sync run see the reduced quantity.
-                        buy["qty"] = remaining_buy_qty
-                        buy["total"] = remaining_buy_qty * buy_price
-
-                    sell_remaining -= matched_qty
-
-                    console.print(
-                        f"[green]pair_trades: {symbol} buy #{buy_trade_id} + sell #{sell_trade_id} "
-                        f"matched {matched_qty} units -> P&L ${pnl:+.2f}[/green]"
-                    )
-                    log_action(
-                        "trade",
-                        "trade_paired",
-                        symbol=symbol,
-                        details=(
-                            f"Buy #{buy_trade_id} @ ${buy_price:.2f} paired with "
-                            f"sell #{sell_trade_id} @ ${sell_price:.2f}, "
-                            f"matched_qty {matched_qty}, P&L ${pnl:+.2f}"
-                        ),
-                    )
-
-                    # Record outcome in the trade journal.
-                    try:
-                        record_outcome(
-                            trade_id=buy_trade_id,
-                            pnl=pnl,
-                            exit_price=sell_price,
-                            entry_price=buy_price,
-                        )
-                    except Exception as exc:
-                        console.print(
-                            f"[yellow]pair_trades: journal record_outcome failed for trade "
-                            f"{buy_trade_id}: {exc}[/yellow]"
-                        )
-
-                    # Record result for circuit breaker tracking
-                    try:
-                        from trading.strategy.circuit_breaker import record_trade_result
-                        strategy_name = buy.get("strategy", "")
-                        if strategy_name:
-                            record_trade_result(strategy_name, is_loss=(pnl < 0))
-                    except Exception as cb_err:
-                        log.warning("Circuit breaker record failed for %s: %s", symbol, cb_err)
-
-                    # Post-trade review via LLM (best-effort, non-blocking)
-                    try:
-                        from trading.llm.engine import generate_post_trade_review
-                        from trading.db.store import insert_trade_analysis
-                        trade_dict = {
-                            "id": buy_trade_id, "symbol": symbol,
-                            "side": "buy", "price": buy_price,
-                            "strategy": buy.get("strategy", "unknown"),
-                            "entry_reasoning": buy.get("entry_reasoning", ""),
-                        }
-                        market_conds = {
-                            "exit_price": sell_price,
-                            "sell_trade_id": sell_trade_id,
-                            "matched_qty": matched_qty,
-                        }
-                        review = generate_post_trade_review(
-                            trade_dict,
-                            buy.get("entry_reasoning", ""),
-                            pnl,
-                            market_conds,
-                        )
-                        if review and "LLM unavailable" not in review:
-                            insert_trade_analysis(
-                                buy_trade_id, review,
-                                {"pnl": pnl, "exit_price": sell_price},
-                                source="post_trade_review",
-                            )
-                    except Exception as ptf:
-                        log.debug("Post-trade review failed (non-fatal): %s", ptf)
-
-                    paired += 1
-
-                except Exception as exc:
-                    console.print(
-                        f"[red]pair_trades: failed to pair {symbol} buy #{buy_trade_id} "
-                        f"with sell #{sell_trade_id}: {exc}[/red]"
-                    )
-                    log_action(
-                        "error",
-                        "pair_trades_error",
-                        symbol=symbol,
-                        details=f"Buy #{buy_trade_id}, Sell #{sell_trade_id}: {exc}",
-                    )
-                    buy_idx += 1  # Skip this buy and try the next one.
-                    break  # Stop consuming this sell on error.
-
-            # Always close the sell trade -- it represents a completed exit.
-            # Use the accumulated P&L from all partial matches against this sell.
-            try:
-                close_trade(sell["id"], sell.get("price", 0), sell_total_pnl)
-            except Exception as exc:
-                console.print(
-                    f"[red]pair_trades: failed to close sell #{sell['id']}: {exc}[/red]"
-                )
+    # Direction 2: Short entries (sells) closed by buy-to-cover exits
+    # For each symbol, buys that appear AFTER open sells are exits (covers).
+    for symbol, buys in buys_by_symbol.items():
+        sells = sells_by_symbol.get(symbol, [])
+        if not sells:
+            continue
+        oldest_sell_ts = sells[0].get("timestamp", "")
+        exit_buys = [b for b in buys if b.get("timestamp", "") > oldest_sell_ts]
+        if exit_buys:
+            paired += _pair_one_direction(sells, exit_buys, symbol, entry_side="sell")
 
     console.print(f"[green]pair_trades: {paired} trade(s) paired[/green]")
     log_action("system", "pair_trades", details=f"Paired {paired} trades")
