@@ -211,6 +211,31 @@ def run_trading_cycle():
             return
 
         # ---------------------------------------------------------------
+        # Phase 0.1: Strategy deployment pre-flight
+        # ---------------------------------------------------------------
+        from trading.strategy.registry import preflight_check
+        from trading.monitor.notifications import notify_deployment_failure
+        pf = preflight_check()
+        if not pf.passed:
+            msg = f"STRATEGY PREFLIGHT FAILED: {len(pf.missing)} missing, {len(pf.failed)} broken"
+            details = []
+            for name in pf.missing:
+                details.append(f"  MISSING: {name} — no module found")
+            for name, err in pf.failed.items():
+                details.append(f"  BROKEN: {name} — {err}")
+            detail_str = "\n".join(details)
+            log.error("%s\n%s", msg, detail_str)
+            console.print(f"[bold red]{msg}[/bold red]")
+            for line in details:
+                console.print(f"[red]{line}[/red]")
+            log_action("error", "preflight_failed", details=f"{msg}\n{detail_str}",
+                       data={"missing": pf.missing, "failed": pf.failed, "escalation": 1})
+            _notify_safe(notify_deployment_failure, pf.missing, pf.failed)
+            # Continue in degraded mode with whatever strategies loaded
+        else:
+            console.print(f"[green]Pre-flight: {len(pf.loaded)} strategies loaded OK[/green]")
+
+        # ---------------------------------------------------------------
         # Phase 0.5: Apply approved parameter adaptations
         # ---------------------------------------------------------------
         try:
@@ -691,13 +716,20 @@ def run_trading_cycle():
                 except Exception as llm_err:
                     log.debug("LLM entry reasoning failed (using template): %s", llm_err)
 
+                # Use the primary contributing strategy instead of "aggregator"
+                trade_strategy = signal.strategy
+                if trade_strategy == "aggregator" and hasattr(signal, "data") and signal.data:
+                    contributors = signal.data.get("contributing_strategies", [])
+                    if contributors:
+                        trade_strategy = contributors[0]  # Highest-strength contributor is first
+
                 trade_id = insert_trade(
                     symbol=signal.symbol,
                     side=signal.action,
                     qty=qty_f,
                     price=price_f,
                     total=price_f * qty_f if (price_f and qty_f) else order_value,
-                    strategy=signal.strategy,
+                    strategy=trade_strategy,
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
                     stop_loss_price=stop_loss_price,
@@ -1131,38 +1163,40 @@ def check_stop_losses():
         for action in profit_actions:
             symbol = action["symbol"]
             reason = action["reason"]
-            console.print(f"[bold yellow]{action['action'].upper()}: {symbol} -- {reason}[/]")
+            pos_side = action.get("pos_side", "long")
+            exit_side = "buy" if pos_side == "short" else "sell"
+            console.print(f"[bold yellow]{action['action'].upper()}: {symbol} ({pos_side}) -- {reason}[/]")
             log_action(
                 "profit_mgmt", action["action"],
                 symbol=symbol,
                 details=reason,
-                data={"pnl_pct": action["pnl_pct"], "qty": action["qty"]},
+                data={"pnl_pct": action["pnl_pct"], "qty": action["qty"], "pos_side": pos_side},
             )
             try:
-                order = _execute_order(symbol, "sell", qty=action["qty"])
+                order = _execute_order(symbol, exit_side, qty=action["qty"])
             except Exception as e:
-                log.error("Profit management sell failed for %s: %s", symbol, e)
+                log.error("Profit management %s failed for %s: %s", exit_side, symbol, e)
                 continue
 
             if order.get("status") in ("filled", "accepted", "new", "pending_new"):
-                sell_price = float(order.get("filled_avg_price") or 0)
+                exit_price = float(order.get("filled_avg_price") or 0)
                 insert_trade(
                     symbol=symbol,
-                    side="sell",
+                    side=exit_side,
                     qty=action["qty"],
-                    price=sell_price,
-                    total=action["qty"] * sell_price,
+                    price=exit_price,
+                    total=action["qty"] * exit_price,
                     strategy=f"profit_mgmt_{action['action']}",
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
                 )
-                # Immediately close matching buy trades so open/recent tables stay in sync
+                # Immediately close matching entry trades so open/recent tables stay in sync
                 try:
-                    from trading.db.store import close_matching_buy_trades
-                    close_matching_buy_trades(symbol, sell_price, action["qty"])
+                    from trading.db.store import close_matching_entry_trades
+                    close_matching_entry_trades(symbol, exit_price, action["qty"], exit_side=exit_side)
                 except Exception as cmt_err:
-                    log.warning("close_matching_buy_trades failed for %s: %s", symbol, cmt_err)
-                log_action("trade", f"{action['action']}_sell", symbol=symbol, result=order["status"])
+                    log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                log_action("trade", f"{action['action']}_{exit_side}", symbol=symbol, result=order["status"])
                 tracker.remove(symbol)
                 try:
                     from trading.monitor.notifications import notify_stop_loss
@@ -1175,28 +1209,30 @@ def check_stop_losses():
             pnl_pct = pos.get("unrealized_pnl_pct", 0) / 100 if pos.get("unrealized_pnl_pct") else 0
             if pnl_pct <= -RISK["stop_loss_pct"]:
                 symbol = pos["symbol"]
-                # Skip if already sold by profit manager above
+                # Skip if already exited by profit manager above
                 if any(a["symbol"] == symbol for a in profit_actions):
                     continue
 
-                console.print(f"[bold red]STOP LOSS triggered: {symbol} at {pnl_pct*100:.1f}%[/]")
+                pos_side = pos.get("side", "long")
+                exit_side = "buy" if pos_side == "short" else "sell"
+                console.print(f"[bold red]STOP LOSS triggered: {symbol} ({pos_side}) at {pnl_pct*100:.1f}%[/]")
                 log_action(
                     "stop_loss", "triggered",
                     symbol=symbol,
-                    details=f"P&L: {pnl_pct*100:.1f}%",
-                    data={"pnl_pct": pnl_pct, "qty": pos["qty"]},
+                    details=f"P&L: {pnl_pct*100:.1f}% ({pos_side})",
+                    data={"pnl_pct": pnl_pct, "qty": pos["qty"], "pos_side": pos_side},
                 )
                 try:
-                    order = _execute_order(symbol, "sell", qty=pos["qty"])
+                    order = _execute_order(symbol, exit_side, qty=pos["qty"])
                 except Exception as e:
-                    log.error("Stop-loss sell failed for %s: %s", symbol, e)
+                    log.error("Stop-loss %s failed for %s: %s", exit_side, symbol, e)
                     continue
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
                     sl_price = float(order.get("filled_avg_price") or 0)
                     insert_trade(
                         symbol=symbol,
-                        side="sell",
+                        side=exit_side,
                         qty=pos["qty"],
                         price=sl_price,
                         total=pos["qty"] * sl_price,
@@ -1204,13 +1240,13 @@ def check_stop_losses():
                         status=order["status"],
                         alpaca_order_id=order.get("id"),
                     )
-                    # Immediately close matching buy trades so open/recent tables stay in sync
+                    # Immediately close matching entry trades so open/recent tables stay in sync
                     try:
-                        from trading.db.store import close_matching_buy_trades
-                        close_matching_buy_trades(symbol, sl_price, pos["qty"])
+                        from trading.db.store import close_matching_entry_trades
+                        close_matching_entry_trades(symbol, sl_price, pos["qty"], exit_side=exit_side)
                     except Exception as cmt_err:
-                        log.warning("close_matching_buy_trades failed for %s: %s", symbol, cmt_err)
-                    log_action("trade", "stop_loss_sell", symbol=symbol, result=order["status"])
+                        log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                    log_action("trade", f"stop_loss_{exit_side}", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
                     try:
                         from trading.monitor.notifications import notify_stop_loss
@@ -1254,25 +1290,27 @@ def check_stop_losses():
                              symbol, ratio * 100, trend, pnl_pct * 100)
                     continue
 
+                pos_side = pos.get("side", "long")
+                exit_side = "buy" if pos_side == "short" else "sell"
                 exit_reason = "fading fast" if volume_fading_fast and not volume_dead else "below threshold"
-                console.print(f"[bold yellow]VOLUME EXIT: {symbol} — volume {ratio:.0%} ({exit_reason})[/]")
+                console.print(f"[bold yellow]VOLUME EXIT: {symbol} ({pos_side}) — volume {ratio:.0%} ({exit_reason})[/]")
                 log_action(
                     "volume_exit", "triggered",
                     symbol=symbol,
-                    details=f"Volume {ratio:.0%} trend={trend:+.2f} ({exit_reason}), P&L {pnl_pct*100:.1f}%",
-                    data={"volume_ratio": round(ratio, 3), "volume_trend": round(trend, 3), "pnl_pct": pnl_pct, "qty": pos["qty"]},
+                    details=f"Volume {ratio:.0%} trend={trend:+.2f} ({exit_reason}), P&L {pnl_pct*100:.1f}% ({pos_side})",
+                    data={"volume_ratio": round(ratio, 3), "volume_trend": round(trend, 3), "pnl_pct": pnl_pct, "qty": pos["qty"], "pos_side": pos_side},
                 )
                 try:
-                    order = _execute_order(symbol, "sell", qty=pos["qty"])
+                    order = _execute_order(symbol, exit_side, qty=pos["qty"])
                 except Exception as e:
-                    log.error("Volume exit sell failed for %s: %s", symbol, e)
+                    log.error("Volume exit %s failed for %s: %s", exit_side, symbol, e)
                     continue
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
                     vol_exit_price = float(order.get("filled_avg_price") or 0)
                     insert_trade(
                         symbol=symbol,
-                        side="sell",
+                        side=exit_side,
                         qty=pos["qty"],
                         price=vol_exit_price,
                         total=pos["qty"] * vol_exit_price,
@@ -1280,13 +1318,13 @@ def check_stop_losses():
                         status=order["status"],
                         alpaca_order_id=order.get("id"),
                     )
-                    # Immediately close matching buy trades so open/recent tables stay in sync
+                    # Immediately close matching entry trades so open/recent tables stay in sync
                     try:
-                        from trading.db.store import close_matching_buy_trades
-                        close_matching_buy_trades(symbol, vol_exit_price, pos["qty"])
+                        from trading.db.store import close_matching_entry_trades
+                        close_matching_entry_trades(symbol, vol_exit_price, pos["qty"], exit_side=exit_side)
                     except Exception as cmt_err:
-                        log.warning("close_matching_buy_trades failed for %s: %s", symbol, cmt_err)
-                    log_action("trade", "volume_exit_sell", symbol=symbol, result=order["status"])
+                        log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                    log_action("trade", f"volume_exit_{exit_side}", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
                     already_sold.add(symbol)
         except Exception as e:
@@ -1629,6 +1667,59 @@ def start_daemon(interval_hours=4, paper=False):
             log.info("P&L v3 purge complete: recalculated %d records", len(rows) if rows else 0)
     except Exception as e:
         log.error("P&L v3 startup purge failed: %s", e)
+
+    # -----------------------------------------------------------------------
+    # One-time orphan trade cleanup — close stale open entries (buy AND
+    # sell/short) from before sell-tracking was added.  Futures trading
+    # means both sides can be open entries.  Runs once then sets a flag.
+    # -----------------------------------------------------------------------
+    try:
+        if not get_setting("orphan_cleanup_v2_done"):
+            from trading.db.store import get_open_trades, close_trade
+            log.info("Running one-time orphan trade cleanup v2...")
+            open_trades = get_open_trades()
+            cleaned = 0
+            for entry in open_trades:
+                side = entry.get("side", "").lower()
+                if side not in ("buy", "sell", "short"):
+                    continue
+                closing_side = "sell" if side == "buy" else "buy"
+                sym = entry.get("symbol", "")
+                sym_flat = sym.replace("/", "")
+                sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
+                variants = list({sym, sym_flat, sym_slash})
+                placeholders = ",".join("?" for _ in variants)
+                entry_ts = entry.get("timestamp", "")
+                with get_db() as db:
+                    # Check if there's an opposite-side trade (exit) after this entry
+                    exit_row = db.execute(
+                        f"SELECT price FROM trades WHERE symbol IN ({placeholders}) "
+                        f"AND side=? AND timestamp > ? LIMIT 1",
+                        variants + [closing_side, entry_ts],
+                    ).fetchone()
+                    # Or a newer same-side entry (re-entry after unknown close)
+                    newer_entry = db.execute(
+                        f"SELECT id FROM trades WHERE symbol IN ({placeholders}) "
+                        f"AND side=? AND timestamp > ? AND id != ? LIMIT 1",
+                        variants + [side, entry_ts, entry["id"]],
+                    ).fetchone()
+                if exit_row or newer_entry:
+                    exit_price = exit_row["price"] if exit_row and exit_row["price"] else (entry.get("price") or 0)
+                    entry_price = entry.get("price") or 0
+                    qty = entry.get("qty") or 0
+                    if entry_price > 0:
+                        if side == "buy":
+                            pnl = (exit_price - entry_price) * qty
+                        else:
+                            pnl = (entry_price - exit_price) * qty
+                    else:
+                        pnl = 0.0
+                    close_trade(entry["id"], exit_price, round(pnl, 2))
+                    cleaned += 1
+            set_setting("orphan_cleanup_v2_done", "true")
+            log.info("Orphan cleanup v2 complete: closed %d stale entry trades", cleaned)
+    except Exception as e:
+        log.error("Orphan cleanup v2 failed: %s", e)
 
     # Run startup validation backtest (if enabled)
     _run_startup_validation()

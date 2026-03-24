@@ -3,13 +3,24 @@
 import importlib
 import logging
 import pkgutil
+from dataclasses import dataclass, field
 
 from trading.strategy.base import Strategy
 
 log = logging.getLogger(__name__)
 
 _registry: dict[str, type[Strategy]] = {}
+_load_errors: dict[str, str] = {}
 _discovered = False
+
+
+@dataclass
+class PreflightResult:
+    """Result of strategy deployment pre-flight check."""
+    passed: bool
+    loaded: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    failed: dict[str, str] = field(default_factory=dict)
 
 
 def register(cls: type[Strategy]) -> type[Strategy]:
@@ -54,4 +65,21 @@ def _auto_discover():
             try:
                 importlib.import_module(f"trading.strategy.{modname}")
             except Exception as e:
+                _load_errors[modname] = str(e)
                 log.error("Failed to load strategy module %s: %s", modname, e)
+
+
+def preflight_check() -> PreflightResult:
+    """Validate all enabled strategies loaded successfully.
+
+    Returns a PreflightResult indicating which strategies loaded, which are
+    missing (no module file), and which failed to import.
+    """
+    from trading.config import STRATEGY_ENABLED
+    _auto_discover()
+    enabled = [name for name, on in STRATEGY_ENABLED.items() if on]
+    loaded = [name for name in enabled if name in _registry]
+    missing = [name for name in enabled if name not in _registry and name not in _load_errors]
+    failed = {name: _load_errors[name] for name in enabled if name in _load_errors}
+    passed = not missing and not failed
+    return PreflightResult(passed=passed, loaded=loaded, missing=missing, failed=failed)

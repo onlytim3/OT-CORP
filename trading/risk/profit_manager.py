@@ -131,6 +131,7 @@ def check_profit_targets(
         qty: float = pos["qty"]
         avg_cost: float = pos["avg_cost"]
         current_price: float = pos["current_price"]
+        pos_side: str = pos.get("side", "long")
 
         # Ensure the tracker has a baseline for this symbol
         tracker.initialise_from_cost(symbol, avg_cost)
@@ -138,14 +139,19 @@ def check_profit_targets(
         # Update watermark with the latest price
         tracker.update(symbol, current_price)
 
-        # Percentage gain from cost basis
-        gain_pct = (current_price - avg_cost) / avg_cost if avg_cost > 0 else 0.0
+        # Direction-aware percentage gain from cost basis
+        # Long: profit when price rises.  Short: profit when price drops.
+        if avg_cost > 0:
+            raw_pct = (current_price - avg_cost) / avg_cost
+            gain_pct = -raw_pct if pos_side == "short" else raw_pct
+        else:
+            gain_pct = 0.0
 
         # -- 1. Take-profit check ------------------------------------------
         if gain_pct >= TAKE_PROFIT_PCT:
             reason = (
                 f"Take-profit target hit: {gain_pct * 100:.1f}% gain "
-                f"(threshold {TAKE_PROFIT_PCT * 100:.0f}%)"
+                f"(threshold {TAKE_PROFIT_PCT * 100:.0f}%, {pos_side})"
             )
             actions.append({
                 "symbol": symbol,
@@ -153,12 +159,13 @@ def check_profit_targets(
                 "action": "take_profit",
                 "reason": reason,
                 "pnl_pct": gain_pct,
+                "pos_side": pos_side,
             })
             log_action(
                 "profit_mgmt", "take_profit_triggered",
                 symbol=symbol,
                 details=reason,
-                data={"gain_pct": gain_pct, "avg_cost": avg_cost, "price": current_price},
+                data={"gain_pct": gain_pct, "avg_cost": avg_cost, "price": current_price, "pos_side": pos_side},
             )
             continue
 
@@ -168,12 +175,16 @@ def check_profit_targets(
             # high is guaranteed non-None after update() above
             if high is not None and high > 0:
                 drawdown_from_high = (high - current_price) / high
+                # For shorts, drawdown is when price rises FROM the low
+                if pos_side == "short":
+                    drawdown_from_high = (current_price - high) / high if high > 0 else 0
 
                 if drawdown_from_high >= TRAILING_STOP_PCT:
                     reason = (
                         f"Trailing stop triggered: price ${current_price:.2f} is "
-                        f"{drawdown_from_high * 100:.1f}% below high ${high:.2f} "
-                        f"(trail {TRAILING_STOP_PCT * 100:.0f}%, gain {gain_pct * 100:.1f}%)"
+                        f"{drawdown_from_high * 100:.1f}% {'above low' if pos_side == 'short' else 'below high'} "
+                        f"${high:.2f} "
+                        f"(trail {TRAILING_STOP_PCT * 100:.0f}%, gain {gain_pct * 100:.1f}%, {pos_side})"
                     )
                     actions.append({
                         "symbol": symbol,
@@ -181,6 +192,7 @@ def check_profit_targets(
                         "action": "trailing_stop",
                         "reason": reason,
                         "pnl_pct": gain_pct,
+                        "pos_side": pos_side,
                     })
                     log_action(
                         "profit_mgmt", "trailing_stop_triggered",
@@ -191,6 +203,7 @@ def check_profit_targets(
                             "high_watermark": high,
                             "drawdown_from_high": drawdown_from_high,
                             "price": current_price,
+                            "pos_side": pos_side,
                         },
                     )
                     continue

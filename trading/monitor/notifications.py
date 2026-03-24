@@ -315,3 +315,37 @@ def notify_cycle_summary(signals: int, executed: int, blocked: int) -> None:
             logger.debug("notify_cycle_summary() failed", exc_info=True)
         except Exception:
             pass
+
+
+def notify_deployment_failure(missing: list[str], failed: dict[str, str]) -> None:
+    """Send critical deployment failure alert to ALL channels (escalation level 1).
+
+    Unlike normal alerts (try Discord then fallback to Telegram), this sends to
+    both channels simultaneously to ensure operations team visibility.
+    """
+    try:
+        title = "CRITICAL: Strategy Deployment Failure"
+        parts = ["Strategy pre-flight check FAILED. Immediate action required.", ""]
+        if missing:
+            parts.append(f"Missing strategy files ({len(missing)}):")
+            for name in missing:
+                parts.append(f"  - {name}")
+        if failed:
+            parts.append(f"Broken strategy imports ({len(failed)}):")
+            for name, err in failed.items():
+                parts.append(f"  - {name}: {err}")
+        parts.extend([
+            "",
+            "Escalation: Level 1 — Operations team action required",
+            "System running in DEGRADED mode with available strategies.",
+        ])
+        message = "\n".join(parts)
+
+        _log_to_console(title, message, "error")
+        _send_discord(title, message, "error")
+        _send_telegram(title, message, "error")
+    except Exception:
+        try:
+            logger.debug("notify_deployment_failure() failed", exc_info=True)
+        except Exception:
+            pass

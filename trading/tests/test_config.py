@@ -62,5 +62,83 @@ class TestValidateConfig(unittest.TestCase):
             self.assertEqual(len(warnings), 0)
 
 
+class TestPreflightCheck(unittest.TestCase):
+    """Test strategy deployment pre-flight checks."""
+
+    @patch("trading.strategy.registry._discovered", True)
+    @patch("trading.strategy.registry._load_errors", {})
+    def test_preflight_all_strategies_loaded(self):
+        from trading.strategy.registry import preflight_check, _registry
+        enabled = {"strat_a": True, "strat_b": True, "strat_c": False}
+
+        # Create minimal mock strategy classes
+        class MockA:
+            name = "strat_a"
+        class MockB:
+            name = "strat_b"
+
+        with patch("trading.config.STRATEGY_ENABLED", enabled), \
+             patch.dict(_registry, {"strat_a": MockA, "strat_b": MockB}, clear=True):
+            result = preflight_check()
+            self.assertTrue(result.passed)
+            self.assertEqual(sorted(result.loaded), ["strat_a", "strat_b"])
+            self.assertEqual(result.missing, [])
+            self.assertEqual(result.failed, {})
+
+    @patch("trading.strategy.registry._discovered", True)
+    @patch("trading.strategy.registry._load_errors", {})
+    def test_preflight_detects_missing_strategy(self):
+        from trading.strategy.registry import preflight_check, _registry
+        enabled = {"strat_a": True, "strat_missing": True}
+
+        class MockA:
+            name = "strat_a"
+
+        with patch("trading.config.STRATEGY_ENABLED", enabled), \
+             patch.dict(_registry, {"strat_a": MockA}, clear=True):
+            result = preflight_check()
+            self.assertFalse(result.passed)
+            self.assertEqual(result.loaded, ["strat_a"])
+            self.assertEqual(result.missing, ["strat_missing"])
+
+    @patch("trading.strategy.registry._discovered", True)
+    def test_preflight_detects_broken_import(self):
+        from trading.strategy.registry import preflight_check, _registry
+        enabled = {"strat_a": True, "strat_broken": True}
+
+        class MockA:
+            name = "strat_a"
+
+        with patch("trading.config.STRATEGY_ENABLED", enabled), \
+             patch.dict(_registry, {"strat_a": MockA}, clear=True), \
+             patch("trading.strategy.registry._load_errors", {"strat_broken": "SyntaxError: bad"}):
+            result = preflight_check()
+            self.assertFalse(result.passed)
+            self.assertEqual(result.loaded, ["strat_a"])
+            self.assertEqual(result.missing, [])
+            self.assertEqual(result.failed, {"strat_broken": "SyntaxError: bad"})
+
+    @patch("trading.config.TRADING_MODE", "paper")
+    @patch("trading.config.FRED_API_KEY", "k")
+    @patch("trading.config.ALPACA_API_KEY", "k")
+    def test_validate_config_rejects_missing_strategy_file(self):
+        from pathlib import Path
+        original_exists = Path.exists
+
+        def mock_exists(self_path):
+            if self_path.name == "fake_missing.py":
+                return False
+            return original_exists(self_path)
+
+        enabled = {"fake_missing": True}
+        with patch("trading.config.ASTER_API_KEY", "k"), \
+             patch("trading.config.ASTER_API_SECRET", "s"), \
+             patch("trading.config.STRATEGY_ENABLED", enabled), \
+             patch.object(Path, "exists", mock_exists):
+            with self.assertRaises(ConfigError) as ctx:
+                validate_config(test_api=False)
+            self.assertIn("fake_missing", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

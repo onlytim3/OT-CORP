@@ -184,6 +184,13 @@ def get_positions_from_aster() -> list[dict]:
             unrealized = pos.get("unRealizedProfit", 0.0)
             side = "long" if pos.get("positionAmt", 0) > 0 else "short"
 
+            # Direction-aware unrealized P&L %
+            if entry_price > 0:
+                raw_pct = (mark_price - entry_price) / entry_price * 100
+                unrealized_pnl_pct = -raw_pct if side == "short" else raw_pct
+            else:
+                unrealized_pnl_pct = 0
+
             result.append({
                 "symbol": alpaca_sym.replace("/", ""),  # Match Alpaca format: BTCUSD
                 "qty": qty,
@@ -191,7 +198,7 @@ def get_positions_from_aster() -> list[dict]:
                 "current_price": mark_price,
                 "market_value": qty * mark_price,
                 "unrealized_pnl": unrealized,
-                "unrealized_pnl_pct": ((mark_price - entry_price) / entry_price * 100) if entry_price > 0 else 0,
+                "unrealized_pnl_pct": unrealized_pnl_pct,
                 "side": side,
                 "strategy": "",  # AsterDex doesn't track this; DB has it
                 "aster_symbol": aster_sym,

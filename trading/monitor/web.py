@@ -14,7 +14,7 @@ try:
 except ImportError:
     _CORS = None
 
-from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TIMEZONE
+from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TIMEZONE, STRATEGY_ENABLED
 from trading.db.store import (
     init_db, get_db, get_trades, get_positions, get_daily_pnl,
     get_signals, get_action_log, get_action_log_summary,
@@ -92,12 +92,18 @@ def _safe_positions():
 
 
 def _reconcile_orphan_trades(broker_positions: list) -> int:
-    """Close stale open buy trades that should have been paired with a sell.
+    """Close stale open entry trades that should have been paired with an exit.
 
-    Handles two scenarios:
+    Works for both long entries (side='buy', closed by a sell) and short
+    entries (side='sell', closed by a buy) — required for futures trading.
+
+    Handles three scenarios per entry trade:
     1. Symbol no longer held at broker — the position was fully exited.
-    2. Symbol IS still held but there's a sell trade AFTER this buy in the DB
-       (e.g. the symbol was sold and re-bought, leaving old buys orphaned).
+    2. Symbol IS still held but there's an opposite-side trade AFTER this
+       entry in the DB (e.g. position was closed and re-entered).
+    3. Symbol IS still held, no opposite-side trade recorded, but a NEWER
+       same-side entry exists — the old entry is from a previous position
+       that was closed before proper sell tracking was added.
 
     Returns the number of orphan trades closed.
     """
@@ -115,54 +121,83 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
             if "/" not in sym and len(sym) >= 6:
                 held.add(sym[:3] + "/" + sym[3:])
 
-        open_buys = [
-            t for t in open_trades
-            if t.get("side", "").lower() == "buy"
-        ]
-
-        if not open_buys:
+        if not open_trades:
             return 0
 
         from trading.db.store import close_trade
         closed = 0
 
-        for t in open_buys:
+        for t in open_trades:
+            side = t.get("side", "").lower()
+            if side not in ("buy", "sell", "short"):
+                continue
+
             sym = t.get("symbol", "")
             sym_flat = sym.replace("/", "")
             symbol_held = sym in held or sym_flat in held
 
-            # Look for a sell trade for this symbol that happened AFTER this buy
+            # The opposite side closes this entry
+            closing_side = "sell" if side == "buy" else "buy"
+            entry_ts = t.get("timestamp", "")
+
+            # Look for an opposite-side trade that happened AFTER this entry
             try:
                 with get_db() as conn:
                     sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
                     variants = list({sym, sym_flat, sym_slash})
                     placeholders = ",".join("?" for _ in variants)
-                    buy_ts = t.get("timestamp", "")
                     row = conn.execute(
                         f"SELECT price, timestamp FROM trades WHERE symbol IN ({placeholders}) "
-                        f"AND side='sell' AND timestamp > ? ORDER BY timestamp ASC LIMIT 1",
-                        variants + [buy_ts],
+                        f"AND side=? AND timestamp > ? ORDER BY timestamp ASC LIMIT 1",
+                        variants + [closing_side, entry_ts],
                     ).fetchone()
             except Exception:
                 row = None
 
             if symbol_held and not row:
-                # Symbol still at broker and no sell after this buy — genuinely open
+                # Check for a NEWER same-side entry — if one exists, this
+                # old entry is from a previous position (pre-update trades).
+                try:
+                    with get_db() as conn2:
+                        newer_entry = conn2.execute(
+                            f"SELECT id FROM trades WHERE symbol IN ({placeholders}) "
+                            f"AND side=? AND timestamp > ? AND id != ? LIMIT 1",
+                            variants + [side, entry_ts, t["id"]],
+                        ).fetchone()
+                except Exception:
+                    newer_entry = None
+
+                if not newer_entry:
+                    # Symbol still at broker, no exit after, no newer entry — genuinely open
+                    continue
+                # Old entry predates a re-entry — close at entry price (unknown exit)
+                exit_price = t.get("price") or 0
+                pnl = 0.0
+                close_trade(t["id"], exit_price, round(pnl, 2))
+                closed += 1
+                log.info("Reconciled stale re-entry orphan #%d %s (%s)", t["id"], sym, side)
                 continue
 
-            # Either the symbol is gone from broker, or there's a sell after this buy
+            # Either the symbol is gone from broker, or there's an exit after this entry
             if row and row["price"]:
                 exit_price = row["price"]
             else:
-                # No sell found — use entry price (zero P&L) for broker-gone positions
+                # No exit found — use entry price (zero P&L) for broker-gone positions
                 exit_price = t.get("price") or 0
 
-            buy_price = t.get("price") or 0
+            entry_price = t.get("price") or 0
             qty = t.get("qty") or 0
-            pnl = (exit_price - buy_price) * qty if buy_price > 0 else 0
+            if entry_price > 0:
+                if side == "buy":
+                    pnl = (exit_price - entry_price) * qty
+                else:
+                    # Short: profit when price drops
+                    pnl = (entry_price - exit_price) * qty
+            else:
+                pnl = 0
             close_trade(t["id"], exit_price, round(pnl, 2))
             closed += 1
-            log.info("Reconciled orphan trade #%d %s (P&L $%.2f)", t["id"], t.get("symbol"), pnl)
+            log.info("Reconciled orphan trade #%d %s %s (P&L $%.2f)", t["id"], sym, side, pnl)
 
         return closed
     except Exception:
@@ -314,24 +349,63 @@ def api_status():
     # Reconcile orphan trades — close buy trades for positions no longer at broker
     _reconcile_orphan_trades(raw_positions)
 
-    # Enrich positions with leverage from their opening trades
+    # Enrich positions with leverage and strategy from their opening trades
     try:
         trades = get_trades(limit=200)
-        # Build map: symbol → max leverage from recent trades
+        # Build maps: symbol → max leverage, symbol → strategy
         symbol_leverage: dict[str, int] = {}
+        symbol_strategy: dict[str, str] = {}
         for t in trades:
+            sym = t.get("symbol", "")
+            sym_flat = sym.replace("/", "")
+            # Leverage: keep the highest
             lev = t.get("leverage")
             if lev and lev > 1:
-                sym = t.get("symbol", "")
-                # Store the leverage, keep the highest if multiple trades
-                sym_flat = sym.replace("/", "")
                 symbol_leverage[sym] = max(symbol_leverage.get(sym, 1), lev)
                 symbol_leverage[sym_flat] = max(symbol_leverage.get(sym_flat, 1), lev)
+            # Strategy: use the most recent open buy trade's strategy
+            # If "aggregator", try to extract the primary contributing strategy
+            if t.get("side") == "buy" and not t.get("closed_at"):
+                strat = t.get("strategy", "")
+                if strat and sym not in symbol_strategy:
+                    # Try to get contributing strategies from entry_reasoning
+                    if strat == "aggregator":
+                        reasoning = t.get("entry_reasoning", "") or ""
+                        # Extract first strategy name from reasoning (format: "Strategy: foo, bar")
+                        for known in STRATEGY_ENABLED:
+                            if known.replace("_", " ") in reasoning.lower() or known in reasoning.lower():
+                                strat = known
+                                break
+                    symbol_strategy[sym] = strat
+                    symbol_strategy[sym_flat] = strat
         for pos in positions:
             psym = pos.get("symbol", "")
-            lev = symbol_leverage.get(psym) or symbol_leverage.get(psym.replace("/", ""))
+            psym_flat = psym.replace("/", "")
+            lev = symbol_leverage.get(psym) or symbol_leverage.get(psym_flat)
             if lev and lev > 1:
                 pos["leverage"] = lev
+            # Fill in strategy if broker returned empty
+            if not pos.get("strategy"):
+                strat = symbol_strategy.get(psym) or symbol_strategy.get(psym_flat)
+                if strat:
+                    pos["strategy"] = strat
+    except Exception:
+        pass
+
+    # Merge with DB positions for any fields the broker doesn't provide
+    try:
+        db_positions = get_positions()
+        db_by_symbol: dict[str, dict] = {}
+        for dbp in db_positions:
+            sym = dbp.get("symbol", "")
+            db_by_symbol[sym] = dbp
+            db_by_symbol[sym.replace("/", "")] = dbp
+        for pos in positions:
+            psym = pos.get("symbol", "")
+            dbp = db_by_symbol.get(psym) or db_by_symbol.get(psym.replace("/", ""))
+            if dbp:
+                if not pos.get("strategy") and dbp.get("strategy"):
+                    pos["strategy"] = dbp["strategy"]
     except Exception:
         pass
 
@@ -372,17 +446,24 @@ def api_actions():
 def api_trades():
     trades = get_trades(limit=50)
 
-    # Build a map of the most recent BUY price per symbol for P&L computation
+    # Build maps of the most recent entry price per symbol for P&L computation
+    # In futures, entries can be buy (long) or sell (short)
     buy_prices: dict[str, float] = {}
+    sell_prices: dict[str, float] = {}
     for t in reversed(trades):  # oldest first
-        if t.get("side") == "buy" and (t.get("price") or 0) > 0:
-            buy_prices[t["symbol"]] = t["price"]
-            # Also store without/with slash variant
-            sym = t["symbol"]
-            if "/" in sym:
-                buy_prices[sym.replace("/", "")] = t["price"]
-            elif len(sym) >= 6:
-                buy_prices[sym[:3] + "/" + sym[3:]] = t["price"]
+        side = t.get("side", "")
+        price_val = t.get("price") or 0
+        if price_val <= 0:
+            continue
+        target = buy_prices if side == "buy" else sell_prices if side in ("sell", "short") else None
+        if target is None:
+            continue
+        sym = t["symbol"]
+        target[sym] = price_val
+        if "/" in sym:
+            target[sym.replace("/", "")] = price_val
+        elif len(sym) >= 6:
+            target[sym[:3] + "/" + sym[3:]] = price_val
 
     for t in trades:
         price = t.get("price") or 0
@@ -392,11 +473,8 @@ def api_trades():
         side = t.get("side", "")
 
         # Mark each trade with consistent open/closed status
-        # Sell trades are always "closed" — they represent an exit, never an open position
-        if side in ("sell", "short"):
-            t["is_open"] = False
-        else:
-            t["is_open"] = (t.get("closed_at") is None and t.get("status") != "closed")
+        # In futures trading, both buy (long) and sell/short entries can be open positions
+        t["is_open"] = (t.get("closed_at") is None and t.get("status") != "closed")
 
         # If sell trade has no P&L, compute from buy entry price
         if pnl is None and side == "sell" and price > 0 and qty > 0:
