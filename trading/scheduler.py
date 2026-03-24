@@ -1685,9 +1685,8 @@ def start_daemon(interval_hours=4, paper=False):
                     continue
                 closing_side = "sell" if side == "buy" else "buy"
                 sym = entry.get("symbol", "")
-                sym_flat = sym.replace("/", "")
-                sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
-                variants = list({sym, sym_flat, sym_slash})
+                from trading.db.store import symbol_variants
+                variants = symbol_variants(sym)
                 placeholders = ",".join("?" for _ in variants)
                 entry_ts = entry.get("timestamp", "")
                 with get_db() as db:
