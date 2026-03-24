@@ -486,6 +486,21 @@ def validate_config(test_api: bool = True) -> list[str]:
                 "Check your API keys and network connectivity."
             ) from e
 
+    # -- Strategy file existence check -----------------------------------------
+    strategy_dir = PROJECT_ROOT / "trading" / "strategy"
+    missing_strategies = []
+    for name, enabled in STRATEGY_ENABLED.items():
+        if not enabled:
+            continue
+        module_file = strategy_dir / f"{name}.py"
+        if not module_file.exists():
+            missing_strategies.append(name)
+    if missing_strategies:
+        raise ConfigError(
+            f"Enabled strategies missing files: {', '.join(missing_strategies)}. "
+            "Either disable them in STRATEGY_ENABLED or add the strategy files."
+        )
+
     return warnings
 
 # --- Leverage Configuration ---

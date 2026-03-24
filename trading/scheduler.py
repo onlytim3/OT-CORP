@@ -211,6 +211,31 @@ def run_trading_cycle():
             return
 
         # ---------------------------------------------------------------
+        # Phase 0.1: Strategy deployment pre-flight
+        # ---------------------------------------------------------------
+        from trading.strategy.registry import preflight_check
+        from trading.monitor.notifications import notify_deployment_failure
+        pf = preflight_check()
+        if not pf.passed:
+            msg = f"STRATEGY PREFLIGHT FAILED: {len(pf.missing)} missing, {len(pf.failed)} broken"
+            details = []
+            for name in pf.missing:
+                details.append(f"  MISSING: {name} — no module found")
+            for name, err in pf.failed.items():
+                details.append(f"  BROKEN: {name} — {err}")
+            detail_str = "\n".join(details)
+            log.error("%s\n%s", msg, detail_str)
+            console.print(f"[bold red]{msg}[/bold red]")
+            for line in details:
+                console.print(f"[red]{line}[/red]")
+            log_action("error", "preflight_failed", details=f"{msg}\n{detail_str}",
+                       data={"missing": pf.missing, "failed": pf.failed, "escalation": 1})
+            _notify_safe(notify_deployment_failure, pf.missing, pf.failed)
+            # Continue in degraded mode with whatever strategies loaded
+        else:
+            console.print(f"[green]Pre-flight: {len(pf.loaded)} strategies loaded OK[/green]")
+
+        # ---------------------------------------------------------------
         # Phase 0.5: Apply approved parameter adaptations
         # ---------------------------------------------------------------
         try:
