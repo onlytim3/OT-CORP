@@ -15,9 +15,12 @@ from trading.db.store import log_action, save_watermark, load_watermarks, delete
 # Profit management parameters (self-contained, not in config.py)
 # ---------------------------------------------------------------------------
 
-TAKE_PROFIT_PCT = 0.15          # Take full profit at 15% gain
-TRAILING_STOP_ACTIVATE = 0.08   # Activate trailing stop after 8% gain
-TRAILING_STOP_PCT = 0.04        # Trail 4% below the high watermark
+# Profit targets tuned for positive R:R ratio
+# At 55.6% win rate, we need avg_win > 0.8 * avg_loss to be profitable.
+# With 5% SL, trailing stop must lock in at least 5% average gain.
+TAKE_PROFIT_PCT = 0.20          # Take full profit at 20% gain (was 15%)
+TRAILING_STOP_ACTIVATE = 0.12   # Activate trailing stop after 12% gain (was 8%)
+TRAILING_STOP_PCT = 0.05        # Trail 5% below the high watermark (was 4%)
 
 console = Console()
 

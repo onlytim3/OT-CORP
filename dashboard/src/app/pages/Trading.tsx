@@ -95,13 +95,14 @@ function TradeDetailModal({ trade, onClose }: { trade: Trade | null; onClose: ()
                 ['Quantity', formatQty(trade.qty)],
                 ['Price', `$${trade.price.toFixed(2)}`],
                 ['Total', `$${trade.total.toFixed(2)}`],
-                ['P&L', trade.pnl !== null ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : 'Open'],
+                ['P&L', trade.pnl !== null && !trade.is_open ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : 'Open'],
                 ['P&L %', trade.pnl_pct !== null ? `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(2)}%` : '-'],
                 ['Leverage', trade.leverage ? `${trade.leverage}x` : '1x'],
                 ['Take Profit', trade.take_profit_price ? `$${trade.take_profit_price.toFixed(2)}` : 'None'],
                 ['Stop Loss', trade.stop_loss_price ? `$${trade.stop_loss_price.toFixed(2)}` : 'None'],
                 ['Time', new Date(trade.timestamp).toLocaleString()],
-                ['Closed', trade.closed_at ? new Date(trade.closed_at).toLocaleString() : 'Open'],
+                ['Status', trade.is_open ? 'Open' : 'Closed'],
+                ['Closed', trade.closed_at ? new Date(trade.closed_at).toLocaleString() : trade.is_open ? '-' : 'Pending sync'],
               ].map(([label, value]) => (
                 <div key={String(label)} className="p-2.5 sm:p-3 rounded-lg bg-white/5 border border-white/10">
                   <p className="text-[10px] sm:text-xs text-[#888888] mb-1">{label}</p>
@@ -215,6 +216,7 @@ export function Trading() {
                 <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
                     <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
+                    <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Status</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Qty</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Price</th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total</th>
@@ -242,15 +244,24 @@ export function Trading() {
                           )}
                         </div>
                       </td>
+                      <td className="text-center py-3 px-4">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                          t.is_open
+                            ? 'bg-[#4a9eff]/15 text-[#4a9eff] border border-[#4a9eff]/30'
+                            : 'bg-white/5 text-[#888888] border border-white/10'
+                        }`}>
+                          {t.is_open ? 'OPEN' : 'CLOSED'}
+                        </span>
+                      </td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(t.qty)}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="py-3 px-4 text-[#888888] text-sm">{t.strategy}</td>
-                      <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
-                        {t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}
+                      <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null && !t.is_open ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
+                        {t.pnl !== null && !t.is_open ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : t.is_open ? 'Active' : '-'}
                       </td>
-                      <td className={`text-right py-3 px-4 font-medium ${t.pnl_pct !== null ? (t.pnl_pct >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
-                        {t.pnl_pct !== null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%` : '-'}
+                      <td className={`text-right py-3 px-4 font-medium ${t.pnl_pct !== null && !t.is_open ? (t.pnl_pct >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>
+                        {t.pnl_pct !== null && !t.is_open ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%` : '-'}
                       </td>
                       <td className="text-right py-3 px-4 text-[#888888] text-sm">{new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
                     </tr>

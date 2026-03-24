@@ -207,7 +207,7 @@ def _performance_agent_think() -> list[dict]:
                 "target": strat_name,
                 "reasoning": (
                     f"Strategy '{strat_name}' has {win_rate*100:.0f}% win rate over "
-                    f"{len(recent)} recent trades (threshold: {get_threshold("auto_disable_win_rate")*100:.0f}%). "
+                    f"{len(recent)} recent trades (threshold: {get_threshold('auto_disable_win_rate')*100:.0f}%). "
                     f"Total P&L: ${total_pnl:+.2f}. Auto-disabling to protect capital."
                 ),
                 "data": {
@@ -230,7 +230,7 @@ def _performance_agent_think() -> list[dict]:
                 "reasoning": (
                     f"Strategy '{strat_name}' has lost {loss_pct*100:.1f}% of deployed capital "
                     f"(${total_pnl:+.2f} on ${total_deployed:.0f} deployed). "
-                    f"Exceeds {get_threshold("auto_disable_max_loss_pct")*100:.0f}% loss threshold. Auto-disabling."
+                    f"Exceeds {get_threshold('auto_disable_max_loss_pct')*100:.0f}% loss threshold. Auto-disabling."
                 ),
                 "data": {
                     "loss_pct": round(loss_pct, 4),
@@ -314,7 +314,7 @@ def _risk_agent_think() -> list[dict]:
             "reasoning": (
                 f"CRITICAL: Portfolio drawdown at {drawdown*100:.1f}% "
                 f"(current: ${current_value:.0f}, peak: ${peak_value:.0f}). "
-                f"Exceeds {get_threshold("drawdown_halt_threshold")*100:.0f}% threshold. "
+                f"Exceeds {get_threshold('drawdown_halt_threshold')*100:.0f}% threshold. "
                 f"Recommending emergency halt — disable all strategies until review."
             ),
             "data": {
@@ -335,7 +335,7 @@ def _risk_agent_think() -> list[dict]:
             "target": "risk_params",
             "reasoning": (
                 f"Portfolio drawdown at {drawdown*100:.1f}% "
-                f"(threshold: {get_threshold("drawdown_tighten_threshold")*100:.0f}%). "
+                f"(threshold: {get_threshold('drawdown_tighten_threshold')*100:.0f}%). "
                 f"Tightening: reduce max_position_pct, increase cash reserve, "
                 f"tighten stop losses. Will revert when drawdown recovers."
             ),
@@ -824,9 +824,9 @@ def _backtest_agent_think() -> list[dict]:
                 verdict = "adopt"
                 reasoning = (
                     f"Backtest PASSED for '{strategy_name}': "
-                    f"win_rate={win_rate*100:.0f}% (≥{get_threshold("backtest_adopt_win_rate")*100:.0f}%), "
-                    f"Sharpe={sharpe:.2f} (≥{get_threshold("backtest_adopt_sharpe")}), "
-                    f"max_dd={max_dd*100:.1f}% (≤{get_threshold("backtest_adopt_max_dd")*100:.0f}%), "
+                    f"win_rate={win_rate*100:.0f}% (≥{get_threshold('backtest_adopt_win_rate')*100:.0f}%), "
+                    f"Sharpe={sharpe:.2f} (≥{get_threshold('backtest_adopt_sharpe')}), "
+                    f"max_dd={max_dd*100:.1f}% (≤{get_threshold('backtest_adopt_max_dd')*100:.0f}%), "
                     f"{total_trades} trades over {BACKTEST_LOOKBACK_DAYS} days. "
                     f"Recommending auto-enable."
                 )
@@ -983,18 +983,46 @@ def _evaluate_outcomes():
                     outcome = "positive" if strat_pnl > 0 else "negative"
 
             elif action == "adjust_threshold":
-                # Positive — we trust the learning agent's direction for now
-                # (outcome evaluated on next meta_analysis cycle)
-                outcome = "positive"
+                # Check if the threshold is still set to the expected value
+                param = data.get("param", "")
+                expected = data.get("new_value")
+                if param and expected is not None:
+                    actual = get_threshold(param) if param in _THRESHOLDS else None
+                    if actual is not None and abs(actual - expected) < 0.001:
+                        outcome = "positive"
+                    else:
+                        outcome = "negative"
+                else:
+                    outcome = "positive"  # No specific param to verify
 
             elif action in ("implement_strategy", "coverage_gap"):
-                # Strategy was built — positive if file exists
-                outcome = "positive"
+                # Verify the strategy file actually exists
+                from pathlib import Path
+                strat_dir = Path(__file__).resolve().parent.parent / "strategy"
+                snake = target.lower().replace(" ", "_").replace("-", "_")
+                if (strat_dir / f"{snake}.py").exists():
+                    outcome = "positive"
+                else:
+                    outcome = "negative"
 
-            elif action in ("reduce_budget", "increase_budget", "event_risk",
-                            "concentration_warning", "defensive_posture"):
-                # Risk management — positive if no further escalation needed
-                outcome = "positive"
+            elif action in ("reduce_budget", "increase_budget"):
+                # Verify budget was actually changed
+                try:
+                    from trading.risk.portfolio import STRATEGY_BUDGETS
+                    expected_budget = data.get("new_budget")
+                    actual_budget = STRATEGY_BUDGETS.get(target)
+                    if expected_budget and actual_budget and abs(actual_budget - expected_budget) < 0.001:
+                        outcome = "positive"
+                    elif not expected_budget:
+                        outcome = "positive"  # No specific value to verify
+                    else:
+                        outcome = "negative"
+                except ImportError:
+                    outcome = "positive"
+
+            elif action in ("event_risk", "concentration_warning", "defensive_posture"):
+                # Risk management — positive if drawdown hasn't worsened
+                outcome = "positive" if current_drawdown < get_threshold("drawdown_halt_threshold") else "negative"
 
             if outcome:
                 update_recommendation_outcome(rec["id"], outcome)
@@ -1069,8 +1097,9 @@ def _verify_previous_actions() -> list[dict]:
 
             elif action == "implement_strategy":
                 # Check if the strategy file was actually generated
-                import pathlib
-                strat_dir = pathlib.Path("trading/strategies")
+                # Use the same absolute path as the builder (STRATEGY_DIR)
+                from pathlib import Path
+                strat_dir = Path(__file__).resolve().parent.parent / "strategy"
                 snake = target.lower().replace(" ", "_").replace("-", "_")
                 expected_file = strat_dir / f"{snake}.py"
                 if not expected_file.exists():
@@ -1083,6 +1112,12 @@ def _verify_previous_actions() -> list[dict]:
 
         if not verified:
             log.warning("VERIFY FAILED: %s on '%s' — %s", action, target, failure_reason)
+            # Update the original recommendation's outcome to reflect verification failure
+            try:
+                from trading.db.store import update_recommendation_outcome
+                update_recommendation_outcome(rec["id"], "negative")
+            except Exception:
+                pass
             followups.append({
                 "from_agent": EXECUTOR_AGENT,
                 "to_agent": EXECUTOR_AGENT,
@@ -1370,19 +1405,22 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 # Build the strategy immediately instead of deferring
                 built = False
                 try:
-                    from trading.intelligence.strategy_builder import generate_strategy_code
-                    spec = {
-                        "name": target,
-                        "category": data.get("category", "trend_following"),
-                        "description": rec["reasoning"],
-                        "data_needed": data.get("data_needed", []),
-                        "priority": data.get("priority", 5),
-                    }
-                    gen = generate_strategy_code(spec)
-                    if gen and gen.get("file"):
+                    from trading.intelligence.strategy_builder import generate_strategy_code, STRATEGY_DIR
+                    code = generate_strategy_code(
+                        strategy_name=target,
+                        description=rec["reasoning"],
+                        category=data.get("category", "trend_following"),
+                        priority=data.get("priority", 5),
+                        data_needed=", ".join(data.get("data_needed", [])) if isinstance(data.get("data_needed"), list) else data.get("data_needed", "OHLCV"),
+                    )
+                    if code:
+                        # Write the generated code to the strategy directory
+                        snake = target.lower().replace(" ", "_").replace("-", "_")
+                        out_path = STRATEGY_DIR / f"{snake}.py"
+                        out_path.write_text(code)
                         built = True
-                        result = f"Strategy '{target}' built → {gen['file']} (disabled, awaiting backtest)"
-                        log.info("STRATEGY BUILT: %s → %s", target, gen["file"])
+                        result = f"Strategy '{target}' built → {out_path} (disabled, awaiting backtest)"
+                        log.info("STRATEGY BUILT: %s → %s", target, out_path)
                 except Exception as e:
                     log.warning("Strategy build failed for '%s': %s", target, e)
 

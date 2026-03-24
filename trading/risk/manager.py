@@ -685,9 +685,11 @@ def compute_trade_targets(
     # Clamp SL between 1.5% and 15%
     effective_sl_pct = max(0.015, min(effective_sl_pct, 0.15))
 
-    # Take profit — at least 2:1 reward-to-risk ratio
+    # Take profit — at least 3:1 reward-to-risk ratio
+    # At 55% win rate, 3:1 R:R gives positive expectancy:
+    # EV = 0.55 * 3R - 0.45 * 1R = +1.2R per trade
     base_tp_pct = TAKE_PROFIT_PCT
-    min_tp_from_rr = effective_sl_pct * 2.0  # 2:1 R:R minimum
+    min_tp_from_rr = effective_sl_pct * 3.0  # 3:1 R:R minimum (was 2:1)
     effective_tp_pct = max(base_tp_pct, min_tp_from_rr)
 
     # Trailing stop activation
