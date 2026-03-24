@@ -19,6 +19,7 @@ from trading.db.store import (
     init_db, get_db, get_trades, get_positions, get_daily_pnl,
     get_signals, get_action_log, get_action_log_summary,
     get_journal, get_reviews, get_setting, get_open_trades,
+    symbol_variants,
 )
 from trading.execution.router import get_account, get_positions_from_aster as get_positions_from_alpaca
 
@@ -116,10 +117,7 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
         held: set[str] = set()
         for p in broker_positions:
             sym = p.get("symbol", "")
-            held.add(sym)
-            held.add(sym.replace("/", ""))
-            if "/" not in sym and len(sym) >= 6:
-                held.add(sym[:3] + "/" + sym[3:])
+            held.update(symbol_variants(sym))
 
         if not open_trades:
             return 0
@@ -133,8 +131,7 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
                 continue
 
             sym = t.get("symbol", "")
-            sym_flat = sym.replace("/", "")
-            symbol_held = sym in held or sym_flat in held
+            symbol_held = any(v in held for v in symbol_variants(sym))
 
             # The opposite side closes this entry
             closing_side = "sell" if side == "buy" else "buy"
@@ -143,8 +140,7 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
             # Look for an opposite-side trade that happened AFTER this entry
             try:
                 with get_db() as conn:
-                    sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
-                    variants = list({sym, sym_flat, sym_slash})
+                    variants = symbol_variants(sym)
                     placeholders = ",".join("?" for _ in variants)
                     row = conn.execute(
                         f"SELECT price, timestamp FROM trades WHERE symbol IN ({placeholders}) "
@@ -217,9 +213,7 @@ def _add_position_ages(positions: list) -> list:
         with get_db() as conn:
             for p in positions:
                 sym = p["symbol"]
-                sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
-                sym_flat = sym.replace("/", "")
-                variants = list({sym, sym_slash, sym_flat})
+                variants = symbol_variants(sym)
                 placeholders = ",".join("?" for _ in variants)
 
                 # Try 1: earliest open buy trade (not closed)
@@ -458,12 +452,8 @@ def api_trades():
         target = buy_prices if side == "buy" else sell_prices if side in ("sell", "short") else None
         if target is None:
             continue
-        sym = t["symbol"]
-        target[sym] = price_val
-        if "/" in sym:
-            target[sym.replace("/", "")] = price_val
-        elif len(sym) >= 6:
-            target[sym[:3] + "/" + sym[3:]] = price_val
+        for v in symbol_variants(t["symbol"]):
+            target[v] = price_val
 
     for t in trades:
         price = t.get("price") or 0
@@ -505,9 +495,7 @@ def api_position_detail(symbol):
     from trading.risk.profit_manager import TAKE_PROFIT_PCT, TRAILING_STOP_ACTIVATE, TRAILING_STOP_PCT
 
     # Normalize: allow both BTCUSD and BTC/USD lookups
-    symbol_slash = symbol[:3] + "/" + symbol[3:] if "/" not in symbol and len(symbol) >= 6 else symbol
-    symbol_flat = symbol.replace("/", "")
-    match_symbols = list({symbol, symbol_slash, symbol_flat})
+    match_symbols = symbol_variants(symbol)
 
     # Current position from Alpaca
     positions = _safe_positions()
@@ -682,7 +670,7 @@ def api_trade_detail(trade_id):
         signals = []
         if trade.get("symbol") and trade.get("timestamp"):
             sym = trade["symbol"]
-            sym_variants = list({sym, sym.replace("/", ""), sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym})
+            sym_variants = symbol_variants(sym)
             placeholders = ",".join("?" for _ in sym_variants)
             signals = [dict(r) for r in conn.execute(
                 f"SELECT * FROM signals WHERE symbol IN ({placeholders}) "
@@ -738,7 +726,7 @@ def api_signal_detail(signal_id):
         related_trades = []
         if sig.get("symbol") and sig.get("timestamp"):
             sym = sig["symbol"]
-            sym_variants = list({sym, sym.replace("/", ""), sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym})
+            sym_variants = symbol_variants(sym)
             placeholders = ",".join("?" for _ in sym_variants)
             related_trades = [dict(r) for r in conn.execute(
                 f"SELECT * FROM trades WHERE symbol IN ({placeholders}) "
