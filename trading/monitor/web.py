@@ -94,10 +94,13 @@ def _safe_positions():
 def _reconcile_orphan_trades(broker_positions: list) -> int:
     """Close stale open buy trades that should have been paired with a sell.
 
-    Handles two scenarios:
+    Handles three scenarios:
     1. Symbol no longer held at broker — the position was fully exited.
     2. Symbol IS still held but there's a sell trade AFTER this buy in the DB
        (e.g. the symbol was sold and re-bought, leaving old buys orphaned).
+    3. Symbol IS still held, no sell recorded, but a NEWER buy exists for the
+       same symbol — the old buy is from a previous entry that was closed
+       before sell tracking was added (pre-update trades).
 
     Returns the number of orphan trades closed.
     """
@@ -147,7 +150,28 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
                 row = None
 
             if symbol_held and not row:
-                # Symbol still at broker and no sell after this buy — genuinely open
+                # Check for a NEWER buy for the same symbol — if one exists, this
+                # old buy is from a previous entry that was closed before sell
+                # tracking was added (pre-update trades).
+                try:
+                    with get_db() as conn2:
+                        newer_buy = conn2.execute(
+                            f"SELECT id FROM trades WHERE symbol IN ({placeholders}) "
+                            f"AND side='buy' AND timestamp > ? AND id != ? LIMIT 1",
+                            variants + [buy_ts, t["id"]],
+                        ).fetchone()
+                except Exception:
+                    newer_buy = None
+
+                if not newer_buy:
+                    # Symbol still at broker, no sell after, no newer buy — genuinely open
+                    continue
+                # Old buy predates a re-entry — close at entry price (unknown exit)
+                exit_price = t.get("price") or 0
+                pnl = 0.0
+                close_trade(t["id"], exit_price, round(pnl, 2))
+                closed += 1
+                log.info("Reconciled stale re-entry orphan #%d %s", t["id"], t.get("symbol"))
                 continue
 
             # Either the symbol is gone from broker, or there's a sell after this buy
