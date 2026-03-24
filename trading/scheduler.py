@@ -1720,6 +1720,28 @@ def start_daemon(interval_hours=4, paper=False):
     except Exception as e:
         log.error("Orphan cleanup v2 failed: %s", e)
 
+    # -----------------------------------------------------------------------
+    # One-time cleanup v3 — fix stale trades caused by symbol format mismatch.
+    # Entries stored as "AVAX/USD" but exits as "AVAXUSD" were never paired.
+    # Uses pair_trades() with normalized bucketing + broker position check.
+    # -----------------------------------------------------------------------
+    try:
+        if not get_setting("orphan_cleanup_v3_done"):
+            log.info("Running one-time orphan cleanup v3 (symbol format mismatch)...")
+            from trading.execution.sync import pair_trades
+            paired = pair_trades()
+            # Also reconcile against current broker positions
+            try:
+                positions = _get_positions()
+                from trading.monitor.web import _reconcile_orphan_trades
+                reconciled = _reconcile_orphan_trades(positions)
+            except Exception:
+                reconciled = 0
+            set_setting("orphan_cleanup_v3_done", "true")
+            log.info("Orphan cleanup v3 complete: paired %d, reconciled %d", paired, reconciled)
+    except Exception as e:
+        log.error("Orphan cleanup v3 failed: %s", e)
+
     # Run startup validation backtest (if enabled)
     _run_startup_validation()
 
