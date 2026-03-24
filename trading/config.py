@@ -449,6 +449,12 @@ def validate_config(test_api: bool = True) -> list[str]:
             f"TRADING_MODE must be 'paper' or 'live', got '{TRADING_MODE}'"
         )
 
+    if TRADING_MODE == "live" and "paper-api" in ALPACA_BASE_URL:
+        raise ConfigError(
+            "TRADING_MODE is 'live' but ALPACA_BASE_URL points to paper API. "
+            "Set ALPACA_BASE_URL to 'https://api.alpaca.markets' for live trading."
+        )
+
     # -- Optional but warned --------------------------------------------------
     if not ALPACA_API_KEY:
         warnings.append(

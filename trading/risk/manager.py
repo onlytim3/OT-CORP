@@ -154,27 +154,35 @@ class RiskManager:
         self.account = account or {}
 
     def check_trade(self, signal: Signal, order_value: float) -> RiskCheck:
-        """Run all risk checks on a proposed trade. Returns RiskCheck."""
+        """Run all risk checks on a proposed trade. Returns RiskCheck.
+
+        Checks are evaluated lazily — the first failure short-circuits so
+        later checks (which may need DB access) are never called.
+        """
         # Fetch positions ONCE — avoids N+1 queries across sub-checks
-        positions = get_positions()
+        try:
+            positions = get_positions()
+        except Exception:
+            positions = []
 
         checks = [
-            self._check_account_status(),
-            self._check_buying_power(order_value),
-            self._check_volume(signal),
-            self._check_liquidity(signal, order_value),
-            self._check_position_size(signal, order_value, positions),
-            self._check_crypto_exposure(signal, order_value, positions),
-            self._check_correlation_group(signal, order_value, positions),
-            self._check_directional_exposure(signal, order_value, positions),
-            self._check_daily_loss(),
-            self._check_max_drawdown(),
-            self._check_cash_reserve(order_value, positions),
-            self._check_trade_count(),
-            self._check_total_leverage_risk(signal, order_value),
-            self._check_sector_exposure(signal, order_value),
+            lambda: self._check_account_status(),
+            lambda: self._check_buying_power(order_value),
+            lambda: self._check_volume(signal),
+            lambda: self._check_liquidity(signal, order_value),
+            lambda: self._check_position_size(signal, order_value, positions),
+            lambda: self._check_crypto_exposure(signal, order_value, positions),
+            lambda: self._check_correlation_group(signal, order_value, positions),
+            lambda: self._check_directional_exposure(signal, order_value, positions),
+            lambda: self._check_daily_loss(),
+            lambda: self._check_max_drawdown(),
+            lambda: self._check_cash_reserve(order_value, positions),
+            lambda: self._check_trade_count(),
+            lambda: self._check_total_leverage_risk(signal, order_value),
+            lambda: self._check_sector_exposure(signal, order_value),
         ]
-        for check in checks:
+        for check_fn in checks:
+            check = check_fn()
             if not check.allowed:
                 log.warning("Risk blocked %s %s: %s", signal.action, signal.symbol, check.reason)
                 return check
