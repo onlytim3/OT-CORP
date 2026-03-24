@@ -691,13 +691,20 @@ def run_trading_cycle():
                 except Exception as llm_err:
                     log.debug("LLM entry reasoning failed (using template): %s", llm_err)
 
+                # Use the primary contributing strategy instead of "aggregator"
+                trade_strategy = signal.strategy
+                if trade_strategy == "aggregator" and hasattr(signal, "data") and signal.data:
+                    contributors = signal.data.get("contributing_strategies", [])
+                    if contributors:
+                        trade_strategy = contributors[0]  # Highest-strength contributor is first
+
                 trade_id = insert_trade(
                     symbol=signal.symbol,
                     side=signal.action,
                     qty=qty_f,
                     price=price_f,
                     total=price_f * qty_f if (price_f and qty_f) else order_value,
-                    strategy=signal.strategy,
+                    strategy=trade_strategy,
                     status=order["status"],
                     alpaca_order_id=order.get("id"),
                     stop_loss_price=stop_loss_price,

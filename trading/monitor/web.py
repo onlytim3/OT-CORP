@@ -14,7 +14,7 @@ try:
 except ImportError:
     _CORS = None
 
-from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TIMEZONE
+from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TIMEZONE, STRATEGY_ENABLED
 from trading.db.store import (
     init_db, get_db, get_trades, get_positions, get_daily_pnl,
     get_signals, get_action_log, get_action_log_summary,
@@ -314,24 +314,63 @@ def api_status():
     # Reconcile orphan trades — close buy trades for positions no longer at broker
     _reconcile_orphan_trades(raw_positions)
 
-    # Enrich positions with leverage from their opening trades
+    # Enrich positions with leverage and strategy from their opening trades
     try:
         trades = get_trades(limit=200)
-        # Build map: symbol → max leverage from recent trades
+        # Build maps: symbol → max leverage, symbol → strategy
         symbol_leverage: dict[str, int] = {}
+        symbol_strategy: dict[str, str] = {}
         for t in trades:
+            sym = t.get("symbol", "")
+            sym_flat = sym.replace("/", "")
+            # Leverage: keep the highest
             lev = t.get("leverage")
             if lev and lev > 1:
-                sym = t.get("symbol", "")
-                # Store the leverage, keep the highest if multiple trades
-                sym_flat = sym.replace("/", "")
                 symbol_leverage[sym] = max(symbol_leverage.get(sym, 1), lev)
                 symbol_leverage[sym_flat] = max(symbol_leverage.get(sym_flat, 1), lev)
+            # Strategy: use the most recent open buy trade's strategy
+            # If "aggregator", try to extract the primary contributing strategy
+            if t.get("side") == "buy" and not t.get("closed_at"):
+                strat = t.get("strategy", "")
+                if strat and sym not in symbol_strategy:
+                    # Try to get contributing strategies from entry_reasoning
+                    if strat == "aggregator":
+                        reasoning = t.get("entry_reasoning", "") or ""
+                        # Extract first strategy name from reasoning (format: "Strategy: foo, bar")
+                        for known in STRATEGY_ENABLED:
+                            if known.replace("_", " ") in reasoning.lower() or known in reasoning.lower():
+                                strat = known
+                                break
+                    symbol_strategy[sym] = strat
+                    symbol_strategy[sym_flat] = strat
         for pos in positions:
             psym = pos.get("symbol", "")
-            lev = symbol_leverage.get(psym) or symbol_leverage.get(psym.replace("/", ""))
+            psym_flat = psym.replace("/", "")
+            lev = symbol_leverage.get(psym) or symbol_leverage.get(psym_flat)
             if lev and lev > 1:
                 pos["leverage"] = lev
+            # Fill in strategy if broker returned empty
+            if not pos.get("strategy"):
+                strat = symbol_strategy.get(psym) or symbol_strategy.get(psym_flat)
+                if strat:
+                    pos["strategy"] = strat
+    except Exception:
+        pass
+
+    # Merge with DB positions for any fields the broker doesn't provide
+    try:
+        db_positions = get_positions()
+        db_by_symbol: dict[str, dict] = {}
+        for dbp in db_positions:
+            sym = dbp.get("symbol", "")
+            db_by_symbol[sym] = dbp
+            db_by_symbol[sym.replace("/", "")] = dbp
+        for pos in positions:
+            psym = pos.get("symbol", "")
+            dbp = db_by_symbol.get(psym) or db_by_symbol.get(psym.replace("/", ""))
+            if dbp:
+                if not pos.get("strategy") and dbp.get("strategy"):
+                    pos["strategy"] = dbp["strategy"]
     except Exception:
         pass
 

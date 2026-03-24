@@ -66,19 +66,26 @@ def sync_positions() -> int:
     broker_symbols: set[str] = set()
 
     # Map symbol -> strategy from open trades so we can tag positions.
+    # Handle format mismatches: trades may have "BTC/USD", broker returns "BTCUSD"
     open_trades = get_open_trades()
     strategy_by_symbol: dict[str, str] = {}
     for trade in open_trades:
-        sym = trade.get("symbol")
-        strat = trade.get("strategy")
-        if sym and strat and sym not in strategy_by_symbol:
-            strategy_by_symbol[sym] = strat
+        sym = trade.get("symbol", "")
+        strat = trade.get("strategy", "")
+        if sym and strat:
+            sym_flat = sym.replace("/", "")
+            if sym not in strategy_by_symbol:
+                strategy_by_symbol[sym] = strat
+            if sym_flat not in strategy_by_symbol:
+                strategy_by_symbol[sym_flat] = strat
 
     synced = 0
     for pos in broker_positions:
         symbol = pos["symbol"]
         broker_symbols.add(symbol)
-        strategy = strategy_by_symbol.get(symbol, "unknown")
+        strategy = (strategy_by_symbol.get(symbol)
+                     or strategy_by_symbol.get(symbol.replace("/", ""))
+                     or "unknown")
 
         try:
             upsert_position(
