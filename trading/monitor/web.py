@@ -92,12 +92,12 @@ def _safe_positions():
 
 
 def _reconcile_orphan_trades(broker_positions: list) -> int:
-    """Close open buy trades whose symbol no longer exists at the broker.
+    """Close stale open buy trades that should have been paired with a sell.
 
-    This catches the edge case where a position was closed (stop-loss,
-    take-profit, manual) but ``pair_trades()`` hasn't run yet, leaving
-    the buy trade as 'open' in the trades table while the recent trades
-    table already shows the sell.
+    Handles two scenarios:
+    1. Symbol no longer held at broker — the position was fully exited.
+    2. Symbol IS still held but there's a sell trade AFTER this buy in the DB
+       (e.g. the symbol was sold and re-bought, leaving old buys orphaned).
 
     Returns the number of orphan trades closed.
     """
@@ -115,35 +115,46 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
             if "/" not in sym and len(sym) >= 6:
                 held.add(sym[:3] + "/" + sym[3:])
 
-        # Find open buy trades for symbols no longer at broker
-        orphan_buys = [
+        open_buys = [
             t for t in open_trades
             if t.get("side", "").lower() == "buy"
-            and t.get("symbol", "") not in held
-            and t.get("symbol", "").replace("/", "") not in held
         ]
 
-        if not orphan_buys:
+        if not open_buys:
             return 0
 
         from trading.db.store import close_trade
         closed = 0
-        for t in orphan_buys:
-            # Use the most recent sell price for this symbol from DB, or mark as zero P&L
+
+        for t in open_buys:
+            sym = t.get("symbol", "")
+            sym_flat = sym.replace("/", "")
+            symbol_held = sym in held or sym_flat in held
+
+            # Look for a sell trade for this symbol that happened AFTER this buy
             try:
                 with get_db() as conn:
-                    sym = t["symbol"]
-                    sym_flat = sym.replace("/", "")
                     sym_slash = sym[:3] + "/" + sym[3:] if "/" not in sym and len(sym) >= 6 else sym
                     variants = list({sym, sym_flat, sym_slash})
                     placeholders = ",".join("?" for _ in variants)
+                    buy_ts = t.get("timestamp", "")
                     row = conn.execute(
-                        f"SELECT price FROM trades WHERE symbol IN ({placeholders}) "
-                        f"AND side='sell' ORDER BY timestamp DESC LIMIT 1",
-                        variants,
+                        f"SELECT price, timestamp FROM trades WHERE symbol IN ({placeholders}) "
+                        f"AND side='sell' AND timestamp > ? ORDER BY timestamp ASC LIMIT 1",
+                        variants + [buy_ts],
                     ).fetchone()
-                exit_price = row["price"] if row and row["price"] else (t.get("price") or 0)
             except Exception:
+                row = None
+
+            if symbol_held and not row:
+                # Symbol still at broker and no sell after this buy — genuinely open
+                continue
+
+            # Either the symbol is gone from broker, or there's a sell after this buy
+            if row and row["price"]:
+                exit_price = row["price"]
+            else:
+                # No sell found — use entry price (zero P&L) for broker-gone positions
                 exit_price = t.get("price") or 0
 
             buy_price = t.get("price") or 0
@@ -381,7 +392,11 @@ def api_trades():
         side = t.get("side", "")
 
         # Mark each trade with consistent open/closed status
-        t["is_open"] = (t.get("closed_at") is None and t.get("status") != "closed")
+        # Sell trades are always "closed" — they represent an exit, never an open position
+        if side in ("sell", "short"):
+            t["is_open"] = False
+        else:
+            t["is_open"] = (t.get("closed_at") is None and t.get("status") != "closed")
 
         # If sell trade has no P&L, compute from buy entry price
         if pnl is None and side == "sell" and price > 0 and qty > 0:
