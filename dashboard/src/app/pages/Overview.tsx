@@ -392,8 +392,8 @@ export function Overview() {
               <table className="w-full">
                 <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
-                    {['Symbol', 'Strategy', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Age'].map(h => (
-                      <th key={h} className={`${h === 'Symbol' || h === 'Strategy' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>
+                    {['Symbol', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Age'].map(h => (
+                      <th key={h} className={`${h === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -415,7 +415,6 @@ export function Overview() {
                           )}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-[#888888] text-sm">{findMatchingTrade(pos.symbol)?.strategy || '-'}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
                       <td className={`text-right py-3 px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
                         {(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${(pos.unrealized_pnl || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
