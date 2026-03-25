@@ -4,7 +4,7 @@ import { Badge } from "../components/ui/badge";
 import { MetricCard } from "../components/MetricCard";
 import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart } from "lucide-react";
 import { useState, useEffect } from "react";
-import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure } from "../config/api";
+import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure, type Trade, type TradeAnalysis } from "../config/api";
 
 function formatQty(qty: number): string {
   if (qty === 0) return '0';
@@ -164,13 +164,37 @@ function ActivityDetailModal({ activity, onClose }: { activity: ActionItem | nul
   );
 }
 
+function renderReasoning(text: string) {
+  const segments = text.includes(' | ')
+    ? text.split(' | ').map(s => s.trim()).filter(Boolean)
+    : text.split(/\n\n+/).map(s => s.trim()).filter(Boolean);
+
+  return segments.map((segment, i) => {
+    const highlighted = segment
+      .replace(/(\$[\d,.]+)/g, '<span class="text-[#00d4aa] font-medium">$1</span>')
+      .replace(/([\d.]+%)/g, '<span class="text-[#4a9eff] font-medium">$1</span>')
+      .replace(/\b(strength:?\s*[\d.]+)\b/gi, '<span class="text-[#ffa500]">$1</span>');
+
+    return (
+      <p
+        key={i}
+        className={`text-sm leading-relaxed ${i === 0 ? 'text-[#e8e8e8]' : 'text-[#c0c0c0]'}`}
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+      />
+    );
+  });
+}
+
 export function Overview() {
   const { data: status, loading } = usePolling<StatusResponse>(api.status, 10000);
   const { data: actions } = usePolling<ActionItem[]>(api.actions, 15000);
   const { data: leverageData } = usePolling<AggregatedLeverage>(api.leverage, 15000);
   const { data: sectors } = usePolling<SectorExposure[]>(api.sectors, 30000);
+  const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
   const [selectedPosition, setSelectedPosition] = useState<StatusResponse['positions'][0] | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<ActionItem | null>(null);
+  const [positionAnalyses, setPositionAnalyses] = useState<TradeAnalysis[]>([]);
+  const [loadingAnalyses, setLoadingAnalyses] = useState(false);
 
   const account = status?.account;
   const positions = status?.positions || [];
@@ -187,6 +211,28 @@ export function Overview() {
     ? (account?.portfolio_value ? (positionPnl / account.portfolio_value) * 100 : 0)
     : (pnlSnapshot?.cumulative_return ? pnlSnapshot.cumulative_return * 100 : 0);
   const isMock = isUsingMockData();
+
+  // Find matching open trade for a position
+  const findMatchingTrade = (symbol: string): Trade | undefined =>
+    trades?.find(t => t.symbol === symbol && t.is_open);
+
+  // Fetch analyses when a position is selected
+  useEffect(() => {
+    if (selectedPosition) {
+      const match = findMatchingTrade(selectedPosition.symbol);
+      if (match) {
+        setLoadingAnalyses(true);
+        fetchAPI<TradeAnalysis[]>(api.tradeAnalyses(match.id))
+          .then(setPositionAnalyses)
+          .catch(() => setPositionAnalyses([]))
+          .finally(() => setLoadingAnalyses(false));
+      } else {
+        setPositionAnalyses([]);
+      }
+    } else {
+      setPositionAnalyses([]);
+    }
+  }, [selectedPosition]);
 
   if (loading && !status) {
     return (
@@ -390,31 +436,88 @@ export function Overview() {
 
       {/* Position Detail Modal */}
       <Dialog open={!!selectedPosition} onOpenChange={() => setSelectedPosition(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-xl sm:text-2xl flex items-center gap-3">
               <div className="p-2 rounded-lg bg-[#4a9eff]/15 border border-[#4a9eff]/30">
                 <TrendingUp className="size-5 sm:size-6 text-[#4a9eff]" />
               </div>
               {selectedPosition?.symbol}
+              {(() => {
+                const match = selectedPosition ? findMatchingTrade(selectedPosition.symbol) : undefined;
+                return match?.strategy ? (
+                  <span className="text-sm font-normal text-[#888888] bg-white/5 px-2 py-0.5 rounded-md">{match.strategy}</span>
+                ) : null;
+              })()}
             </DialogTitle>
           </DialogHeader>
           {selectedPosition && (
-            <div className="grid grid-cols-2 gap-2 sm:gap-4 mt-2 sm:mt-4">
-              {[
-                ['Quantity', selectedPosition.qty],
-                ['Entry', `$${(selectedPosition.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
-                ['Current', `$${(selectedPosition.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
-                ['Market Value', `$${(selectedPosition.market_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
-                ['P&L', `${(selectedPosition.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(selectedPosition.unrealized_pnl || 0).toFixed(2)}`],
-                ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
-                ['Age', selectedPosition.age || 'N/A'],
-              ].map(([label, value]) => (
-                <div key={String(label)} className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
-                  <p className="text-xs sm:text-sm text-[#888888] mb-1">{label}</p>
-                  <p className="text-base sm:text-lg font-bold">{value}</p>
+            <div className="space-y-4 mt-2 sm:mt-4">
+              <div className="grid grid-cols-2 gap-2 sm:gap-4">
+                {[
+                  ['Quantity', selectedPosition.qty],
+                  ['Entry', `$${(selectedPosition.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+                  ['Current', `$${(selectedPosition.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+                  ['Market Value', `$${(selectedPosition.market_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+                  ['P&L', `${(selectedPosition.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(selectedPosition.unrealized_pnl || 0).toFixed(2)}`],
+                  ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
+                  ['Age', selectedPosition.age || 'N/A'],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
+                    <p className="text-xs sm:text-sm text-[#888888] mb-1">{label}</p>
+                    <p className="text-base sm:text-lg font-bold">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Trade Rationale */}
+              {(() => {
+                const match = findMatchingTrade(selectedPosition.symbol);
+                if (!match?.entry_reasoning) return null;
+                return (
+                  <div className="rounded-lg bg-white/5 border border-white/10 overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-white/5">
+                      <p className="text-xs text-[#888888] font-medium uppercase tracking-wider">Trade Rationale</p>
+                    </div>
+                    <div className="px-4 py-3 space-y-2">
+                      {renderReasoning(match.entry_reasoning)}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Live Analysis Updates */}
+              {(positionAnalyses.length > 0 || loadingAnalyses) && (
+                <div className="rounded-lg bg-white/5 border border-white/10 p-4">
+                  <p className="text-xs text-[#888888] font-medium uppercase tracking-wider mb-3">Live Analysis Updates</p>
+                  {loadingAnalyses ? (
+                    <p className="text-sm text-[#888888] animate-pulse">Loading analysis...</p>
+                  ) : (
+                    <div className="space-y-2.5 max-h-48 overflow-y-auto">
+                      {positionAnalyses.map(a => (
+                        <div key={a.id} className="p-3 rounded-lg bg-black/30 border border-white/5">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <p className="text-[10px] text-[#888888]">
+                              {new Date(a.timestamp).toLocaleString()}
+                            </p>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                              a.source === 'position_review_agent' ? 'bg-[#c084fc]/10 text-[#c084fc]' :
+                              a.source === '12h_cycle' ? 'bg-[#4a9eff]/10 text-[#4a9eff]' :
+                              a.source === 'static_fallback' ? 'bg-[#888888]/10 text-[#888888]' :
+                              'bg-[#00d4aa]/10 text-[#00d4aa]'
+                            }`}>
+                              {a.source === 'position_review_agent' ? 'Agent Review' :
+                               a.source === '12h_cycle' ? 'AI Analysis' :
+                               a.source === 'static_fallback' ? 'Auto' : 'LLM'}
+                            </span>
+                          </div>
+                          <p className="text-sm text-[#c0c0c0] leading-relaxed">{a.analysis}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </DialogContent>
