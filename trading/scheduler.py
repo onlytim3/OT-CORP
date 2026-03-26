@@ -181,7 +181,11 @@ def run_trading_cycle():
     else:
         _cycle_trading_mode = _cfg.TRADING_MODE
 
-    # Apply operator overrides (strategy enable/disable, risk params)
+    # Restore autonomous state FIRST so emergency halts persist across cycles
+    from trading.intelligence.autonomous import load_persisted_state
+    load_persisted_state()
+
+    # Apply operator overrides (can layer on top of autonomous state)
     from trading.monitor.operator_hooks import apply_strategy_overrides, apply_risk_overrides
     apply_strategy_overrides()
     apply_risk_overrides()
