@@ -2,9 +2,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Badge } from "../components/ui/badge";
 import { MetricCard } from "../components/MetricCard";
-import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart } from "lucide-react";
+import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart, Volume2, ShieldAlert } from "lucide-react";
 import { useState, useEffect } from "react";
-import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure, type Trade, type TradeAnalysis } from "../config/api";
+import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
 
 function formatQty(qty: number): string {
   if (qty === 0) return '0';
@@ -185,12 +185,30 @@ function renderReasoning(text: string) {
   });
 }
 
+function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
+  const pct = Math.min(ratio * 100, 200);
+  const color = ratio >= 0.8 ? '#00d4aa' : ratio >= 0.3 ? '#ffa500' : '#ff4466';
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-[#888888]">{label}</span>
+        <span style={{ color }}>{(ratio * 100).toFixed(0)}%</span>
+      </div>
+      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: color }} />
+      </div>
+    </div>
+  );
+}
+
 export function Overview() {
   const { data: status, loading } = usePolling<StatusResponse>(api.status, 10000);
   const { data: actions } = usePolling<ActionItem[]>(api.actions, 15000);
   const { data: leverageData } = usePolling<AggregatedLeverage>(api.leverage, 15000);
   const { data: sectors } = usePolling<SectorExposure[]>(api.sectors, 30000);
   const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
+  const { data: volumes } = usePolling<VolumeAnalysis[]>(api.volume, 30000);
+  const { data: marginData } = usePolling<MarginHealth[]>(api.margin, 15000);
   const [selectedPosition, setSelectedPosition] = useState<StatusResponse['positions'][0] | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<ActionItem | null>(null);
   const [positionAnalyses, setPositionAnalyses] = useState<TradeAnalysis[]>([]);
@@ -212,9 +230,14 @@ export function Overview() {
     : (pnlSnapshot?.cumulative_return ? pnlSnapshot.cumulative_return * 100 : 0);
   const isMock = isUsingMockData();
 
-  // Find matching open trade for a position
-  const findMatchingTrade = (symbol: string): Trade | undefined =>
-    trades?.find(t => t.symbol === symbol && t.is_open);
+  // Find matching open trade for a position (normalize symbols: TONUSD vs TON/USD)
+  const findMatchingTrade = (symbol: string): Trade | undefined => {
+    const norm = symbol.replace("/", "").toUpperCase();
+    return trades?.find(t => {
+      const tNorm = t.symbol.replace("/", "").toUpperCase();
+      return (tNorm === norm || t.symbol === symbol) && t.is_open;
+    });
+  };
 
   // Fetch analyses when a position is selected
   useEffect(() => {
@@ -438,43 +461,132 @@ export function Overview() {
       <Dialog open={!!selectedPosition} onOpenChange={() => setSelectedPosition(null)}>
         <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-xl sm:text-2xl flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-[#4a9eff]/15 border border-[#4a9eff]/30">
-                <TrendingUp className="size-5 sm:size-6 text-[#4a9eff]" />
-              </div>
+            <DialogTitle className="flex items-center gap-3">
+              <Badge variant={selectedPosition?.side === 'short' || selectedPosition?.side === 'sell' ? 'destructive' : 'default'}>
+                {(selectedPosition?.side === 'short' || selectedPosition?.side === 'sell') ? 'SHORT' : 'LONG'}
+              </Badge>
               {selectedPosition?.symbol}
-              {(() => {
-                const match = selectedPosition ? findMatchingTrade(selectedPosition.symbol) : undefined;
-                return match?.strategy ? (
-                  <span className="text-sm font-normal text-[#888888] bg-white/5 px-2 py-0.5 rounded-md">{match.strategy}</span>
-                ) : null;
-              })()}
+              {selectedPosition?.leverage && selectedPosition.leverage > 1 && (
+                <span className="text-sm font-normal text-[#ffa500] bg-[#ffa500]/10 px-2 py-0.5 rounded-md">{selectedPosition.leverage}x Leverage</span>
+              )}
             </DialogTitle>
           </DialogHeader>
-          {selectedPosition && (
-            <div className="space-y-4 mt-2 sm:mt-4">
-              <div className="grid grid-cols-2 gap-2 sm:gap-4">
-                {[
-                  ['Quantity', selectedPosition.qty],
-                  ['Entry', `$${(selectedPosition.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
-                  ['Current', `$${(selectedPosition.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
-                  ['Market Value', `$${(selectedPosition.market_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
-                  ['P&L', `${(selectedPosition.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(selectedPosition.unrealized_pnl || 0).toFixed(2)}`],
-                  ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
-                  ['Age', selectedPosition.age || 'N/A'],
-                ].map(([label, value]) => (
-                  <div key={String(label)} className="p-3 sm:p-4 rounded-lg bg-white/5 border border-white/10">
-                    <p className="text-xs sm:text-sm text-[#888888] mb-1">{label}</p>
-                    <p className="text-base sm:text-lg font-bold">{value}</p>
-                  </div>
-                ))}
-              </div>
+          {selectedPosition && (() => {
+            const match = findMatchingTrade(selectedPosition.symbol);
+            return (
+              <div className="space-y-4 mt-2 sm:mt-4">
+                {/* Core Info Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+                  {[
+                    ['Strategy', match?.strategy || '-'],
+                    ['Quantity', formatQty(selectedPosition.qty)],
+                    ['Entry', `$${(selectedPosition.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+                    ['Current', `$${(selectedPosition.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+                    ['Market Value', `$${(selectedPosition.market_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+                    ['P&L', `${(selectedPosition.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(selectedPosition.unrealized_pnl || 0).toFixed(2)}`],
+                    ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
+                    ['Leverage', match?.leverage ? `${match.leverage}x` : selectedPosition.leverage ? `${selectedPosition.leverage}x` : '1x'],
+                    ['Take Profit', match?.take_profit_price ? `$${match.take_profit_price.toFixed(2)}` : 'None'],
+                    ['Stop Loss', match?.stop_loss_price ? `$${match.stop_loss_price.toFixed(2)}` : 'None'],
+                    ['Age', selectedPosition.age || 'N/A'],
+                    ['Opened', match ? new Date(match.timestamp).toLocaleString() : '-'],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="p-2.5 sm:p-3 rounded-lg bg-white/5 border border-white/10">
+                      <p className="text-[10px] sm:text-xs text-[#888888] mb-1">{label}</p>
+                      <p className="text-sm sm:text-base font-bold truncate">{value}</p>
+                    </div>
+                  ))}
+                </div>
 
-              {/* Trade Rationale */}
-              {(() => {
-                const match = findMatchingTrade(selectedPosition.symbol);
-                if (!match?.entry_reasoning) return null;
-                return (
+                {/* TP/SL Visual Bar */}
+                {match && (match.stop_loss_price || match.take_profit_price) && (
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                    <p className="text-xs text-[#888888] mb-2">Risk/Reward Range</p>
+                    <div className="relative h-6 bg-white/5 rounded-full overflow-hidden">
+                      {match.stop_loss_price && match.take_profit_price && (
+                        <>
+                          <div className="absolute left-0 top-0 h-full bg-[#ff4466]/20 rounded-l-full" style={{ width: '30%' }} />
+                          <div className="absolute right-0 top-0 h-full bg-[#00d4aa]/20 rounded-r-full" style={{ width: '30%' }} />
+                          <div className="absolute left-1/2 top-0 h-full w-0.5 bg-[#4a9eff] -translate-x-1/2" />
+                        </>
+                      )}
+                      <div className="absolute inset-0 flex items-center justify-between px-3 text-[10px] font-medium">
+                        <span className="text-[#ff4466]">{match.stop_loss_price ? `SL $${match.stop_loss_price.toFixed(2)}` : ''}</span>
+                        <span className="text-[#4a9eff]">Entry ${(selectedPosition.avg_cost || 0).toFixed(2)}</span>
+                        <span className="text-[#00d4aa]">{match.take_profit_price ? `TP $${match.take_profit_price.toFixed(2)}` : ''}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Volume & Margin Analysis */}
+                {(() => {
+                  const normSym = selectedPosition.symbol.replace("/", "").toUpperCase();
+                  const vol = volumes?.find(v => {
+                    const vNorm = v.symbol.replace("/", "").toUpperCase();
+                    const aNorm = (v.aster_symbol || "").replace("/", "").toUpperCase();
+                    return vNorm === normSym || aNorm === normSym || v.symbol === selectedPosition.symbol;
+                  });
+                  const mg = marginData?.find(m => {
+                    const mNorm = m.symbol.replace("/", "").toUpperCase();
+                    return mNorm === normSym || m.symbol === selectedPosition.symbol;
+                  });
+                  if (!vol && !mg) return null;
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {vol && (
+                        <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
+                          <div className="flex items-center gap-1 text-xs text-[#888888]">
+                            <Volume2 className="size-3" />
+                            Volume Analysis
+                          </div>
+                          <VolumeBar ratio={vol.ratio} label="Volume vs 7d avg" />
+                          <div className="flex justify-between text-xs">
+                            <span className="text-[#888888]">Trend: <span className={vol.trend > 0 ? 'text-[#00d4aa]' : vol.trend < -0.2 ? 'text-[#ff4466]' : 'text-[#c0c0c0]'}>
+                              {vol.trend > 0 ? 'Building' : vol.trend < -0.2 ? 'Fading' : 'Stable'}
+                            </span></span>
+                            <span className="text-[#888888]">Spread: <span className={vol.spread_bps > 30 ? 'text-[#ffa500]' : 'text-[#c0c0c0]'}>{vol.spread_bps.toFixed(0)} bps</span></span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-[#888888]">Size mult: <span className="text-[#c0c0c0]">{vol.sizing_multiplier.toFixed(2)}x</span></span>
+                            <span className="text-[#888888]">Quote vol: <span className="text-[#c0c0c0]">${vol.recent_quote_volume >= 1e6 ? `${(vol.recent_quote_volume / 1e6).toFixed(1)}M` : `${(vol.recent_quote_volume / 1e3).toFixed(0)}K`}</span></span>
+                          </div>
+                        </div>
+                      )}
+                      {mg && (
+                        <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
+                          <div className="flex items-center gap-1 text-xs text-[#888888]">
+                            <ShieldAlert className="size-3" />
+                            Leverage & Margin
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-[#888888]">Leverage</span>
+                            <span className="text-sm font-medium text-[#e8e8e8]">{mg.leverage.toFixed(1)}x</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-[#888888]">Margin Distance</span>
+                            <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
+                              mg.margin_distance > 0.2 ? 'bg-[#00d4aa]/15 text-[#00d4aa] border-[#00d4aa]/30'
+                              : mg.margin_distance > 0.1 ? 'bg-[#ffa500]/15 text-[#ffa500] border-[#ffa500]/30'
+                              : 'bg-[#ff4466]/15 text-[#ff4466] border-[#ff4466]/30'
+                            }`}>
+                              {(mg.margin_distance * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                          {mg.liq_price > 0 && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-[#888888]">Liq. Price</span>
+                              <span className="text-xs text-[#ff4466]">${mg.liq_price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Trade Rationale */}
+                {match?.entry_reasoning && (
                   <div className="rounded-lg bg-white/5 border border-white/10 overflow-hidden">
                     <div className="px-4 py-2.5 border-b border-white/5">
                       <p className="text-xs text-[#888888] font-medium uppercase tracking-wider">Trade Rationale</p>
@@ -483,43 +595,43 @@ export function Overview() {
                       {renderReasoning(match.entry_reasoning)}
                     </div>
                   </div>
-                );
-              })()}
+                )}
 
-              {/* Live Analysis Updates */}
-              {(positionAnalyses.length > 0 || loadingAnalyses) && (
-                <div className="rounded-lg bg-white/5 border border-white/10 p-4">
-                  <p className="text-xs text-[#888888] font-medium uppercase tracking-wider mb-3">Live Analysis Updates</p>
-                  {loadingAnalyses ? (
-                    <p className="text-sm text-[#888888] animate-pulse">Loading analysis...</p>
-                  ) : (
-                    <div className="space-y-2.5 max-h-48 overflow-y-auto">
-                      {positionAnalyses.map(a => (
-                        <div key={a.id} className="p-3 rounded-lg bg-black/30 border border-white/5">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <p className="text-[10px] text-[#888888]">
-                              {new Date(a.timestamp).toLocaleString()}
-                            </p>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                              a.source === 'position_review_agent' ? 'bg-[#c084fc]/10 text-[#c084fc]' :
-                              a.source === '12h_cycle' ? 'bg-[#4a9eff]/10 text-[#4a9eff]' :
-                              a.source === 'static_fallback' ? 'bg-[#888888]/10 text-[#888888]' :
-                              'bg-[#00d4aa]/10 text-[#00d4aa]'
-                            }`}>
-                              {a.source === 'position_review_agent' ? 'Agent Review' :
-                               a.source === '12h_cycle' ? 'AI Analysis' :
-                               a.source === 'static_fallback' ? 'Auto' : 'LLM'}
-                            </span>
+                {/* Live Analysis Updates */}
+                {(positionAnalyses.length > 0 || loadingAnalyses) && (
+                  <div className="rounded-lg bg-white/5 border border-white/10 p-4">
+                    <p className="text-xs text-[#888888] font-medium uppercase tracking-wider mb-3">Live Analysis Updates</p>
+                    {loadingAnalyses ? (
+                      <p className="text-sm text-[#888888] animate-pulse">Loading analysis...</p>
+                    ) : (
+                      <div className="space-y-2.5 max-h-48 overflow-y-auto">
+                        {positionAnalyses.map(a => (
+                          <div key={a.id} className="p-3 rounded-lg bg-black/30 border border-white/5">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <p className="text-[10px] text-[#888888]">
+                                {new Date(a.timestamp).toLocaleString()}
+                              </p>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                a.source === 'position_review_agent' ? 'bg-[#c084fc]/10 text-[#c084fc]' :
+                                a.source === '12h_cycle' ? 'bg-[#4a9eff]/10 text-[#4a9eff]' :
+                                a.source === 'static_fallback' ? 'bg-[#888888]/10 text-[#888888]' :
+                                'bg-[#00d4aa]/10 text-[#00d4aa]'
+                              }`}>
+                                {a.source === 'position_review_agent' ? 'Agent Review' :
+                                 a.source === '12h_cycle' ? 'AI Analysis' :
+                                 a.source === 'static_fallback' ? 'Auto' : 'LLM'}
+                              </span>
+                            </div>
+                            <p className="text-sm text-[#c0c0c0] leading-relaxed">{a.analysis}</p>
                           </div>
-                          <p className="text-sm text-[#c0c0c0] leading-relaxed">{a.analysis}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
