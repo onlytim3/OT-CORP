@@ -57,7 +57,7 @@ function renderReasoning(text: string) {
   });
 }
 
-function TradeDetailModal({ trade, onClose }: { trade: Trade | null; onClose: () => void }) {
+function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trade | null; onClose: () => void; volumes?: VolumeAnalysis[]; marginData?: MarginHealth[] }) {
   const [analyses, setAnalyses] = useState<TradeAnalysis[]>([]);
   const [loadingAnalyses, setLoadingAnalyses] = useState(false);
   const [showReasoning, setShowReasoning] = useState(true);
@@ -131,6 +131,64 @@ function TradeDetailModal({ trade, onClose }: { trade: Trade | null; onClose: ()
                 </div>
               </div>
             )}
+
+            {/* Volume & Margin Analysis — only for open trades */}
+            {trade.is_open && (() => {
+              const vol = volumes?.find(v => v.symbol === trade.symbol || v.aster_symbol === trade.symbol);
+              const mg = marginData?.find(m => m.symbol === trade.symbol);
+              if (!vol && !mg) return null;
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {vol && (
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
+                      <div className="flex items-center gap-1 text-xs text-[#888888]">
+                        <Volume2 className="size-3" />
+                        Volume Analysis
+                      </div>
+                      <VolumeBar ratio={vol.ratio} label="Volume vs 7d avg" />
+                      <div className="flex justify-between text-xs">
+                        <span className="text-[#888888]">Trend: <span className={vol.trend > 0 ? 'text-[#00d4aa]' : vol.trend < -0.2 ? 'text-[#ff4466]' : 'text-[#c0c0c0]'}>
+                          {vol.trend > 0 ? 'Building' : vol.trend < -0.2 ? 'Fading' : 'Stable'}
+                        </span></span>
+                        <span className="text-[#888888]">Spread: <span className={vol.spread_bps > 30 ? 'text-[#ffa500]' : 'text-[#c0c0c0]'}>{vol.spread_bps.toFixed(0)} bps</span></span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-[#888888]">Size mult: <span className="text-[#c0c0c0]">{vol.sizing_multiplier.toFixed(2)}x</span></span>
+                        <span className="text-[#888888]">Quote vol: <span className="text-[#c0c0c0]">${vol.recent_quote_volume >= 1e6 ? `${(vol.recent_quote_volume / 1e6).toFixed(1)}M` : `${(vol.recent_quote_volume / 1e3).toFixed(0)}K`}</span></span>
+                      </div>
+                    </div>
+                  )}
+                  {mg && (
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
+                      <div className="flex items-center gap-1 text-xs text-[#888888]">
+                        <ShieldAlert className="size-3" />
+                        Leverage & Margin
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-[#888888]">Leverage</span>
+                        <span className="text-sm font-medium text-[#e8e8e8]">{mg.leverage.toFixed(1)}x</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-[#888888]">Margin Distance</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${
+                          mg.margin_distance > 0.2 ? 'bg-[#00d4aa]/15 text-[#00d4aa] border-[#00d4aa]/30'
+                          : mg.margin_distance > 0.1 ? 'bg-[#ffa500]/15 text-[#ffa500] border-[#ffa500]/30'
+                          : 'bg-[#ff4466]/15 text-[#ff4466] border-[#ff4466]/30'
+                        }`}>
+                          {(mg.margin_distance * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      {mg.liq_price > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-[#888888]">Liq. Price</span>
+                          <span className="text-xs text-[#ff4466]">${mg.liq_price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Trade Rationale */}
             {trade.entry_reasoning && (
@@ -364,7 +422,7 @@ export function Trading() {
       </div>
 
       {/* Trade Detail Modal */}
-      <TradeDetailModal trade={selectedTrade} onClose={() => setSelectedTrade(null)} />
+      <TradeDetailModal trade={selectedTrade} onClose={() => setSelectedTrade(null)} volumes={volumes || undefined} marginData={marginData || undefined} />
     </div>
   );
 }

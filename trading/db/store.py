@@ -417,7 +417,29 @@ def update_trade_status(trade_id, status, alpaca_order_id=None):
 
 
 def close_trade(trade_id, close_price, pnl):
+    """Close a trade and record exit price and realized P&L.
+
+    If P&L is zero/None but we have entry price and close price,
+    re-derive P&L from the actual price difference to avoid misleading 0.0 P&L.
+    """
     with get_db() as conn:
+        # If pnl looks wrong (zero when it shouldn't be), try to compute from prices
+        if (pnl is None or pnl == 0) and close_price and close_price > 0:
+            try:
+                row = conn.execute(
+                    "SELECT price, qty, side FROM trades WHERE id = ?", (trade_id,)
+                ).fetchone()
+                if row and row["price"] and row["price"] > 0 and row["qty"] and row["qty"] > 0:
+                    entry_price = row["price"]
+                    qty = row["qty"]
+                    side = (row["side"] or "").lower()
+                    if side in ("buy", "long"):
+                        pnl = round((close_price - entry_price) * qty, 2)
+                    elif side in ("sell", "short"):
+                        pnl = round((entry_price - close_price) * qty, 2)
+            except Exception:
+                pass
+
         conn.execute(
             "UPDATE trades SET closed_at=?, close_price=?, pnl=?, status='closed' WHERE id=?",
             (_now(), close_price, pnl, trade_id),

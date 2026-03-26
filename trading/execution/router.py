@@ -1063,17 +1063,20 @@ def _paper_submit_order(
         existing_side = pos_row["side"] if pos_row else "long"
 
         if side_lower == "buy":
-            # Check cash (only margin required, not full notional)
-            if margin_required > cash:
-                return {
-                    "id": order_id, "status": "rejected",
-                    "reason": f"Insufficient paper margin: ${cash:.2f} < ${margin_required:.2f} ({leverage}x leverage)",
-                    "symbol": symbol, "side": side,
-                    "qty": qty, "filled_qty": 0, "filled_avg_price": 0,
-                }
+            # If buying to CLOSE a short, skip margin check — closing frees margin, not consumes it
+            is_closing_short = pos_row and existing_side == "short" and existing_qty > 0
+            if not is_closing_short:
+                # Check cash (only margin required, not full notional)
+                if margin_required > cash:
+                    return {
+                        "id": order_id, "status": "rejected",
+                        "reason": f"Insufficient paper margin: ${cash:.2f} < ${margin_required:.2f} ({leverage}x leverage)",
+                        "symbol": symbol, "side": side,
+                        "qty": qty, "filled_qty": 0, "filled_avg_price": 0,
+                    }
 
-            # Deduct margin from cash
-            _set_paper_cash(cash - margin_required)
+                # Deduct margin from cash
+                _set_paper_cash(cash - margin_required)
 
             if pos_row and existing_side == "long" and existing_qty > 0:
                 # Add to existing long — weighted avg cost

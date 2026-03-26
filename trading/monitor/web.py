@@ -166,9 +166,26 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
                 if not newer_entry:
                     # Symbol still at broker, no exit after, no newer entry — genuinely open
                     continue
-                # Old entry predates a re-entry — close at entry price (unknown exit)
-                exit_price = t.get("price") or 0
-                pnl = 0.0
+                # Old entry predates a re-entry — try to get actual exit price
+                entry_price = t.get("price") or 0
+                exit_price = entry_price  # fallback
+                try:
+                    from trading.execution.aster_client import get_aster_mark_prices
+                    from trading.execution.router import _to_aster
+                    aster_sym = _to_aster(sym)
+                    mark_data = get_aster_mark_prices(aster_sym)
+                    if isinstance(mark_data, dict) and mark_data.get("markPrice"):
+                        exit_price = mark_data["markPrice"]
+                except Exception:
+                    pass
+                qty_t = t.get("qty") or 0
+                if entry_price > 0 and qty_t > 0:
+                    if side == "buy":
+                        pnl = (exit_price - entry_price) * qty_t
+                    else:
+                        pnl = (entry_price - exit_price) * qty_t
+                else:
+                    pnl = 0.0
                 close_trade(t["id"], exit_price, round(pnl, 2))
                 closed += 1
                 log.info("Reconciled stale re-entry orphan #%d %s (%s)", t["id"], sym, side)
@@ -178,8 +195,20 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
             if row and row["price"]:
                 exit_price = row["price"]
             else:
-                # No exit found — use entry price (zero P&L) for broker-gone positions
-                exit_price = t.get("price") or 0
+                # No DB exit trade found — try to get current/last market price
+                # so P&L reflects reality instead of defaulting to zero
+                exit_price = None
+                try:
+                    from trading.execution.aster_client import get_aster_mark_prices
+                    from trading.execution.router import _to_aster
+                    aster_sym = _to_aster(sym)
+                    mark_data = get_aster_mark_prices(aster_sym)
+                    if isinstance(mark_data, dict):
+                        exit_price = mark_data.get("markPrice")
+                except Exception:
+                    pass
+                if not exit_price:
+                    exit_price = t.get("price") or 0
 
             entry_price = t.get("price") or 0
             qty = t.get("qty") or 0
