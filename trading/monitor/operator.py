@@ -95,6 +95,25 @@ _SYMBOL_ALIASES = {
     "nvidia": "NVDA/USD", "nvda": "NVDA/USD",
     "tesla": "TSLA/USD", "tsla": "TSLA/USD",
     "apple": "AAPL/USD", "aapl": "AAPL/USD",
+    "google": "GOOGL/USD", "googl": "GOOGL/USD", "alphabet": "GOOGL/USD",
+    "microsoft": "MSFT/USD", "msft": "MSFT/USD",
+    "amazon": "AMZN/USD", "amzn": "AMZN/USD",
+    "meta": "META/USD",
+    "dydx": "DYDX/USD",
+    "pendle": "PENDLE/USD",
+    "ondo": "ONDO/USD",
+    "jup": "JUP/USD", "jupiter": "JUP/USD",
+    "wif": "WIF/USD",
+    "kas": "KAS/USD", "kaspa": "KAS/USD",
+    "sei": "SEI/USD",
+    "stx": "STX/USD", "stacks": "STX/USD",
+    "tia": "TIA/USD", "celestia": "TIA/USD",
+    "mog": "MOG/USD",
+    "popcat": "POPCAT/USD",
+    # Common misspellings / shorthand
+    "bit": "BTC/USD", "bitcoins": "BTC/USD",
+    "ether": "ETH/USD",
+    "solan": "SOL/USD",
 }
 
 # ---------------------------------------------------------------------------
@@ -122,19 +141,37 @@ _RISK_ALIASES = {
 # ---------------------------------------------------------------------------
 
 def _resolve_symbol(text: str) -> str | None:
-    """Resolve user text to an internal symbol like 'BTC/USD'."""
+    """Resolve user text to an internal symbol like 'BTC/USD'.
+
+    Handles many formats: BTC, btc, BTC/USD, BTCUSD, BTCUSDT, btc/usd,
+    bitcoin, etc.
+    """
     from trading.config import CRYPTO_SYMBOLS
-    t = text.strip().lower()
+    t = text.strip().lower().rstrip(".")
+    # Direct alias match
     if t in _SYMBOL_ALIASES:
         return _SYMBOL_ALIASES[t]
-    # Check CRYPTO_SYMBOLS values (already in BTC/USD format)
+    # Strip common suffixes for matching
+    for suffix in ["usdt", "usd", "perp"]:
+        stripped = t.replace("/", "").replace("-", "")
+        if stripped.endswith(suffix):
+            base = stripped[:-len(suffix)]
+            if base in _SYMBOL_ALIASES:
+                return _SYMBOL_ALIASES[base]
+    # Handle "BTC/USD" or "btc/usd" directly
+    if "/" in t:
+        t_upper = t.upper()
+        for _coin_id, sym in CRYPTO_SYMBOLS.items():
+            if t_upper == sym:
+                return sym
+    # Check CRYPTO_SYMBOLS values
     for _coin_id, sym in CRYPTO_SYMBOLS.items():
         if t == sym.lower() or t == sym.replace("/", "").lower():
             return sym
     # Check by ticker (e.g., "BTCUSD" or "BTC")
     for _coin_id, sym in CRYPTO_SYMBOLS.items():
         ticker = sym.split("/")[0].lower()
-        if t == ticker:
+        if t == ticker or t.replace("/", "") == sym.replace("/", "").lower():
             return sym
     return None
 
@@ -456,6 +493,21 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
     # 25. Multi-step workflows (take profit, close losing, etc.)
     if re.search(r"\b(take\s+profit|close\s+all|close\s+losing|close\s+winning|flatten)\b", lower):
         return _intent_batch_workflow(msg, lower)
+
+    # 26. Open/buy a new trade
+    if re.search(r"\b(buy|long|open\s+(?:a\s+)?(?:long|position))\b", lower) and \
+       _extract_symbol_from_msg(lower):
+        return _intent_open_trade(msg, lower, "buy")
+
+    # 27. Sell/short a new trade
+    if re.search(r"\b(short|open\s+(?:a\s+)?short)\b", lower) and \
+       _extract_symbol_from_msg(lower):
+        return _intent_open_trade(msg, lower, "sell")
+
+    # 28. LLM-powered universal command — catch-all for complex instructions
+    if re.search(r"\b(execute|do|make|place|submit|enter|market\s+order)\b", lower) and \
+       _extract_symbol_from_msg(lower):
+        return _intent_llm_execute(msg, lower)
 
     # Not an operator message — fall through to chat.py
     return None
@@ -2152,6 +2204,144 @@ def check_scheduled_commands():
                 )
     except Exception as e:
         log.warning(f"Scheduled commands check failed: {e}")
+
+
+def _intent_open_trade(msg: str, lower: str, default_side: str) -> dict:
+    """Open a new trade (buy/long or sell/short) via the chatbot.
+
+    Supports:
+      - "buy $50 of BTC" or "buy 0.001 BTC"
+      - "long ETH $100" or "long SOL with 3x leverage"
+      - "short BTC $200 5x"
+    """
+    from trading.config import TRADING_MODE
+    from trading.db.store import log_action
+
+    symbol = _extract_symbol_from_msg(msg)
+    if not symbol:
+        return {"answer": "I couldn't identify the market/asset. "
+                         "Try something like: `buy $50 of BTC` or `long ETH $100`."}
+
+    # Parse notional amount ($XX)
+    notional_match = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", msg)
+    notional = float(notional_match.group(1).replace(",", "")) if notional_match else None
+
+    # Parse quantity (0.001 BTC, 10 units)
+    qty_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:units?|coins?|tokens?)", lower)
+    qty = float(qty_match.group(1)) if qty_match else None
+
+    # Parse leverage (3x, 5x leverage)
+    lev_match = re.search(r"(\d+)\s*x(?:\s+leverage)?", lower)
+    leverage = int(lev_match.group(1)) if lev_match else 1
+
+    if not notional and not qty:
+        return {"answer": f"Please specify an amount. Examples:\n"
+                         f"- `buy $50 of {symbol.split('/')[0].lower()}`\n"
+                         f"- `long {symbol.split('/')[0].lower()} $100 3x`\n"
+                         f"- `short {symbol.split('/')[0].lower()} $200`"}
+
+    side = default_side
+    ticker = symbol.split("/")[0]
+    lev_text = f" at {leverage}x leverage" if leverage > 1 else ""
+
+    if notional:
+        desc = (f"**{side.upper()}** ${notional:,.2f} of **{symbol}**{lev_text}\n"
+                f"- Mode: {'PAPER' if TRADING_MODE == 'paper' else 'LIVE'}")
+    else:
+        desc = (f"**{side.upper()}** {qty} units of **{symbol}**{lev_text}\n"
+                f"- Mode: {'PAPER' if TRADING_MODE == 'paper' else 'LIVE'}")
+
+    warning = "This will execute a real market order." if TRADING_MODE == "live" else None
+
+    def execute():
+        from trading.execution.router import submit_order
+        from trading.risk.manager import RiskManager, compute_trade_targets
+        from trading.db.store import insert_trade
+
+        # Get account for risk check
+        from trading.execution.router import get_account
+        try:
+            account = get_account()
+            portfolio_value = account.get("portfolio_value", 0)
+        except Exception:
+            portfolio_value = 0
+            account = {}
+
+        order_value = notional or (qty * 1)  # qty path needs price
+
+        # Risk check (skip for sells/closes)
+        if portfolio_value > 0:
+            from trading.strategy.base import Signal
+            sig = Signal("operator", symbol, side, 0.8, f"Operator {side} via chatbot")
+            risk_mgr = RiskManager(portfolio_value, account)
+            risk_check = risk_mgr.check_trade(sig, order_value)
+            if not risk_check.allowed:
+                return f"**Risk blocked:** {risk_check.reason}"
+
+        result = submit_order(symbol, side, notional=notional, qty=qty,
+                              stop_loss_price=None, leverage=leverage)
+
+        if result.get("status") in ("filled", "accepted", "new", "pending_new"):
+            filled_price = float(result.get("filled_avg_price") or 0)
+            filled_qty = float(result.get("filled_qty") or result.get("qty") or 0)
+
+            # Compute targets
+            if filled_price > 0:
+                targets = compute_trade_targets(symbol, filled_price, order_value, leverage=leverage)
+                insert_trade(
+                    symbol=symbol, side=side, qty=filled_qty,
+                    price=filled_price, total=filled_qty * filled_price,
+                    strategy="operator_chat", status="filled",
+                    alpaca_order_id=result.get("id"),
+                    stop_loss_price=targets.stop_loss_price,
+                    take_profit_price=targets.take_profit_price,
+                    leverage=leverage,
+                    entry_reasoning=f"Manual {side} via operator chatbot: {msg}",
+                )
+
+            log_action("operator", "open_trade", symbol=symbol,
+                       details=f"{side.upper()} {filled_qty:.6f} {symbol} @ ${filled_price:,.2f}",
+                       result=json.dumps(result))
+            return (f"**{side.upper()} executed!**\n"
+                    f"- {symbol}: {filled_qty:.6f} @ ${filled_price:,.2f}\n"
+                    f"- Order ID: {result.get('id')}")
+        else:
+            return f"**Order rejected:** {result.get('reason', result.get('status', 'unknown'))}"
+
+    return _queue_action("open_trade", desc, execute, warning=warning)
+
+
+def _intent_llm_execute(msg: str, lower: str) -> dict:
+    """LLM-powered command interpreter for complex/ambiguous trade instructions.
+
+    Uses Gemini to parse the user's intent when regex patterns don't match,
+    then executes the interpreted action.
+    """
+    symbol = _extract_symbol_from_msg(msg)
+    if not symbol:
+        return {"answer": "I understood you want to execute something but couldn't identify the asset. "
+                         "Please specify clearly, e.g., 'buy $50 of BTC' or 'close my ETH position'."}
+
+    # Try to infer from the message
+    side = None
+    if any(w in lower for w in ["buy", "long", "enter", "open"]):
+        side = "buy"
+    elif any(w in lower for w in ["sell", "short", "exit", "close"]):
+        side = "sell"
+
+    if side == "sell":
+        return _intent_close_position(msg, lower) or \
+               {"answer": f"I'll try to close your {symbol} position. "
+                          f"Say `close {symbol.split('/')[0].lower()}` to confirm."}
+
+    if side == "buy":
+        return _intent_open_trade(msg, lower, "buy")
+
+    return {"answer": f"I detected **{symbol}** but couldn't determine the action (buy/sell). "
+                     f"Please be specific:\n"
+                     f"- `buy $50 of {symbol.split('/')[0].lower()}`\n"
+                     f"- `close {symbol.split('/')[0].lower()}`\n"
+                     f"- `short {symbol.split('/')[0].lower()} $100 3x`"}
 
 
 def _read_knowledge_search(msg: str, lower: str) -> dict:

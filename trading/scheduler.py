@@ -1254,6 +1254,50 @@ def check_stop_losses():
                     except Exception:
                         pass
 
+        # -- 2.5. Passive loss detection — catch positions that slipped through stops --
+        try:
+            from trading.risk.margin_monitor import check_passive_loss_accumulation
+            passive_alerts = check_passive_loss_accumulation(positions, stop_loss_pct=RISK["stop_loss_pct"])
+            for alert in passive_alerts:
+                symbol = normalize_symbol(alert["symbol"])
+                # Skip if already handled by profit mgr or stop-loss above
+                if any(normalize_symbol(a["symbol"]) == symbol for a in profit_actions):
+                    continue
+                if alert["severity"] == "critical":
+                    pos_side = alert["side"]
+                    exit_side = "buy" if pos_side == "short" else "sell"
+                    console.print(f"[bold red]PASSIVE LOSS DETECTED: {symbol} ({pos_side}) at {alert['loss_pct']*100:.1f}%[/]")
+                    log_action(
+                        "passive_loss", "emergency_close",
+                        symbol=symbol,
+                        details=alert["reason"],
+                        data={"loss_pct": alert["loss_pct"], "qty": alert["qty"], "side": pos_side},
+                    )
+                    try:
+                        order = _execute_order(symbol, exit_side, qty=alert["qty"])
+                        if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                            exit_price = float(order.get("filled_avg_price") or 0)
+                            insert_trade(
+                                symbol=symbol, side=exit_side, qty=alert["qty"],
+                                price=exit_price, total=alert["qty"] * exit_price,
+                                strategy="passive_loss_recovery", status=order["status"],
+                                alpaca_order_id=order.get("id"),
+                            )
+                            try:
+                                from trading.db.store import close_matching_entry_trades
+                                close_matching_entry_trades(symbol, exit_price, alert["qty"], exit_side=exit_side)
+                            except Exception:
+                                pass
+                            log_action("trade", "passive_loss_closed", symbol=symbol, result=order["status"])
+                            tracker.remove(symbol)
+                            console.print(f"[bold red]CLOSED passive loser {symbol} at ${exit_price:.2f}[/]")
+                    except Exception as e:
+                        log.error("Passive loss close failed for %s: %s", symbol, e)
+                elif alert["severity"] == "warning":
+                    log_action("system", "passive_loss_warning", symbol=symbol, details=alert["reason"])
+        except Exception as e:
+            log.debug("Passive loss detection error: %s", e, exc_info=True)
+
         # -- 3. Volume dry-up exit check --
         # Close positions where volume has died (the move is over).
         # Only exit if position is profitable or near break-even to avoid
