@@ -248,11 +248,26 @@ def load_persisted_state():
     except Exception:
         log.debug("Failed to load persisted risk overrides", exc_info=True)
 
+    # One-time cleanup: reset bad outcome values (text strings like "Disabled strategy ...")
+    # so _evaluate_outcomes() can properly evaluate them as positive/negative
+    try:
+        from trading.db.store import get_db
+        with get_db() as conn:
+            fixed = conn.execute(
+                "UPDATE agent_recommendations SET outcome = NULL "
+                "WHERE outcome IS NOT NULL AND outcome NOT IN ('positive', 'negative')"
+            ).rowcount
+            if fixed:
+                loaded.append(f"outcome_cleanup({fixed})")
+    except Exception:
+        log.debug("Failed to clean up bad outcome values", exc_info=True)
+
     if loaded:
         log.info("AUTONOMOUS STATE RESTORED: %s", ", ".join(loaded))
 
 
 # --- Fixed constants (not tunable) ---
+MINIMUM_BUDGET = 0.005              # Floor: 0.5% of portfolio (prevents cascading to zero)
 REALLOCATION_INTERVAL_HOURS = 24    # Rebalance allocations daily
 PERFORMANCE_REVIEW_TRADES = 50      # Look at last 50 trades per strategy
 BACKTEST_MIN_TRADES = 5              # Need at least 5 trades to judge
@@ -1146,6 +1161,10 @@ def _evaluate_outcomes():
                 # Risk management — positive if drawdown hasn't worsened
                 outcome = "positive" if current_drawdown < get_threshold("drawdown_halt_threshold") else "negative"
 
+            elif action == "meta_analysis":
+                # Informational — always positive if it was recorded
+                outcome = "positive"
+
             if outcome:
                 update_recommendation_outcome(rec["id"], outcome)
                 log.debug("OUTCOME: rec #%d (%s on %s) → %s", rec["id"], action, target, outcome)
@@ -1299,6 +1318,11 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 STRATEGY_ENABLED[target] = False
                 result = f"Disabled strategy '{target}'"
                 log.warning("AUTO-DISABLE: %s — %s", target, rec["reasoning"][:100])
+                # Also write strategy_override entry so operator_hooks respects disable
+                try:
+                    set_setting(f"strategy_override_{target}", "disabled")
+                except Exception:
+                    pass
 
             elif action == "emergency_halt":
                 # Disable all strategies
@@ -1306,6 +1330,12 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     STRATEGY_ENABLED[strat] = False
                 result = "Emergency halt — all strategies disabled"
                 log.critical("EMERGENCY HALT: %s", rec["reasoning"][:100])
+                # Also write strategy_override entries so operator_hooks respects halt
+                try:
+                    for strat in STRATEGY_ENABLED:
+                        set_setting(f"strategy_override_{strat}", "disabled")
+                except Exception:
+                    pass
 
             elif action == "tighten_risk":
                 adjustments = data.get("adjustments", {})
@@ -1332,10 +1362,11 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     from trading.risk.portfolio import STRATEGY_BUDGETS, DEFAULT_BUDGET
                     mult = data.get("suggested_budget_mult", 0.5)
                     current = STRATEGY_BUDGETS.get(target, DEFAULT_BUDGET)
-                    new_budget = round(current * mult, 4)
+                    new_budget = round(max(current * mult, MINIMUM_BUDGET), 4)
                     STRATEGY_BUDGETS[target] = new_budget
                     data["new_budget"] = new_budget  # Store for outcome evaluation
-                    result = f"Reduced {target} budget: {current:.4f} → {new_budget:.4f}"
+                    floor_note = " (hit minimum floor)" if new_budget <= MINIMUM_BUDGET else ""
+                    result = f"Reduced {target} budget: {current:.4f} → {new_budget:.4f}{floor_note}"
                     log.info("BUDGET REDUCED: %s", result)
                 except Exception as e:
                     result = f"Budget reduction failed: {e}"
@@ -1626,7 +1657,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
             reasoning=rec["reasoning"],
             data=data,
         )
-        resolve_recommendation(rec_id, "applied", result)
+        resolve_recommendation(rec_id, "applied")  # outcome stays NULL for _evaluate_outcomes()
 
         applied.append({
             "action": action,
