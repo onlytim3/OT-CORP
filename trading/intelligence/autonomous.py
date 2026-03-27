@@ -121,6 +121,13 @@ def set_threshold(name: str, value: float) -> float:
             clamped = current + (max_delta if delta > 0 else -max_delta)
         clamped = max(lo, min(hi, clamped))  # Re-clamp after delta cap
 
+    # Warn when requested value was clamped to the same as current (at bound)
+    if round(value, 4) != round(current, 4) and clamped == round(current, 4):
+        log.warning(
+            "Threshold '%s' at bound limit (%.4f). Requested %.4f -> clamped to %.4f (no change).",
+            name, current, value, clamped,
+        )
+
     clamped = round(clamped, 4)
     _threshold_overrides[name] = clamped
     log_action(
@@ -725,7 +732,7 @@ def _learning_agent_think() -> list[dict]:
             # --- Close the feedback loop: actually adjust thresholds ---
             if success_rate < 0.3 and len(applied) >= 5:
                 # Many actions applied but few worked → system is too aggressive
-                # Loosen auto-disable (higher threshold = harder to trigger disable)
+                # Loosen auto-disable (lower threshold = harder to trigger disable)
                 cur_wr = get_threshold("auto_disable_win_rate")
                 recommendations.append({
                     "from_agent": LEARNING_AGENT,
@@ -741,8 +748,8 @@ def _learning_agent_think() -> list[dict]:
                     "data": {
                         "threshold_name": "auto_disable_win_rate",
                         "current_value": cur_wr,
-                        "new_value": round(cur_wr * 1.05, 4),  # +5%
-                        "direction": "increase",
+                        "new_value": round(cur_wr * 0.95, 4),  # -5%
+                        "direction": "decrease",
                         "auto_approve": True,
                     },
                 })
@@ -784,6 +791,27 @@ def _learning_agent_think() -> list[dict]:
                         "threshold_name": "auto_disable_win_rate",
                         "current_value": cur_wr,
                         "new_value": round(cur_wr * 0.95, 4),  # -5%
+                        "direction": "decrease",
+                        "auto_approve": True,
+                    },
+                })
+                # System is effective — loosen backtest adoption to try more strategies
+                cur_bt = get_threshold("backtest_adopt_win_rate")
+                recommendations.append({
+                    "from_agent": LEARNING_AGENT,
+                    "to_agent": EXECUTOR_AGENT,
+                    "category": "adjust_param",
+                    "action": "adjust_threshold",
+                    "target": "backtest_adopt_win_rate",
+                    "reasoning": (
+                        f"High success rate ({success_rate*100:.0f}%) — system is effective. "
+                        f"Loosening backtest adoption threshold from {cur_bt*100:.0f}% "
+                        f"to allow more strategies to be adopted."
+                    ),
+                    "data": {
+                        "threshold_name": "backtest_adopt_win_rate",
+                        "current_value": cur_bt,
+                        "new_value": round(cur_bt * 0.95, 4),  # -5%
                         "direction": "decrease",
                         "auto_approve": True,
                     },
