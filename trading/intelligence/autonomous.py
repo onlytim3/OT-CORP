@@ -1266,11 +1266,10 @@ def _verify_previous_actions() -> list[dict]:
 
             elif action == "implement_strategy":
                 # Check if the strategy file was actually generated
-                # Use the same absolute path as the builder (STRATEGY_DIR)
-                from pathlib import Path
-                strat_dir = Path(__file__).resolve().parent.parent / "strategy"
-                snake = target.lower().replace(" ", "_").replace("-", "_")
-                expected_file = strat_dir / f"{snake}.py"
+                # Use _snake_case to match how the builder names files
+                from trading.intelligence.strategy_builder import _snake_case, STRATEGY_DIR
+                snake = _snake_case(target)
+                expected_file = STRATEGY_DIR / f"{snake}.py"
                 if not expected_file.exists():
                     verified = False
                     failure_reason = f"Strategy '{target}' was requested but file {expected_file} not found"
@@ -1590,7 +1589,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 # Build the strategy immediately instead of deferring
                 built = False
                 try:
-                    from trading.intelligence.strategy_builder import generate_strategy_code, STRATEGY_DIR
+                    from trading.intelligence.strategy_builder import generate_strategy_code, STRATEGY_DIR, _snake_case
                     code = generate_strategy_code(
                         strategy_name=target,
                         description=rec["reasoning"],
@@ -1599,10 +1598,14 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                         data_needed=", ".join(data.get("data_needed", [])) if isinstance(data.get("data_needed"), list) else data.get("data_needed", "OHLCV"),
                     )
                     if code:
-                        # Write the generated code to the strategy directory
-                        snake = target.lower().replace(" ", "_").replace("-", "_")
+                        # Use the same _snake_case as generate_strategy_code so
+                        # the filename matches the class `name` attribute inside.
+                        snake = _snake_case(target)
                         out_path = STRATEGY_DIR / f"{snake}.py"
                         out_path.write_text(code)
+                        # Register in STRATEGY_ENABLED (disabled, awaiting backtest)
+                        STRATEGY_ENABLED[snake] = False
+                        _persist_strategy_enabled()
                         built = True
                         result = f"Strategy '{target}' built → {out_path} (disabled, awaiting backtest)"
                         log.info("STRATEGY BUILT: %s → %s", target, out_path)
@@ -1639,24 +1642,28 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                     ]
                     if candidates:
                         top = candidates[0]
-                        spec = {
-                            "name": top.name,
-                            "category": top.category,
-                            "description": getattr(top, "description", rec["reasoning"]),
-                            "data_needed": top.data_needed,
-                            "priority": top.priority,
-                        }
-                        gen = generate_strategy_code(spec)
-                        if gen and gen.get("file"):
-                            result = f"Coverage gap '{target}': built '{top.name}' → {gen['file']}"
-                            log.info("COVERAGE GAP FILLED: %s → %s", target, gen["file"])
+                        from trading.intelligence.strategy_builder import _snake_case, STRATEGY_DIR as _STRAT_DIR
+                        code = generate_strategy_code(
+                            strategy_name=top.name,
+                            description=getattr(top, "description", rec["reasoning"]),
+                            category=top.category,
+                            priority=top.priority,
+                            data_needed=top.data_needed,
+                        )
+                        if code:
+                            snake = _snake_case(top.name)
+                            out_path = _STRAT_DIR / f"{snake}.py"
+                            out_path.write_text(code)
+                            STRATEGY_ENABLED[snake] = False
+                            _persist_strategy_enabled()
+                            result = f"Coverage gap '{target}': built '{top.name}' → {out_path}"
+                            log.info("COVERAGE GAP FILLED: %s → %s", target, out_path)
                         else:
                             result = f"Coverage gap '{target}': found candidate '{top.name}' but build failed"
                     else:
                         result = f"Coverage gap '{target}' logged — no implementation candidates found"
                 except Exception as e:
                     result = f"Coverage gap '{target}' logged — auto-fill failed: {e}"
-                result = f"Coverage gap '{target}' acknowledged and logged to knowledge base"
                 log.info("COVERAGE GAP: %s — %s", target, rec["reasoning"][:100])
 
             else:
