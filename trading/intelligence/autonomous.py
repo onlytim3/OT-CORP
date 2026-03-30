@@ -69,6 +69,8 @@ _DEFAULT_THRESHOLDS = {
     "backtest_discard_max_dd": 0.30,     # Discard if drawdown > this
     "concentration_max_pct": 0.25,       # Trim budget when position > this
     "event_risk_sizing_mult": 0.6,       # Reduce sizing during event risk
+    "recovery_buffer_pct": 0.05,         # Drawdown must drop this far below halt to start recovery
+    "recovery_max_strategies_per_cycle": 2,  # Max strategies to re-enable per recovery cycle
 }
 
 _THRESHOLD_BOUNDS = {
@@ -84,6 +86,8 @@ _THRESHOLD_BOUNDS = {
     "backtest_discard_max_dd": (0.15, 0.50),
     "concentration_max_pct": (0.10, 0.40),
     "event_risk_sizing_mult": (0.3, 0.9),
+    "recovery_buffer_pct": (0.02, 0.10),
+    "recovery_max_strategies_per_cycle": (1, 5),
 }
 
 MAX_THRESHOLD_ADJUSTMENT = 0.05  # ±5% max change per cycle
@@ -151,6 +155,10 @@ _DB_KEY_RISK_OVERRIDES = "autonomous_risk_overrides"
 
 # Track which RISK keys were changed by autonomous (vs. config defaults)
 _risk_overrides: dict[str, float] = {}
+
+# Snapshot of original RISK values from config.py at import time.
+# Used by revert_risk to restore parameters after drawdown recovery.
+_RISK_DEFAULTS = dict(RISK)
 
 
 def _persist_thresholds():
@@ -434,6 +442,19 @@ def _performance_agent_think() -> list[dict]:
 # Risk Agent — monitors portfolio-level risk, adjusts parameters
 # ---------------------------------------------------------------------------
 
+def _detect_halt_state() -> dict:
+    """Detect whether the system is in a halted or tightened state."""
+    total = len(STRATEGY_ENABLED)
+    disabled = sum(1 for v in STRATEGY_ENABLED.values() if not v)
+    return {
+        "is_halted": total > 0 and disabled >= total * 0.8,  # 80%+ disabled = halted
+        "is_tightened": len(_risk_overrides) > 0,
+        "disabled_count": disabled,
+        "total_count": total,
+        "overridden_params": list(_risk_overrides.keys()),
+    }
+
+
 def _risk_agent_think() -> list[dict]:
     """Risk agent monitors drawdown, exposure, and recommends adjustments."""
     recommendations = []
@@ -493,6 +514,62 @@ def _risk_agent_think() -> list[dict]:
                 "auto_approve": True,
             },
         })
+
+    else:
+        # --- Recovery path: check if system is halted and drawdown has improved ---
+        halt_state = _detect_halt_state()
+        halt_threshold = get_threshold("drawdown_halt_threshold")
+        tighten_threshold = get_threshold("drawdown_tighten_threshold")
+        recovery_buffer = get_threshold("recovery_buffer_pct")
+
+        # Phase 1: Revert tightened risk params when drawdown < tighten threshold
+        if halt_state["is_tightened"] and drawdown < tighten_threshold:
+            recommendations.append({
+                "from_agent": RISK_AGENT,
+                "to_agent": EXECUTOR_AGENT,
+                "category": "adjust_param",
+                "action": "revert_risk",
+                "target": "risk_params",
+                "reasoning": (
+                    f"Drawdown recovered to {drawdown*100:.1f}% "
+                    f"(below tighten threshold {tighten_threshold*100:.0f}%). "
+                    f"Reverting {len(halt_state['overridden_params'])} tightened risk parameters "
+                    f"to config defaults: {', '.join(halt_state['overridden_params'])}."
+                ),
+                "data": {
+                    "drawdown_pct": round(drawdown, 4),
+                    "params_to_revert": halt_state["overridden_params"],
+                    "auto_approve": True,
+                },
+            })
+
+        # Phase 2: Gradual strategy re-enablement when halted and drawdown
+        # is meaningfully below halt threshold (with hysteresis buffer)
+        recovery_threshold = halt_threshold - recovery_buffer
+        if halt_state["is_halted"] and drawdown < recovery_threshold:
+            max_per_cycle = int(get_threshold("recovery_max_strategies_per_cycle"))
+            recommendations.append({
+                "from_agent": RISK_AGENT,
+                "to_agent": EXECUTOR_AGENT,
+                "category": "change_regime",
+                "action": "gradual_recovery",
+                "target": "halted_strategies",
+                "reasoning": (
+                    f"RECOVERY: Drawdown at {drawdown*100:.1f}% is below recovery threshold "
+                    f"{recovery_threshold*100:.1f}% (halt={halt_threshold*100:.0f}% - "
+                    f"buffer={recovery_buffer*100:.0f}%). "
+                    f"{halt_state['disabled_count']}/{halt_state['total_count']} strategies disabled. "
+                    f"Attempting to re-enable up to {max_per_cycle} backtest-approved strategies."
+                ),
+                "data": {
+                    "drawdown_pct": round(drawdown, 4),
+                    "current_value": round(current_value, 2),
+                    "peak_value": round(peak_value, 2),
+                    "recovery_threshold": round(recovery_threshold, 4),
+                    "max_per_cycle": max_per_cycle,
+                    "auto_approve": True,
+                },
+            })
 
     # --- Check position concentration ---
     positions = get_positions()
@@ -1364,6 +1441,52 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 except Exception:
                     pass
 
+            elif action == "gradual_recovery":
+                # Re-enable strategies gradually, prioritizing those with passing backtests
+                max_per_cycle = data.get("max_per_cycle", 2)
+                enabled_count = 0
+                recovery_details = []
+
+                for strat, is_enabled in sorted(STRATEGY_ENABLED.items()):
+                    if is_enabled:
+                        continue
+                    if enabled_count >= max_per_cycle:
+                        break
+                    # Only re-enable if strategy has a passing backtest
+                    last_bt = get_last_backtest(strat)
+                    if last_bt and last_bt.get("verdict") == "adopt":
+                        STRATEGY_ENABLED[strat] = True
+                        # Clear the strategy_override so operator_hooks doesn't re-disable
+                        try:
+                            set_setting(f"strategy_override_{strat}", "enabled")
+                        except Exception:
+                            pass
+                        enabled_count += 1
+                        recovery_details.append(strat)
+                        bt_metrics = last_bt.get("metrics") or {}
+                        if isinstance(bt_metrics, str):
+                            bt_metrics = json.loads(bt_metrics) if bt_metrics else {}
+                        log.warning(
+                            "RECOVERY: Re-enabled '%s' (backtest verdict: adopt, "
+                            "win_rate=%.0f%%, sharpe=%.2f)",
+                            strat,
+                            bt_metrics.get("win_rate", 0) * 100,
+                            bt_metrics.get("sharpe_ratio", 0),
+                        )
+
+                if enabled_count:
+                    result = f"Recovery: re-enabled {enabled_count} strategies: {', '.join(recovery_details)}"
+                else:
+                    result = "Recovery: no backtest-approved disabled strategies available"
+                log.warning("GRADUAL RECOVERY: %s", result)
+                insert_knowledge(
+                    title=f"Drawdown Recovery — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
+                    source=RISK_AGENT,
+                    category="recovery",
+                    content=f"{rec['reasoning']}\n\nResult: {result}",
+                    key_rules=json.dumps(data),
+                )
+
             elif action == "tighten_risk":
                 adjustments = data.get("adjustments", {})
                 for param, value in adjustments.items():
@@ -1373,6 +1496,25 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                         _risk_overrides[param] = value
                         log.warning("RISK TIGHTENED: %s = %s → %s", param, old, value)
                 result = f"Tightened {len(adjustments)} risk parameters"
+
+            elif action == "revert_risk":
+                # Revert tightened risk parameters to config defaults
+                params_reverted = []
+                for param in list(_risk_overrides.keys()):
+                    if param in _RISK_DEFAULTS:
+                        old_val = RISK[param]
+                        RISK[param] = _RISK_DEFAULTS[param]
+                        params_reverted.append(f"{param}: {old_val} -> {_RISK_DEFAULTS[param]}")
+                        log.warning("RISK REVERTED: %s = %s → %s (config default)", param, old_val, _RISK_DEFAULTS[param])
+                _risk_overrides.clear()
+                result = f"Reverted {len(params_reverted)} risk parameters: {'; '.join(params_reverted)}"
+                insert_knowledge(
+                    title=f"Risk Parameters Reverted — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
+                    source=RISK_AGENT,
+                    category="recovery",
+                    content=f"{rec['reasoning']}\n\nResult: {result}",
+                    key_rules=json.dumps(data),
+                )
 
             elif action == "defensive_posture":
                 # Temporarily disable long-biased strategies
@@ -1549,7 +1691,9 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 )
 
             elif action == "underinvestment_alert":
-                # Try to re-enable strategies that passed backtest but are disabled
+                # Legacy: manual underinvestment re-enablement.
+                # Automated recovery is handled by gradual_recovery (generated by Risk Agent).
+                # This handler is retained for operator-triggered or future agent use.
                 try:
                     enabled_count = 0
                     for strat, is_enabled in STRATEGY_ENABLED.items():
