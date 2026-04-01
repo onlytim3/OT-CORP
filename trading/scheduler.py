@@ -791,6 +791,17 @@ def run_trading_cycle():
             log.warning("Post-trade sync warning: %s", e)
             console.print(f"[yellow]Post-trade sync warning: {e}[/yellow]")
 
+        # Phase 5b: Reconcile orphan trades (moved from web dashboard to avoid
+        # cross-process SQLite write contention with gunicorn workers).
+        try:
+            from trading.monitor.web import _reconcile_orphan_trades
+            broker_positions = _get_positions() or []
+            orphans_closed = _reconcile_orphan_trades(broker_positions)
+            if orphans_closed:
+                log.info("Reconciled %d orphan trades", orphans_closed)
+        except Exception as e:
+            log.debug("Orphan reconciliation skipped: %s", e)
+
         # ---------------------------------------------------------------
         # Phase 6: Record daily P&L snapshot (proper daily return calc)
         # ---------------------------------------------------------------

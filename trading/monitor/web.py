@@ -382,8 +382,8 @@ def api_status():
     positions = _add_position_ages(sorted(raw_positions, key=lambda p: p.get("unrealized_pnl", 0) or 0, reverse=True))
     summary = get_action_log_summary()
 
-    # Reconcile orphan trades — close buy trades for positions no longer at broker
-    _reconcile_orphan_trades(raw_positions)
+    # Orphan trade reconciliation is now handled by the daemon (Phase 5 sync)
+    # to avoid cross-process SQLite write contention with trade execution.
 
     # Enrich positions with leverage and strategy from their opening trades
     try:
