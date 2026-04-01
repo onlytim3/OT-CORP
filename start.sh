@@ -39,7 +39,7 @@ PORT=${PORT:-10000}
 echo "[start] Starting dashboard on port $PORT..."
 exec gunicorn \
     --bind "0.0.0.0:$PORT" \
-    --workers 2 \
+    --workers 1 \
     --threads 4 \
     --timeout 120 \
     --access-logfile - \

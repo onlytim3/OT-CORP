@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+import threading
 import time as _time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,54 @@ from functools import wraps
 log = logging.getLogger(__name__)
 
 from trading.config import DB_PATH
+
+
+# ---------------------------------------------------------------------------
+# Connection management — one persistent connection per thread per mode.
+# Eliminates the open/PRAGMA/commit/close churn that caused lock pressure.
+# ---------------------------------------------------------------------------
+_local = threading.local()
+
+
+def _get_connection(read_only: bool = False) -> sqlite3.Connection:
+    """Return a persistent connection for the current thread.
+
+    Read-only connections use SQLite URI mode=ro so they physically cannot
+    acquire write locks — safe for gunicorn workers.
+    """
+    attr = "_ro_conn" if read_only else "_rw_conn"
+    conn = getattr(_local, attr, None)
+
+    # Check if the connection is still alive
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            setattr(_local, attr, None)
+
+    _ensure_db()
+
+    if read_only:
+        uri = f"file:{DB_PATH}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=60,
+                               check_same_thread=False)
+    else:
+        conn = sqlite3.connect(str(DB_PATH), timeout=60,
+                               check_same_thread=False)
+
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+    setattr(_local, attr, conn)
+    return conn
 
 
 def symbol_variants(sym: str) -> list[str]:
@@ -57,18 +106,28 @@ def _ensure_db():
 
 @contextmanager
 def get_db():
-    _ensure_db()
-    conn = sqlite3.connect(str(DB_PATH), timeout=60)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=60000")  # Wait up to 60s for locks
-    conn.execute("PRAGMA synchronous=NORMAL")  # Safe with WAL, reduces fsync overhead
-    conn.execute("PRAGMA foreign_keys=ON")
+    """Writable DB connection (daemon process only)."""
+    conn = _get_connection(read_only=False)
     try:
         yield conn
         conn.commit()
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+@contextmanager
+def get_read_db():
+    """Read-only DB connection — physically cannot write (mode=ro).
+
+    Use this in gunicorn workers / web dashboard to avoid cross-process
+    SQLite write lock contention with the trading daemon.
+    """
+    conn = _get_connection(read_only=True)
+    try:
+        yield conn
+    except Exception:
+        raise
 
 
 def _retry_on_locked(func):

@@ -16,7 +16,7 @@ except ImportError:
 
 from trading.config import TRADING_MODE, RISK, PROJECT_ROOT, DB_PATH, DISPLAY_TIMEZONE, STRATEGY_ENABLED
 from trading.db.store import (
-    init_db, get_db, get_trades, get_positions, get_daily_pnl,
+    init_db, get_db, get_read_db, get_trades, get_positions, get_daily_pnl,
     get_signals, get_action_log, get_action_log_summary,
     get_journal, get_reviews, get_setting, get_open_trades,
     symbol_variants,
@@ -152,7 +152,7 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
 
             # Look for an opposite-side trade that happened AFTER this entry
             try:
-                with get_db() as conn:
+                with get_read_db() as conn:
                     variants = symbol_variants(sym)
                     placeholders = ",".join("?" for _ in variants)
                     row = conn.execute(
@@ -252,7 +252,7 @@ def _add_position_ages(positions: list) -> list:
         return positions
     try:
         now = datetime.now(timezone.utc)
-        with get_db() as conn:
+        with get_read_db() as conn:
             for p in positions:
                 sym = p["symbol"]
                 variants = symbol_variants(sym)
@@ -554,7 +554,7 @@ def api_position_detail(symbol):
 
     # All trades for this symbol
     placeholders = ",".join("?" for _ in match_symbols)
-    with get_db() as conn:
+    with get_read_db() as conn:
         trades = [dict(r) for r in conn.execute(
             f"SELECT * FROM trades WHERE symbol IN ({placeholders}) ORDER BY timestamp DESC LIMIT 20",
             match_symbols,
@@ -691,7 +691,7 @@ def api_trade_detail(trade_id):
     """Full detail for a single trade — journal, signals, risk targets."""
     import json as _json
 
-    with get_db() as conn:
+    with get_read_db() as conn:
         trade = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
         if not trade:
             return jsonify({"error": f"Trade #{trade_id} not found"}), 404
@@ -753,7 +753,7 @@ def api_signal_detail(signal_id):
     """Full detail for a single signal."""
     import json as _json
 
-    with get_db() as conn:
+    with get_read_db() as conn:
         sig = conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
         if not sig:
             return jsonify({"error": f"Signal #{signal_id} not found"}), 404
@@ -784,7 +784,7 @@ def api_action_detail(action_id):
     """Full detail for a single action log entry."""
     import json as _json
 
-    with get_db() as conn:
+    with get_read_db() as conn:
         action = conn.execute("SELECT * FROM action_log WHERE id=?", (action_id,)).fetchone()
         if not action:
             return jsonify({"error": f"Action #{action_id} not found"}), 404
@@ -881,7 +881,7 @@ def api_pnl_history():
             m["return_pct"] = round((m["end_value"] - m["start_value"]) / m["start_value"] * 100, 2)
 
     # Add trade counts per period
-    with get_db() as conn:
+    with get_read_db() as conn:
         trades = conn.execute(
             "SELECT timestamp, side FROM trades WHERE timestamp >= ? ORDER BY timestamp",
             (daily[0]["date"] if daily else "2000-01-01",),
@@ -912,7 +912,7 @@ def api_pnl_detail(date):
     """Full detail for a single day's P&L — all trades, signals, actions."""
     import json as _json
 
-    with get_db() as conn:
+    with get_read_db() as conn:
         pnl = conn.execute("SELECT * FROM daily_pnl WHERE date=?", (date,)).fetchone()
         if not pnl:
             return jsonify({"error": f"No P&L data for {date}"}), 404
@@ -1093,7 +1093,7 @@ def api_intelligence():
         log.debug("Fear & Greed fetch failed: %s", e)
 
     # Recent intelligence briefings from action log
-    with get_db() as conn:
+    with get_read_db() as conn:
         rows = conn.execute(
             "SELECT * FROM action_log WHERE "
             "(action LIKE '%briefing%' OR action LIKE '%intelligence%' OR action LIKE '%regime%') "
@@ -1278,7 +1278,7 @@ def api_agents():
         pass
 
     # Agent-related actions from action log
-    with get_db() as conn:
+    with get_read_db() as conn:
         rows = conn.execute(
             "SELECT * FROM action_log WHERE category IN ('review', 'system', 'scheduler') "
             "ORDER BY timestamp DESC LIMIT 10"
@@ -1329,7 +1329,7 @@ def api_strategy_detail(name):
     }
 
     # Recent signals for this strategy
-    with get_db() as conn:
+    with get_read_db() as conn:
         rows = conn.execute(
             "SELECT * FROM signals WHERE strategy = ? ORDER BY timestamp DESC LIMIT 30", (name,)
         ).fetchall()
@@ -1407,7 +1407,7 @@ def api_recommendation_detail(rec_id):
     """Detailed view of a single agent recommendation."""
     import json as _json
 
-    with get_db() as conn:
+    with get_read_db() as conn:
         row = conn.execute("SELECT * FROM agent_recommendations WHERE id = ?", (rec_id,)).fetchone()
         if not row:
             return jsonify({"error": "Recommendation not found"}), 404
@@ -1796,7 +1796,7 @@ def api_health():
     daemon_last_cycle = None
     daemon_last_cycle_age_minutes = None
     try:
-        with get_db() as conn:
+        with get_read_db() as conn:
             row = conn.execute(
                 "SELECT timestamp FROM action_log "
                 "WHERE action = 'cycle_complete' "
@@ -1820,7 +1820,7 @@ def api_health():
     # --- Consecutive recent errors ---
     consecutive_errors = 0
     try:
-        with get_db() as conn:
+        with get_read_db() as conn:
             rows = conn.execute(
                 "SELECT action FROM action_log "
                 "ORDER BY timestamp DESC LIMIT 50"
@@ -1923,7 +1923,7 @@ def api_volume_all():
 def api_funnel():
     """Signal-to-execution funnel data from recent cycles."""
     try:
-        with get_db() as conn:
+        with get_read_db() as conn:
             rows = conn.execute(
                 "SELECT timestamp, data FROM action_log "
                 "WHERE category='funnel' ORDER BY timestamp DESC LIMIT 50"
@@ -1977,7 +1977,7 @@ def api_correlation_matrix():
 def api_fill_analysis():
     """Fill quality and slippage data."""
     try:
-        with get_db() as conn:
+        with get_read_db() as conn:
             rows = conn.execute(
                 "SELECT * FROM fill_quality ORDER BY timestamp DESC LIMIT 100"
             ).fetchall()
