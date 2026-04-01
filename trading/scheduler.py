@@ -1180,6 +1180,8 @@ def check_stop_losses():
                 order = _execute_order(symbol, exit_side, qty=action["qty"])
             except Exception as e:
                 log.error("Profit management %s failed for %s: %s", exit_side, symbol, e)
+                log_action("trade", f"{action['action']}_{exit_side}_failed", symbol=symbol,
+                           result="error", details=f"Order execution failed: {e}")
                 continue
 
             if order.get("status") in ("filled", "accepted", "new", "pending_new"):
@@ -1207,6 +1209,10 @@ def check_stop_losses():
                     _notify_safe(notify_stop_loss, symbol, action["pnl_pct"] * 100, action["qty"])
                 except Exception:
                     pass
+            else:
+                log.warning("Profit exit order for %s returned status: %s", symbol, order.get("status"))
+                log_action("trade", f"{action['action']}_{exit_side}_failed", symbol=symbol,
+                           result=order.get("status"), details=f"Order not filled: {order}")
 
         # -- 2. Hard stop-loss checks --
         for pos in positions:
@@ -1230,6 +1236,8 @@ def check_stop_losses():
                     order = _execute_order(symbol, exit_side, qty=pos["qty"])
                 except Exception as e:
                     log.error("Stop-loss %s failed for %s: %s", exit_side, symbol, e)
+                    log_action("trade", f"stop_loss_{exit_side}_failed", symbol=symbol,
+                               result="error", details=f"Order execution failed: {e}")
                     continue
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
@@ -1257,6 +1265,10 @@ def check_stop_losses():
                         _notify_safe(notify_stop_loss, symbol, pnl_pct * 100, pos["qty"])
                     except Exception:
                         pass
+                else:
+                    log.warning("Stop-loss exit order for %s returned status: %s", symbol, order.get("status"))
+                    log_action("trade", f"stop_loss_{exit_side}_failed", symbol=symbol,
+                               result=order.get("status"), details=f"Order not filled: {order}")
 
         # -- 2.5. Passive loss detection — catch positions that slipped through stops --
         try:
@@ -1295,8 +1307,14 @@ def check_stop_losses():
                             log_action("trade", "passive_loss_closed", symbol=symbol, result=order["status"])
                             tracker.remove(symbol)
                             console.print(f"[bold red]CLOSED passive loser {symbol} at ${exit_price:.2f}[/]")
+                        else:
+                            log.warning("Passive loss exit for %s returned status: %s", symbol, order.get("status"))
+                            log_action("trade", "passive_loss_close_failed", symbol=symbol,
+                                       result=order.get("status"), details=f"Order not filled: {order}")
                     except Exception as e:
                         log.error("Passive loss close failed for %s: %s", symbol, e)
+                        log_action("trade", "passive_loss_close_failed", symbol=symbol,
+                                   result="error", details=f"Order execution failed: {e}")
                 elif alert["severity"] == "warning":
                     log_action("system", "passive_loss_warning", symbol=symbol, details=alert["reason"])
         except Exception as e:
@@ -1352,6 +1370,8 @@ def check_stop_losses():
                     order = _execute_order(symbol, exit_side, qty=pos["qty"])
                 except Exception as e:
                     log.error("Volume exit %s failed for %s: %s", exit_side, symbol, e)
+                    log_action("trade", f"volume_exit_{exit_side}_failed", symbol=symbol,
+                               result="error", details=f"Order execution failed: {e}")
                     continue
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
@@ -1375,6 +1395,10 @@ def check_stop_losses():
                     log_action("trade", f"volume_exit_{exit_side}", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
                     already_sold.add(symbol)
+                else:
+                    log.warning("Volume exit order for %s returned status: %s", symbol, order.get("status"))
+                    log_action("trade", f"volume_exit_{exit_side}_failed", symbol=symbol,
+                               result=order.get("status"), details=f"Order not filled: {order}")
         except Exception as e:
             log.debug("Volume exit check error: %s", e, exc_info=True)
 
