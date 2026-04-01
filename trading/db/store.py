@@ -3,8 +3,10 @@
 import json
 import logging
 import sqlite3
+import time as _time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 
 log = logging.getLogger(__name__)
 
@@ -56,15 +58,37 @@ def _ensure_db():
 @contextmanager
 def get_db():
     _ensure_db()
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")  # Wait up to 30s for locks
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
+
+
+def _retry_on_locked(func):
+    """Retry a DB operation up to 4 times with exponential backoff on database lock errors."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        last_err = None
+        for attempt in range(4):
+            try:
+                return func(*args, **kwargs)
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                    raise
+                last_err = e
+                wait = (attempt + 1) * 0.5  # 0.5s, 1s, 1.5s, 2s
+                log.warning("DB locked in %s (attempt %d/4), retrying in %.1fs: %s",
+                            func.__name__, attempt + 1, wait, e)
+                _time.sleep(wait)
+        log.error("DB locked in %s after 4 attempts, giving up: %s", func.__name__, last_err)
+        raise last_err  # type: ignore[misc]
+    return wrapper
 
 
 def init_db():
@@ -390,6 +414,7 @@ def set_setting(key: str, value: str):
 
 # --- Trade Operations ---
 
+@_retry_on_locked
 def insert_trade(symbol, side, qty, price, total, strategy, status="pending", alpaca_order_id=None,
                   stop_loss_price=None, take_profit_price=None, trailing_stop_activate=None,
                   risk_reward_ratio=None, leverage=None, entry_reasoning=None):
@@ -405,6 +430,7 @@ def insert_trade(symbol, side, qty, price, total, strategy, status="pending", al
         return cur.lastrowid
 
 
+@_retry_on_locked
 def update_trade_status(trade_id, status, alpaca_order_id=None):
     with get_db() as conn:
         if alpaca_order_id:
@@ -416,6 +442,7 @@ def update_trade_status(trade_id, status, alpaca_order_id=None):
             conn.execute("UPDATE trades SET status=? WHERE id=?", (status, trade_id))
 
 
+@_retry_on_locked
 def close_trade(trade_id, close_price, pnl):
     """Close a trade and record exit price and realized P&L.
 
@@ -446,6 +473,7 @@ def close_trade(trade_id, close_price, pnl):
         )
 
 
+@_retry_on_locked
 def close_matching_entry_trades(symbol: str, exit_price: float, exit_qty: float, exit_side: str) -> int:
     """Immediately close open entry trades for *symbol* when an exit executes.
 
@@ -569,30 +597,16 @@ def get_positions():
 
 # --- Daily P&L ---
 
+@_retry_on_locked
 def record_daily_pnl(portfolio_value, cash, positions_value, daily_return, cumulative_return):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    # Retry with backoff — SQLite BUSY errors common with concurrent gunicorn workers
-    import time as _time
-    for attempt in range(3):
-        try:
-            conn = sqlite3.connect(str(DB_PATH), timeout=10)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(
-                "INSERT OR REPLACE INTO daily_pnl (date, portfolio_value, cash, positions_value, daily_return, cumulative_return) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (today, portfolio_value, cash, positions_value, daily_return, cumulative_return),
-            )
-            conn.commit()
-            conn.close()
-            log.info("record_daily_pnl: saved %s pv=$%.2f", today, portfolio_value)
-            return
-        except Exception as e:
-            if attempt < 2:
-                _time.sleep(0.5 * (attempt + 1))
-            else:
-                log.error("record_daily_pnl FAILED after 3 attempts: %s", e)
-                raise
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO daily_pnl (date, portfolio_value, cash, positions_value, daily_return, cumulative_return) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (today, portfolio_value, cash, positions_value, daily_return, cumulative_return),
+        )
+    log.info("record_daily_pnl: saved %s pv=$%.2f", today, portfolio_value)
 
 
 def get_daily_pnl(limit=30):
@@ -727,6 +741,7 @@ def get_reviews(limit=10):
 
 # --- Action Log ---
 
+@_retry_on_locked
 def log_action(category, action, symbol=None, details=None, result=None, data=None):
     """Log a system action for the dashboard.
 
