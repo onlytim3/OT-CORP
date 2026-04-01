@@ -1071,21 +1071,17 @@ def run_trading_cycle():
             log.debug("Volume snapshot recording failed (non-fatal): %s", e)
 
         # ---------------------------------------------------------------
-        # Phase 10: Generate narratives for this cycle's actions (background)
+        # Phase 10: Generate narratives for this cycle's actions (synchronous)
+        # Runs inline to avoid background DB writes overlapping with
+        # stop-loss checks that execute on a 15-minute schedule.
         # ---------------------------------------------------------------
         try:
-            import threading
-            def _generate_narratives():
-                try:
-                    from trading.intelligence.action_narrator import generate_missing_narratives
-                    count = generate_missing_narratives(limit=30)
-                    if count:
-                        log.info("Generated %d action narratives", count)
-                except Exception as ne:
-                    log.debug("Narrative generation failed (non-fatal): %s", ne)
-            threading.Thread(target=_generate_narratives, daemon=True, name="narrative-generator").start()
-        except Exception:
-            pass
+            from trading.intelligence.action_narrator import generate_missing_narratives
+            count = generate_missing_narratives(limit=10)
+            if count:
+                log.info("Generated %d action narratives", count)
+        except Exception as ne:
+            log.debug("Narrative generation failed (non-fatal): %s", ne)
 
     except Exception as e:
         log_action("error", "cycle_crash", details=str(e))

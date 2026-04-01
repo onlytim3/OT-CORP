@@ -92,8 +92,15 @@ def _safe_positions():
         return []
 
 
+# Rate-limit orphan reconciliation to avoid DB write contention with daemon
+_last_reconcile_time = 0.0
+_RECONCILE_INTERVAL = 120  # seconds — run at most once per 2 minutes
+
+
 def _reconcile_orphan_trades(broker_positions: list) -> int:
     """Close stale open entry trades that should have been paired with an exit.
+
+    Rate-limited to avoid DB write contention with the trading daemon.
 
     Works for both long entries (side='buy', closed by a sell) and short
     entries (side='sell', closed by a buy) — required for futures trading.
@@ -108,6 +115,12 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
 
     Returns the number of orphan trades closed.
     """
+    global _last_reconcile_time
+    now = time.time()
+    if now - _last_reconcile_time < _RECONCILE_INTERVAL:
+        return 0  # Skip — too soon since last reconciliation
+    _last_reconcile_time = now
+
     try:
         open_trades = get_open_trades()
         if not open_trades:

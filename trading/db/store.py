@@ -58,10 +58,11 @@ def _ensure_db():
 @contextmanager
 def get_db():
     _ensure_db()
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    conn = sqlite3.connect(str(DB_PATH), timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")  # Wait up to 30s for locks
+    conn.execute("PRAGMA busy_timeout=60000")  # Wait up to 60s for locks
+    conn.execute("PRAGMA synchronous=NORMAL")  # Safe with WAL, reduces fsync overhead
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
@@ -1098,6 +1099,7 @@ def get_trade_analyses(trade_id: int, limit: int = 20) -> list:
 
 # --- Action Narratives ---
 
+@_retry_on_locked
 def insert_action_narrative(action_id: int, narrative: str, interpretation: str = None,
                             lessons: str = None, quality_score: float = None,
                             model: str = None) -> None:
