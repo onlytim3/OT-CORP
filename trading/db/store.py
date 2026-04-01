@@ -403,6 +403,7 @@ def get_setting(key: str, default: str = None) -> str:
         return row["value"] if row else default
 
 
+@_retry_on_locked
 def set_setting(key: str, value: str):
     """Set a persistent setting in the database."""
     with get_db() as conn:
@@ -573,6 +574,7 @@ def get_open_trades():
 
 # --- Position Operations ---
 
+@_retry_on_locked
 def upsert_position(symbol, qty, avg_cost, current_price, strategy):
     unrealized_pnl = (current_price - avg_cost) * qty if current_price and avg_cost else 0
     with get_db() as conn:
@@ -585,6 +587,7 @@ def upsert_position(symbol, qty, avg_cost, current_price, strategy):
         )
 
 
+@_retry_on_locked
 def remove_position(symbol):
     with get_db() as conn:
         conn.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
@@ -620,6 +623,7 @@ def get_daily_pnl(limit=30):
 
 # --- Signal Operations ---
 
+@_retry_on_locked
 def insert_signal(strategy, symbol, signal, strength, data=None):
     with get_db() as conn:
         conn.execute(
@@ -638,6 +642,7 @@ def get_signals(limit=20):
 
 # --- Journal Operations ---
 
+@_retry_on_locked
 def insert_journal(trade_id, rationale, market_context, tags=""):
     with get_db() as conn:
         conn.execute(
@@ -646,6 +651,7 @@ def insert_journal(trade_id, rationale, market_context, tags=""):
         )
 
 
+@_retry_on_locked
 def update_journal_outcome(trade_id, outcome, pnl, lesson):
     with get_db() as conn:
         conn.execute(
@@ -667,6 +673,7 @@ def get_journal(limit=20):
 
 # --- Knowledge Operations ---
 
+@_retry_on_locked
 def insert_knowledge(title, source, category, content, key_rules=""):
     with get_db() as conn:
         conn.execute(
@@ -697,6 +704,7 @@ def get_knowledge(limit=20):
 
 # --- Param History ---
 
+@_retry_on_locked
 def insert_param_change(strategy, param_name, old_value, new_value, reason):
     with get_db() as conn:
         conn.execute(
@@ -713,6 +721,7 @@ def get_pending_adaptations():
         return [dict(r) for r in rows]
 
 
+@_retry_on_locked
 def approve_adaptation(param_id):
     with get_db() as conn:
         conn.execute("UPDATE param_history SET approved=1 WHERE id=?", (param_id,))
@@ -720,6 +729,7 @@ def approve_adaptation(param_id):
 
 # --- Review Operations ---
 
+@_retry_on_locked
 def insert_review(period, start_date, end_date, total_trades, win_rate, total_pnl,
                   sharpe_ratio, max_drawdown, best_strategy, worst_strategy, summary, file_path):
     with get_db() as conn:
@@ -821,6 +831,7 @@ def get_action_log_summary():
 
 # --- Watermarks (ProfitTracker persistence) ---
 
+@_retry_on_locked
 def save_watermark(symbol: str, high_price: float):
     """Persist a high watermark for trailing stop tracking."""
     with get_db() as conn:
@@ -837,6 +848,7 @@ def load_watermarks() -> dict:
         return {r["symbol"]: r["high_price"] for r in rows}
 
 
+@_retry_on_locked
 def delete_watermark(symbol: str):
     """Remove watermark when position is fully closed."""
     with get_db() as conn:
@@ -845,6 +857,7 @@ def delete_watermark(symbol: str):
 
 # --- Deferred Signals (ETF signal queue) ---
 
+@_retry_on_locked
 def save_deferred_signal(symbol: str, action: str, strength: float,
                          strategy: str, reason: str, expires_at: str):
     """Queue an ETF signal for execution when market opens."""
@@ -866,6 +879,7 @@ def get_deferred_signals() -> list:
         return [dict(r) for r in rows]
 
 
+@_retry_on_locked
 def clear_deferred_signal(signal_id: int):
     """Remove a deferred signal after execution."""
     with get_db() as conn:
@@ -874,6 +888,7 @@ def clear_deferred_signal(signal_id: int):
 
 # --- Agent Recommendations (agent-to-agent communication) ---
 
+@_retry_on_locked
 def insert_recommendation(from_agent: str, to_agent: str, category: str,
                           action: str, target: str, reasoning: str, data: dict = None) -> int:
     """Log an agent recommendation for another agent to act on.
@@ -909,6 +924,7 @@ def get_pending_recommendations(to_agent: str = None, category: str = None) -> l
         return [dict(r) for r in rows]
 
 
+@_retry_on_locked
 def resolve_recommendation(rec_id: int, resolution: str, outcome: str = None):
     """Mark a recommendation as resolved (applied, rejected, deferred)."""
     with get_db() as conn:
@@ -919,6 +935,7 @@ def resolve_recommendation(rec_id: int, resolution: str, outcome: str = None):
         )
 
 
+@_retry_on_locked
 def update_recommendation_outcome(rec_id: int, outcome: str):
     """Update a recommendation's outcome after observing results (positive/negative)."""
     with get_db() as conn:
@@ -953,6 +970,7 @@ def get_recommendation_history(limit: int = 50) -> list:
 
 # --- Backtest Results ---
 
+@_retry_on_locked
 def insert_backtest_result(strategy: str, days: int, metrics: dict, verdict: str) -> int:
     """Record a backtest result for a strategy."""
     with get_db() as conn:
@@ -1003,6 +1021,7 @@ def get_strategies_needing_backtest(cooldown_days: int = 7) -> list[str]:
 # Volume profiles — learning volume patterns by hour/day
 # ---------------------------------------------------------------------------
 
+@_retry_on_locked
 def insert_volume_profile(
     symbol: str,
     hour_of_day: int,
@@ -1062,6 +1081,7 @@ def get_volume_profile_by_day(symbol: str, days: int = 30) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+@_retry_on_locked
 def cleanup_old_volume_profiles(keep_days: int = 90) -> int:
     """Delete volume profiles older than keep_days. Returns rows deleted."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
@@ -1074,6 +1094,7 @@ def cleanup_old_volume_profiles(keep_days: int = 90) -> int:
 
 # --- Trade Analyses ---
 
+@_retry_on_locked
 def insert_trade_analysis(trade_id: int, analysis: str, market_snapshot: dict = None,
                           source: str = "llm") -> int:
     """Insert a trade analysis entry."""
