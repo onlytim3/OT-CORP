@@ -1303,10 +1303,18 @@ def _gather_system_context() -> dict:
     try:
         from trading.execution.router import get_account, get_positions_from_aster
         context["account"] = get_account()
-        context["positions"] = get_positions_from_aster()[:10]
+        positions = get_positions_from_aster()
+        context["positions"] = positions[:10]
+        
+        # Explicitly calculate Unrealized P&L for the LLM
+        total_unrealized_pnl = sum(p.get("unrealized_pnl", 0) for p in positions)
+        context["current_unrealized_pnl"] = total_unrealized_pnl
+        context["open_positions_count"] = len(positions)
     except Exception:
         context["account"] = {}
         context["positions"] = []
+        context["current_unrealized_pnl"] = 0.0
+        context["open_positions_count"] = 0
 
     # Recent trades
     try:

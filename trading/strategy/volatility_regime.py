@@ -20,7 +20,7 @@ import logging
 
 import numpy as np
 
-from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+from trading.config import ASTER_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -198,7 +198,7 @@ class VolatilityRegimeStrategy(Strategy):
         hpy = self.config["hours_per_year"]
 
         for coin in self.config["coins"]:
-            symbol = CRYPTO_SYMBOLS.get(coin)
+            symbol = ASTER_SYMBOLS.get(coin)
             aster_sym = ASTER_SYMBOLS.get(coin)
 
             if not symbol or not aster_sym:
@@ -289,7 +289,7 @@ class VolatilityRegimeStrategy(Strategy):
         rotation = _check_rotation_signal(vol_data)
         if rotation:
             for alt_coin, alt_ratio in rotation["elevated_alts"]:
-                alt_sym = CRYPTO_SYMBOLS.get(alt_coin)
+                alt_sym = ASTER_SYMBOLS.get(alt_coin)
                 if not alt_sym:
                     continue
                 # Downgrade any existing buy signal for this alt to hold

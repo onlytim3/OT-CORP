@@ -240,7 +240,7 @@ class WhaleFlowStrategy(Strategy):
         context_data: dict[str, Any] = {}
 
         try:
-            from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+            from trading.config import ASTER_SYMBOLS
         except ImportError:
             log.warning("whale_flow: trading.config not available, skipping")
             return signals
@@ -257,7 +257,7 @@ class WhaleFlowStrategy(Strategy):
                 if book is None:
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=CRYPTO_SYMBOLS.get(coin_id, aster_symbol),
+                        symbol=ASTER_SYMBOLS.get(coin_id, aster_symbol),
                         action="hold",
                         strength=0.0,
                         reason=f"{coin_id} whale_flow: no orderbook data",
@@ -323,7 +323,7 @@ class WhaleFlowStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=CRYPTO_SYMBOLS.get(coin_id, aster_symbol),
+                    symbol=ASTER_SYMBOLS.get(coin_id, aster_symbol),
                     action=action,
                     strength=strength,
                     reason=f"{coin_id} {reason}",
@@ -334,7 +334,7 @@ class WhaleFlowStrategy(Strategy):
                 log.error("whale_flow error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=CRYPTO_SYMBOLS.get(coin_id, aster_symbol),
+                    symbol=ASTER_SYMBOLS.get(coin_id, aster_symbol),
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} whale_flow error: {e}",

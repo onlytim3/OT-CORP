@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from trading.config import CRYPTO_SYMBOLS
+from trading.config import ASTER_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
@@ -198,14 +198,14 @@ class HMMRegimeStrategy(Strategy):
 
         for coin_id in self.coins:
             try:
-                alpaca_symbol = CRYPTO_SYMBOLS.get(coin_id)
-                if not alpaca_symbol:
+                aster_symbol = ASTER_SYMBOLS.get(coin_id)
+                if not aster_symbol:
                     continue
 
                 ohlc = get_ohlc(coin_id, self.training_days)
                 if ohlc.empty or len(ohlc) < HMM_REGIME["min_data_points"]:
                     signals.append(Signal(
-                        strategy=self.name, symbol=alpaca_symbol, action="hold",
+                        strategy=self.name, symbol=aster_symbol, action="hold",
                         strength=0.0,
                         reason=f"{coin_id} insufficient data ({len(ohlc) if not ohlc.empty else 0} rows)",
                     ))
@@ -218,7 +218,7 @@ class HMMRegimeStrategy(Strategy):
                     strength = min(regime_prob, 1.0)
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=alpaca_symbol,
+                        symbol=aster_symbol,
                         action="buy",
                         strength=strength,
                         reason=f"{coin_id} HMM bull regime (prob {regime_prob:.0%})",
@@ -228,7 +228,7 @@ class HMMRegimeStrategy(Strategy):
                     strength = min(regime_prob, 1.0)
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=alpaca_symbol,
+                        symbol=aster_symbol,
                         action="sell",
                         strength=strength,
                         reason=f"{coin_id} HMM bear regime (prob {regime_prob:.0%})",
@@ -238,7 +238,7 @@ class HMMRegimeStrategy(Strategy):
                     # sideways or unknown — use scaled probability as strength
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=alpaca_symbol,
+                        symbol=aster_symbol,
                         action="hold",
                         strength=round(regime_prob * 0.3, 3),  # 80% prob → 24% strength
                         reason=f"{coin_id} HMM sideways regime (prob {regime_prob:.0%})",
@@ -246,7 +246,7 @@ class HMMRegimeStrategy(Strategy):
                     ))
 
             except Exception as e:
-                sym = CRYPTO_SYMBOLS.get(coin_id, "BTC/USD")
+                sym = ASTER_SYMBOLS.get(coin_id, "BTC/USD")
                 signals.append(Signal(
                     strategy=self.name, symbol=sym, action="hold",
                     strength=0.0, reason=f"{coin_id} HMM error: {e}",

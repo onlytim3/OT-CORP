@@ -41,7 +41,7 @@ ASTER_SYMBOL_MAP = {
     "litecoin": "LTCUSDT",
 }
 
-ALPACA_SYMBOL_MAP = {
+ASTER_SYMBOL_MAP = {
     "bitcoin": "BTC/USD",
     "ethereum": "ETH/USD",
     "solana": "SOL/USD",
@@ -233,9 +233,9 @@ class FundingArbStrategy(Strategy):
         btc_funding = funding_rates.get("bitcoin", 0.0)
 
         for coin_id in FUNDING_COINS:
-            alpaca_symbol = ALPACA_SYMBOL_MAP.get(coin_id)
             aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
-            if not alpaca_symbol or not aster_symbol:
+            aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
+            if not aster_symbol or not aster_symbol:
                 continue
 
             try:
@@ -272,7 +272,7 @@ class FundingArbStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_symbol,
+                    symbol=aster_symbol,
                     action=action,
                     strength=strength,
                     reason=f"{coin_id} {reason}",
@@ -283,7 +283,7 @@ class FundingArbStrategy(Strategy):
                 log.error("funding_arb error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_symbol,
+                    symbol=aster_symbol,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} funding_arb error: {e}",

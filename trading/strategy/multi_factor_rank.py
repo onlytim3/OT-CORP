@@ -20,7 +20,7 @@ import numpy as np
 
 from trading.config import (
     ASTER_SYMBOLS,
-    CRYPTO_SYMBOLS,
+    ASTER_SYMBOLS,
     CRYPTO_L1,
     CRYPTO_DEFI,
 )
@@ -123,11 +123,11 @@ class MultiFactorRankStrategy(Strategy):
         """Build the tradeable universe from L1 + DeFi coins.
 
         Skips meme coins for ranking stability.  Only includes coins
-        that exist in both ASTER_SYMBOLS and CRYPTO_SYMBOLS.
+        that exist in both ASTER_SYMBOLS and ASTER_SYMBOLS.
         """
         universe = []
         for coin_id in CRYPTO_L1 + CRYPTO_DEFI:
-            if coin_id in ASTER_SYMBOLS and coin_id in CRYPTO_SYMBOLS:
+            if coin_id in ASTER_SYMBOLS and coin_id in ASTER_SYMBOLS:
                 universe.append(coin_id)
         return universe
 
@@ -335,7 +335,7 @@ class MultiFactorRankStrategy(Strategy):
 
         for i, (coin_id, score) in enumerate(ranked):
             rank = i + 1
-            symbol = CRYPTO_SYMBOLS[coin_id]
+            symbol = ASTER_SYMBOLS[coin_id]
             strength = min(abs(score) / 2.0, 1.0)
 
             detail = {

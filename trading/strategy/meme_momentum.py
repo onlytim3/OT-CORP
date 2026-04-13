@@ -139,7 +139,7 @@ class MemeMomentumStrategy(Strategy):
 
     def generate_signals(self) -> list[Signal]:
         try:
-            from trading.config import CRYPTO_MEME, ASTER_SYMBOLS, CRYPTO_SYMBOLS
+            from trading.config import CRYPTO_MEME, ASTER_SYMBOLS
         except ImportError:
             log.error("Cannot import config — symbol mappings unavailable")
             return [self._hold("Config import failed")]
@@ -163,7 +163,7 @@ class MemeMomentumStrategy(Strategy):
 
             coin_data[coin_id] = data
 
-            signal_symbol = CRYPTO_SYMBOLS.get(coin_id)
+            signal_symbol = ASTER_SYMBOLS.get(coin_id)
             if not signal_symbol:
                 continue
 

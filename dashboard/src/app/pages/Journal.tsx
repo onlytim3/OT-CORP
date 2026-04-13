@@ -1,8 +1,10 @@
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
-import { BookOpen, Calendar, ChevronLeft, ChevronRight, Sparkles, Clock, TrendingUp, TrendingDown, Brain, RefreshCw, BookMarked, FileText } from "lucide-react";
+import { BookOpen, Calendar, ChevronLeft, ChevronRight, Sparkles, Clock, TrendingUp, TrendingDown, Brain, RefreshCw, BookMarked, FileText, BarChart2, FlaskConical, Loader2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import { api, fetchAPI } from "../config/api";
+import { api, fetchAPI, usePolling } from "../config/api";
+import { useIsMobile } from "../components/ui/use-mobile";
+import { PnLHeatmap } from "../components/PnLHeatmap";
 
 // --- Types ---
 
@@ -290,7 +292,7 @@ function DailyJournalCard({ journal, isSelected, onClick }: {
 
 // --- Main Page ---
 
-type Tab = "daily" | "trade_log" | "weekly";
+type Tab = "daily" | "trade_log" | "weekly" | "heatmap" | "tearsheets";
 
 export function Journal() {
   const [tab, setTab] = useState<Tab>("daily");
@@ -298,18 +300,34 @@ export function Journal() {
   // Daily journals (auto-generated, stored)
   const [dailyJournals, setDailyJournals] = useState<DailyJournal[]>([]);
   const [selectedDaily, setSelectedDaily] = useState<number>(0);
+  const [showDailyDetail, setShowDailyDetail] = useState(false);
   const [loadingDaily, setLoadingDaily] = useState(true);
 
   // Weekly reviews (auto-generated, stored)
   const [weeklyReviews, setWeeklyReviews] = useState<WeeklyReview[]>([]);
   const [selectedWeekly, setSelectedWeekly] = useState<number>(0);
+  const [showWeeklyDetail, setShowWeeklyDetail] = useState(false);
   const [loadingWeekly, setLoadingWeekly] = useState(true);
+
+  const isMobile = useIsMobile();
 
   // Trade log (per-trade journal entries)
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [loadingEntries, setLoadingEntries] = useState(true);
   const [historyPage, setHistoryPage] = useState(0);
   const ENTRIES_PER_PAGE = 20;
+
+  // Heatmap: fetch pnl history
+  const { data: pnlHistory } = usePolling<Array<{ date: string; pnl: number; trade_count?: number }>>(
+    api.pnlHistory,
+    60000
+  );
+
+  // AI Tear Sheets
+  const [tearSheets, setTearSheets] = useState<Array<{ id: string; timestamp: string; preview: string; content: string }>>([]);
+  const [loadingTearSheets, setLoadingTearSheets] = useState(false);
+  const [generatingTearSheet, setGeneratingTearSheet] = useState(false);
+  const [selectedTearSheet, setSelectedTearSheet] = useState<number>(0);
 
   const loadDaily = useCallback(async () => {
     setLoadingDaily(true);
@@ -347,11 +365,35 @@ export function Journal() {
     }
   }, []);
 
+  const loadTearSheets = useCallback(async () => {
+    setLoadingTearSheets(true);
+    try {
+      const res = await fetchAPI<Array<{ id: string; timestamp: string; preview: string; content: string }>>(api.reviews);
+      setTearSheets(Array.isArray(res) ? res : []);
+    } catch {
+      setTearSheets([]);
+    } finally {
+      setLoadingTearSheets(false);
+    }
+  }, []);
+
+  const generateTearSheet = async () => {
+    setGeneratingTearSheet(true);
+    try {
+      await fetchAPI(api.reviewsGenerate, { method: 'POST', body: JSON.stringify({ days: 7 }) });
+      // Poll until the new sheet appears
+      setTimeout(() => loadTearSheets(), 3000);
+    } catch { /* ignore */ } finally {
+      setGeneratingTearSheet(false);
+    }
+  };
+
   useEffect(() => {
     loadDaily();
     loadWeekly();
     loadEntries();
-  }, [loadDaily, loadWeekly, loadEntries]);
+    loadTearSheets();
+  }, [loadDaily, loadWeekly, loadEntries, loadTearSheets]);
 
   // Paginated trade log
   const grouped = groupByDate(entries);
@@ -366,6 +408,8 @@ export function Journal() {
     { key: "daily", label: "Daily", icon: Sparkles },
     { key: "trade_log", label: "Trade Log", icon: FileText },
     { key: "weekly", label: "Weekly", icon: BookMarked },
+    { key: "heatmap", label: "Heatmap", icon: BarChart2 },
+    { key: "tearsheets", label: "AI Reports", icon: Brain },
   ];
 
   return (
@@ -406,7 +450,7 @@ export function Journal() {
       {tab === "daily" && (
         <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
           {/* Sidebar — journal list */}
-          <Card className="bg-[#0a0a0a]/80 border-white/[0.06]">
+          <Card className={`bg-[#0a0a0a]/80 border-white/[0.06] ${isMobile && showDailyDetail ? "hidden" : "block"}`}>
             <CardContent className="p-4">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xs font-medium text-[#888888] uppercase tracking-wider">Entries</h3>
@@ -429,7 +473,7 @@ export function Journal() {
                       key={j.id}
                       journal={j}
                       isSelected={i === selectedDaily}
-                      onClick={() => setSelectedDaily(i)}
+                      onClick={() => { setSelectedDaily(i); setShowDailyDetail(true); }}
                     />
                   ))}
                 </div>
@@ -438,8 +482,16 @@ export function Journal() {
           </Card>
 
           {/* Main content — selected journal */}
-          <Card className="bg-[#0a0a0a]/80 border-white/[0.06]">
+          <Card className={`bg-[#0a0a0a]/80 border-white/[0.06] ${isMobile && !showDailyDetail ? "hidden" : "block"}`}>
             <CardContent className="p-5 sm:p-8">
+              {isMobile && (
+                <button
+                  onClick={() => setShowDailyDetail(false)}
+                  className="mb-6 flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[#888888] text-xs hover:bg-white/10 transition-colors"
+                >
+                  <ChevronLeft className="size-3" /> Back to entries
+                </button>
+              )}
               {currentDaily ? (
                 <div>
                   <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/[0.06]">
@@ -612,6 +664,105 @@ export function Journal() {
                   </div>
                 )}
               </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* === HEATMAP TAB === */}
+      {tab === "heatmap" && (
+        <Card className="bg-[#0a0a0a]/80 border-white/[0.06]">
+          <CardContent className="p-5 sm:p-8">
+            <div className="flex items-center gap-3 mb-6 pb-4 border-b border-white/[0.06]">
+              <div className="p-2 rounded-lg bg-[#4a9eff]/10 border border-[#4a9eff]/20">
+                <BarChart2 className="size-5 text-[#4a9eff]" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-[#e8e8e8] tracking-wide">P&L Heatmap</h3>
+                <p className="text-xs text-[#666666]">365-day trading performance calendar</p>
+              </div>
+            </div>
+            <PnLHeatmap pnlHistory={pnlHistory ?? []} />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* === AI TEAR SHEETS TAB === */}
+      {tab === "tearsheets" && (
+        <Card className="bg-[#0a0a0a]/80 border-white/[0.06]">
+          <CardContent className="p-5 sm:p-8">
+            <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/[0.06]">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-[#c084fc]/10 border border-[#c084fc]/20">
+                  <Brain className="size-5 text-[#c084fc]" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-[#e8e8e8] tracking-wide">AI Tear Sheets</h3>
+                  <p className="text-xs text-[#666666]">LLM-generated post-trade performance critiques</p>
+                </div>
+              </div>
+              <button
+                onClick={generateTearSheet}
+                disabled={generatingTearSheet}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#c084fc]/15 border border-[#c084fc]/30 text-[#c084fc] text-xs font-medium hover:bg-[#c084fc]/25 transition-colors disabled:opacity-50"
+              >
+                {generatingTearSheet ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
+                {generatingTearSheet ? 'Generating...' : 'Generate New Report'}
+              </button>
+            </div>
+
+            {loadingTearSheets ? (
+              <div className="flex flex-col items-center justify-center py-16">
+                <Loader2 className="size-6 text-[#c084fc] animate-spin mb-3" />
+                <p className="text-sm text-[#666666]">Loading reports...</p>
+              </div>
+            ) : tearSheets.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Brain className="size-12 text-[#333333] mb-4" />
+                <p className="text-sm text-[#666666] mb-2">No AI tear sheets yet</p>
+                <p className="text-xs text-[#555555] mb-6">Generate your first report to get a clinical critique of recent trade performance</p>
+                <button
+                  onClick={generateTearSheet}
+                  disabled={generatingTearSheet}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#c084fc]/15 border border-[#c084fc]/30 text-[#c084fc] text-sm font-medium hover:bg-[#c084fc]/25 transition-colors disabled:opacity-50"
+                >
+                  {generatingTearSheet ? <Loader2 className="size-4 animate-spin" /> : <Brain className="size-4" />}
+                  {generatingTearSheet ? 'Generating...' : 'Generate First Report'}
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-4">
+                {/* Sidebar — report list */}
+                <div className="space-y-2">
+                  {tearSheets.map((sheet, i) => (
+                    <button
+                      key={sheet.id}
+                      onClick={() => setSelectedTearSheet(i)}
+                      className={`w-full text-left p-3 rounded-xl border transition-all duration-200 ${
+                        selectedTearSheet === i
+                          ? 'bg-[#c084fc]/10 border-[#c084fc]/30'
+                          : 'bg-white/[0.02] border-white/[0.06] hover:bg-white/5'
+                      }`}
+                    >
+                      <p className={`text-xs font-medium ${selectedTearSheet === i ? 'text-[#c084fc]' : 'text-[#e8e8e8]'}`}>
+                        {new Date(sheet.timestamp).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                      </p>
+                      <p className="text-[10px] text-[#666666] mt-1 line-clamp-2 leading-relaxed">
+                        {sheet.preview.replace(/[#*]/g, '').slice(0, 80)}...
+                      </p>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Report content */}
+                <div className="min-h-[400px]">
+                  {tearSheets[selectedTearSheet] && (
+                    <div className="prose">
+                      {renderMarkdownContent(tearSheets[selectedTearSheet].content, '#c084fc')}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

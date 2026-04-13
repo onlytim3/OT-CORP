@@ -20,7 +20,7 @@ Execution: signals emitted with Alpaca symbol for the execution router.
 import logging
 from typing import Any
 
-from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+from trading.config import ASTER_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 COINS = ["bitcoin", "ethereum", "solana"]
 
 ASTER_SYMBOL_MAP = {c: ASTER_SYMBOLS[c] for c in COINS}
-ALPACA_SYMBOL_MAP = {c: CRYPTO_SYMBOLS[c] for c in COINS}
+ASTER_SYMBOL_MAP = {c: ASTER_SYMBOLS[c] for c in COINS}
 
 # ---------------------------------------------------------------------------
 # Thresholds
@@ -216,18 +216,18 @@ class OIPriceDivergenceStrategy(Strategy):
 
         for coin_id in COINS:
             aster_sym = ASTER_SYMBOL_MAP.get(coin_id)
-            alpaca_sym = ALPACA_SYMBOL_MAP.get(coin_id)
-            if not aster_sym or not alpaca_sym:
+            aster_sym = ASTER_SYMBOL_MAP.get(coin_id)
+            if not aster_sym or not aster_sym:
                 continue
 
             try:
-                signal = self._evaluate_coin(coin_id, aster_sym, alpaca_sym, context_data)
+                signal = self._evaluate_coin(coin_id, aster_sym, aster_sym, context_data)
                 signals.append(signal)
             except Exception as exc:
                 log.error("oi_price_divergence error for %s: %s", coin_id, exc)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_sym,
+                    symbol=aster_sym,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} oi_price_divergence error: {exc}",
@@ -247,7 +247,7 @@ class OIPriceDivergenceStrategy(Strategy):
         self,
         coin_id: str,
         aster_sym: str,
-        alpaca_sym: str,
+        aster_sym: str,
         context_data: dict,
     ) -> Signal:
         """Evaluate OI-price divergence for a single coin."""
@@ -257,7 +257,7 @@ class OIPriceDivergenceStrategy(Strategy):
         if oi_current is None:
             return Signal(
                 strategy=self.name,
-                symbol=alpaca_sym,
+                symbol=aster_sym,
                 action="hold",
                 strength=0.0,
                 reason=f"{coin_id} OI data unavailable",
@@ -270,7 +270,7 @@ class OIPriceDivergenceStrategy(Strategy):
         if price_change is None:
             return Signal(
                 strategy=self.name,
-                symbol=alpaca_sym,
+                symbol=aster_sym,
                 action="hold",
                 strength=0.0,
                 reason=f"{coin_id} price data unavailable",
@@ -295,7 +295,7 @@ class OIPriceDivergenceStrategy(Strategy):
             context_data[coin_id] = signal_data
             return Signal(
                 strategy=self.name,
-                symbol=alpaca_sym,
+                symbol=aster_sym,
                 action="hold",
                 strength=0.0,
                 reason=f"{coin_id} first OI snapshot stored, need history to compare",
@@ -317,7 +317,7 @@ class OIPriceDivergenceStrategy(Strategy):
 
         return Signal(
             strategy=self.name,
-            symbol=alpaca_sym,
+            symbol=aster_sym,
             action=action,
             strength=round(strength, 2),
             reason=f"{coin_id} {reason}",

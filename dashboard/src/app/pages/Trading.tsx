@@ -2,8 +2,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { TrendingUp, TrendingDown, DollarSign, Volume2, RefreshCw, ArrowUpDown, ShieldAlert } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { api, usePolling, fetchAPI, type StatusResponse, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
+import { Chart } from "../components/Chart";
 
 function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
   const pct = Math.min(ratio * 100, 200);
@@ -256,6 +257,35 @@ export function Trading() {
         <h2 className="text-3xl font-bold text-[#e8e8e8]">Trading Dashboard</h2>
         <p className="text-[#888888] mt-1">Real-time positions, trades, and volume analysis</p>
       </div>
+
+      {/* Interactive Chart Section */}
+      <Card className="border-white/5 bg-[#0a0a0a]">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-lg font-bold text-[#e8e8e8]">Market Chart (BTC/USD)</CardTitle>
+        </CardHeader>
+        <CardContent className="h-[400px] p-0 relative">
+          <Chart 
+            type="candlestick"
+            data={useMemo(() => {
+              // Generate some procedural mock candlestick data for demo purposes
+              const data = [];
+              let time = Math.floor(Date.now() / 1000) - 86400 * 30; // 30 days ago
+              let price = 90000;
+              for (let i = 0; i < 100; i++) {
+                const open = price;
+                const close = price + (Math.random() - 0.45) * 1000;
+                const high = Math.max(open, close) + Math.random() * 500;
+                const low = Math.min(open, close) - Math.random() * 500;
+                data.push({ time, open, high, low, close });
+                price = close;
+                time += 3600 * 4; // 4 hour bars
+              }
+              return data as any;
+            }, [])}
+            height={400}
+          />
+        </CardContent>
+      </Card>
 
       {/* Recent Trades */}
       <Card>

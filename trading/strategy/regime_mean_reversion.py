@@ -14,7 +14,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trading.config import CRYPTO_SYMBOLS
+from trading.config import ASTER_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import bollinger_bands, rsi, z_score
@@ -100,7 +100,7 @@ class RegimeMeanReversionStrategy(Strategy):
                 signal = self._analyze_coin(coin_id, context_data)
                 signals.append(signal)
             except Exception as e:
-                sym = CRYPTO_SYMBOLS.get(coin_id, f"{coin_id}/USD")
+                sym = ASTER_SYMBOLS.get(coin_id, f"{coin_id}/USD")
                 log.warning("regime_mean_reversion error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name, symbol=sym, action="hold",
@@ -111,18 +111,18 @@ class RegimeMeanReversionStrategy(Strategy):
         return signals
 
     def _analyze_coin(self, coin_id: str, context_data: dict) -> Signal:
-        alpaca_symbol = CRYPTO_SYMBOLS.get(coin_id)
-        if not alpaca_symbol:
+        aster_symbol = ASTER_SYMBOLS.get(coin_id)
+        if not aster_symbol:
             return Signal(
                 strategy=self.name, symbol=f"{coin_id}/USD", action="hold",
-                strength=0.0, reason=f"{coin_id} not in CRYPTO_SYMBOLS",
+                strength=0.0, reason=f"{coin_id} not in ASTER_SYMBOLS",
             )
 
         ohlc = get_ohlc(coin_id, self.lookback_days)
         if ohlc.empty or len(ohlc) < self.min_data_points:
             count = len(ohlc) if not ohlc.empty else 0
             return Signal(
-                strategy=self.name, symbol=alpaca_symbol, action="hold",
+                strategy=self.name, symbol=aster_symbol, action="hold",
                 strength=0.0,
                 reason=f"{coin_id} insufficient data ({count} candles, need {self.min_data_points})",
             )
@@ -160,7 +160,7 @@ class RegimeMeanReversionStrategy(Strategy):
         # Trending regime: hold — strength from ADX confidence
         if current_adx > self.adx_threshold:
             return Signal(
-                strategy=self.name, symbol=alpaca_symbol, action="hold",
+                strategy=self.name, symbol=aster_symbol, action="hold",
                 strength=round(min(current_adx / 100.0, 0.5), 3),  # ADX 50 → 50% strength
                 reason=f"{coin_id} ADX {current_adx:.0f} > {self.adx_threshold} — trending regime",
                 data={"adx": round(current_adx, 1), "regime": "trending", "coin": coin_id},
@@ -173,7 +173,7 @@ class RegimeMeanReversionStrategy(Strategy):
         )
 
         return Signal(
-            strategy=self.name, symbol=alpaca_symbol,
+            strategy=self.name, symbol=aster_symbol,
             action=action, strength=strength, reason=reason,
             data={
                 "adx": round(current_adx, 1),

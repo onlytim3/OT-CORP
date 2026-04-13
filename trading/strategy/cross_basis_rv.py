@@ -15,7 +15,7 @@ Signal generation:
 import logging
 from statistics import mean, stdev
 
-from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+from trading.config import ASTER_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -56,7 +56,7 @@ def _aster_to_alpaca(aster_symbol: str) -> str | None:
     coin_id = _ASTER_TO_COIN.get(aster_symbol)
     if coin_id is None:
         return None
-    return CRYPTO_SYMBOLS.get(coin_id)
+    return ASTER_SYMBOLS.get(coin_id)
 
 
 @register
@@ -115,12 +115,12 @@ class CrossBasisRVStrategy(Strategy):
             index_price = entry.get("indexPrice", 0)
             if index_price <= 0:
                 continue
-            alpaca_sym = _aster_to_alpaca(entry.get("symbol", ""))
-            if alpaca_sym is None:
+            aster_sym = _aster_to_alpaca(entry.get("symbol", ""))
+            if aster_sym is None:
                 continue
             valid.append({
                 "aster_symbol": entry["symbol"],
-                "alpaca_symbol": alpaca_sym,
+                "aster_symbol": aster_sym,
                 "basis_pct": float(entry.get("basis_pct", 0)),
                 "mark_price": float(entry.get("markPrice", 0)),
                 "index_price": float(index_price),
@@ -231,7 +231,7 @@ class CrossBasisRVStrategy(Strategy):
 
             signals.append(Signal(
                 strategy=self.name,
-                symbol=asset["alpaca_symbol"],
+                symbol=asset["aster_symbol"],
                 action="buy",
                 strength=strength,
                 reason=(
@@ -259,7 +259,7 @@ class CrossBasisRVStrategy(Strategy):
 
             signals.append(Signal(
                 strategy=self.name,
-                symbol=asset["alpaca_symbol"],
+                symbol=asset["aster_symbol"],
                 action="sell",
                 strength=strength,
                 reason=(

@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, render_template, jsonify, request, send_from_directory, redirect
+from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, Response
 
 try:
     from flask_cors import CORS as _CORS
@@ -544,6 +544,24 @@ def api_status():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "pnl_snapshot": pnl_snapshot,
     })
+
+
+@app.route("/api/stream")
+def api_stream():
+    """Server-Sent Events endpoint for real-time dashboard updates."""
+    def generate():
+        while True:
+            try:
+                # Reuse the logic of api_status to serialize the data
+                with app.test_request_context('/api/status'):
+                    status_resp = api_status()
+                    data = status_resp.get_data(as_text=True)
+                yield f"event: status\ndata: {data}\n\n"
+            except Exception as e:
+                log.error(f"SSE error: {e}")
+            time.sleep(1)
+
+    return Response(generate(), mimetype="text/event-stream")
 
 
 @app.route("/api/actions")
@@ -2258,6 +2276,30 @@ def api_sectors():
     except Exception as e:
         log.warning(f"Sectors API: {e}")
         return jsonify([])
+
+
+@app.route("/api/reviews", methods=["GET"])
+@require_auth
+def api_get_reviews():
+    """List all AI Tear Sheets."""
+    from trading.monitor.analyst import get_all_reports
+    return jsonify(get_all_reports())
+
+
+@app.route("/api/reviews/generate", methods=["POST"])
+@require_auth
+def api_generate_review():
+    """Trigger the creation of a new AI Tear Sheet."""
+    from trading.monitor.analyst import generate_tear_sheet
+    try:
+        data = request.get_json(silent=True) or {}
+        days = int(data.get("days", 7))
+        import threading
+        # Run async to not block UI
+        threading.Thread(target=generate_tear_sheet, args=(days,), daemon=True).start()
+        return jsonify({"status": "generating"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 def start_dashboard(host="127.0.0.1", port=None, debug=False):

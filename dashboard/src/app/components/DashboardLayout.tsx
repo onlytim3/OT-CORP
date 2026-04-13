@@ -181,18 +181,56 @@ export function DashboardLayout() {
   ];
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Top Header */}
-      <header className="h-16 bg-[#0a0a0a] border-b border-white/[0.06] flex items-center justify-between px-6 sticky top-0 z-40">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-[#4a9eff] border border-[#4a9eff]/50">
-            <Activity className="size-6 text-black" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-[#e8e8e8] tracking-wider">OT-CORP</h1>
-            <p className="text-[10px] text-[#666666] uppercase tracking-[0.2em]">Trading Terminal</p>
-          </div>
+    <div className="flex flex-col sm:flex-row h-screen bg-[#000000]">
+      {/* Navigation (Left Sidebar on Desktop, Bottom bar on Mobile) */}
+      <nav className="fixed bottom-0 left-0 right-0 h-20 bg-black sm:bg-[#0a0a0a] border-t sm:border-t-0 sm:border-r border-white/[0.06] z-50 sm:static sm:h-screen sm:w-[88px] flex sm:flex-col items-center justify-around sm:justify-start px-4 sm:px-0 sm:py-6 sm:gap-6 pb-safe">
+        {/* Sidebar Logo */}
+        <div className="hidden sm:flex items-center justify-center p-2.5 mb-2 bg-[#4a9eff] rounded-xl border border-[#4a9eff]/50 shadow-[0_0_15px_rgba(74,158,255,0.1)]">
+          <Activity className="size-6 text-black" />
         </div>
+        
+        {navItems.map((item) => {
+          const isActive = location.pathname === item.path;
+          return (
+            <Link
+              key={item.path}
+              to={item.path}
+              className={cn(
+                "flex flex-col items-center justify-center gap-1.5 px-6 sm:px-2 py-2 sm:py-4 rounded-xl transition-all duration-300 relative min-w-[80px] sm:min-w-[72px] sm:w-[72px] group",
+                isActive ? "text-[#4a9eff]" : "text-[#666666] hover:text-[#888888] sm:hover:bg-white/5"
+              )}
+            >
+              {isActive && (
+                <div className="absolute inset-0 bg-[#4a9eff]/10 rounded-xl border border-[#4a9eff]/20" />
+              )}
+              {/* Active Indicator Line for Desktop */}
+              {isActive && (
+                <div className="hidden sm:block absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-[#4a9eff] rounded-r-full shadow-[0_0_10px_rgba(74,158,255,0.5)]" />
+              )}
+              <div className="relative z-10 transition-transform duration-300 group-hover:scale-110">
+                <item.icon className="size-6 sm:size-5" />
+              </div>
+              <span className={cn("text-[10px] uppercase tracking-wider font-medium relative z-10", isActive && "font-semibold")}>
+                {item.label}
+              </span>
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Main Content Column */}
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* Top Header */}
+        <header className="h-16 bg-[#0a0a0a] sm:bg-transparent border-b border-white/[0.06] flex items-center justify-between px-6 sticky top-0 z-40 backdrop-blur-md">
+          <div className="flex items-center gap-3 sm:pl-2">
+            <div className="sm:hidden p-2 rounded-lg bg-[#4a9eff] border border-[#4a9eff]/50">
+              <Activity className="size-6 text-black" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-[#e8e8e8] tracking-wider">OT-CORP</h1>
+              <p className="text-[10px] text-[#666666] uppercase tracking-[0.2em] hidden sm:block">Institutional Trading Platform</p>
+            </div>
+          </div>
 
         <div className="flex items-center gap-3">
           {/* Trading Clock */}
@@ -352,8 +390,8 @@ export function DashboardLayout() {
         </div>
       )}
 
-      {/* Main Content */}
-      <main className="flex-1 overflow-auto pb-20">
+      {/* Main Content Area */}
+      <main className="flex-1 overflow-auto pb-20 sm:pb-0">
         <Outlet />
       </main>
 
@@ -361,10 +399,10 @@ export function DashboardLayout() {
       <button
         onClick={() => setChatOpen(!chatOpen)}
         className={cn(
-          "fixed bottom-20 sm:bottom-24 right-2 sm:right-4 z-50 p-3 sm:p-4 rounded-full transition-all duration-300 shadow-lg",
+          "fixed bottom-[88px] sm:bottom-6 right-4 sm:right-6 z-50 p-3 sm:p-4 rounded-full transition-all duration-300 shadow-xl",
           chatOpen
-            ? "bg-[#ff4466] scale-90 shadow-[#ff4466]/20"
-            : "bg-[#4a9eff] hover:bg-[#4a9eff]/80 shadow-[#4a9eff]/20"
+            ? "bg-[#ff4466] scale-90 shadow-[0_0_20px_rgba(255,68,102,0.3)]"
+            : "bg-[#4a9eff] hover:bg-[#4a9eff]/80 shadow-[0_0_20px_rgba(74,158,255,0.3)] hover:scale-105"
         )}
       >
         <MessageSquare className="size-6 text-white" />
@@ -373,34 +411,7 @@ export function DashboardLayout() {
       {/* Chat Panel */}
       <ChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />
 
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 h-20 bg-black border-t border-white/[0.06] z-50">
-        <div className="h-full flex items-center justify-around px-4 max-w-2xl mx-auto">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  "flex flex-col items-center justify-center gap-1 px-6 py-2 rounded-lg transition-all duration-200 relative min-w-[80px]",
-                  isActive ? "text-[#4a9eff]" : "text-[#666666] hover:text-[#888888]"
-                )}
-              >
-                {isActive && (
-                  <div className="absolute inset-0 bg-[#4a9eff]/10 rounded-lg border border-[#4a9eff]/20" />
-                )}
-                <div className="relative z-10">
-                  <item.icon className="size-6" />
-                </div>
-                <span className={cn("text-[10px] uppercase tracking-wider font-medium relative z-10", isActive && "font-semibold")}>
-                  {item.label}
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      </nav>
+      </div>
     </div>
   );
 }

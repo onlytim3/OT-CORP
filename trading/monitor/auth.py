@@ -17,6 +17,7 @@ def check_dashboard_auth():
     If DASHBOARD_PIN is not set in the environment, returns True (unlocked).
     """
     if not DASHBOARD_PIN:
+        log.warning("DASHBOARD_PIN is not set in the environment. Dashboard is UNLOCKED.")
         return True
         
     pin_cookie = request.cookies.get("dashboard_pin")
@@ -35,8 +36,8 @@ def get_auth_middleware(app):
     
     @app.before_request
     def require_auth():
-        # Do not block static assets, health checks, or the login page itself
-        if request.path.startswith("/api/health") or request.path.startswith("/assets/"):
+        # Do not block health checks or the login page itself
+        if request.path.startswith("/api/health"):
             return None
         if request.path in ("/login", "/api/auth/login"):
             return None

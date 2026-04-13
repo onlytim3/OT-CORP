@@ -17,7 +17,7 @@ from trading.strategy.registry import register
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Asset groups (internal IDs that map into ASTER_SYMBOLS and CRYPTO_SYMBOLS)
+# Asset groups (internal IDs that map into ASTER_SYMBOLS and ASTER_SYMBOLS)
 # ---------------------------------------------------------------------------
 CRYPTO_IDS = ["bitcoin", "ethereum", "solana"]
 STOCK_IDS = ["apple", "nvidia", "tesla", "sp500"]
@@ -105,7 +105,7 @@ class CrossAssetMomentumStrategy(Strategy):
 
     def generate_signals(self) -> list[Signal]:
         try:
-            from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+            from trading.config import ASTER_SYMBOLS
         except ImportError:
             log.error("Cannot import symbol mappings from trading.config")
             return [self._hold("Symbol config unavailable")]
@@ -183,7 +183,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 divergence = gold_mom["mom_24h"] - btc_mom["mom_24h"]
                 strength = min(abs(divergence) / DIVERGENCE_THRESHOLD * 0.3, 0.85)
                 for cid in crypto_mom:
-                    sym = CRYPTO_SYMBOLS.get(cid)
+                    sym = ASTER_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -211,7 +211,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 lag = avg_index_7d - avg_crypto_7d
                 strength = min(lag / DIVERGENCE_THRESHOLD * 0.25, 0.80)
                 for cid in crypto_mom:
-                    sym = CRYPTO_SYMBOLS.get(cid)
+                    sym = ASTER_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -246,7 +246,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 )
                 # Sell all crypto
                 for cid in crypto_mom:
-                    sym = CRYPTO_SYMBOLS.get(cid)
+                    sym = ASTER_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -273,7 +273,7 @@ class CrossAssetMomentumStrategy(Strategy):
             if outperformance > DIVERGENCE_THRESHOLD * 2:
                 strength = min(outperformance / (DIVERGENCE_THRESHOLD * 3) * 0.4, 0.70)
                 for cid in crypto_mom:
-                    sym = CRYPTO_SYMBOLS.get(cid)
+                    sym = ASTER_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -308,7 +308,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 strength = min(avg_comm_7d / MOMENTUM_7D_THRESHOLD * 0.3, 0.80)
 
                 # Buy BTC as inflation hedge
-                btc_sym = CRYPTO_SYMBOLS.get("bitcoin")
+                btc_sym = ASTER_SYMBOLS.get("bitcoin")
                 if btc_sym:
                     signals.append(Signal(
                         strategy=self.name,
@@ -329,7 +329,7 @@ class CrossAssetMomentumStrategy(Strategy):
                     ))
 
                 # Buy gold perp itself
-                gold_sym = CRYPTO_SYMBOLS.get("gold")
+                gold_sym = ASTER_SYMBOLS.get("gold")
                 if gold_sym:
                     signals.append(Signal(
                         strategy=self.name,

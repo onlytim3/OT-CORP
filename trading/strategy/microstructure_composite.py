@@ -159,13 +159,13 @@ class MicrostructureCompositeStrategy(Strategy):
 
         for coin_id in self.coins:
             aster_sym = ASTER_SYMBOLS.get(coin_id)
-            alpaca_sym = ALPACA_SYMBOLS.get(coin_id)
-            if not aster_sym or not alpaca_sym:
+            aster_sym = ALPACA_SYMBOLS.get(coin_id)
+            if not aster_sym or not aster_sym:
                 continue
 
             try:
                 signal = self._evaluate_coin(
-                    coin_id, aster_sym, alpaca_sym, funding_rates,
+                    coin_id, aster_sym, aster_sym, funding_rates,
                     get_taker_volume_ratio, get_orderbook_imbalance, get_basis_spread,
                     context_data,
                 )
@@ -175,7 +175,7 @@ class MicrostructureCompositeStrategy(Strategy):
                 log.error("microstructure_composite error for %s: %s", coin_id, exc)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_sym,
+                    symbol=aster_sym,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} microstructure error: {exc}",
@@ -195,7 +195,7 @@ class MicrostructureCompositeStrategy(Strategy):
         self,
         coin_id: str,
         aster_sym: str,
-        alpaca_sym: str,
+        aster_sym: str,
         funding_rates: dict,
         get_taker_volume_ratio,
         get_orderbook_imbalance,
@@ -262,7 +262,7 @@ class MicrostructureCompositeStrategy(Strategy):
 
         return Signal(
             strategy=self.name,
-            symbol=alpaca_sym,
+            symbol=aster_sym,
             action=action,
             strength=strength,
             reason=reason,

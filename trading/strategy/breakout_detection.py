@@ -13,7 +13,7 @@ import logging
 
 import numpy as np
 
-from trading.config import CRYPTO_SYMBOLS
+from trading.config import ASTER_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import atr, bollinger_bands
@@ -75,7 +75,7 @@ class BreakoutDetectionStrategy(Strategy):
                 if ctx:
                     context_data[coin_id] = ctx
             except Exception as e:
-                sym = CRYPTO_SYMBOLS.get(coin_id, "UNKNOWN/USD")
+                sym = ASTER_SYMBOLS.get(coin_id, "UNKNOWN/USD")
                 log.warning("breakout_detection error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name, symbol=sym, action="hold",
@@ -89,12 +89,12 @@ class BreakoutDetectionStrategy(Strategy):
         return {"strategy": self.name, "coins": self._last_context}
 
     def _analyze_coin(self, coin_id: str) -> tuple[Signal, dict | None]:
-        symbol = CRYPTO_SYMBOLS.get(coin_id)
+        symbol = ASTER_SYMBOLS.get(coin_id)
         if not symbol:
             return (
                 Signal(
                     strategy=self.name, symbol="UNKNOWN/USD", action="hold",
-                    strength=0.0, reason=f"{coin_id} not in CRYPTO_SYMBOLS",
+                    strength=0.0, reason=f"{coin_id} not in ASTER_SYMBOLS",
                 ),
                 None,
             )

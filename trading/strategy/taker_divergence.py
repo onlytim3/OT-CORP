@@ -47,7 +47,7 @@ ASTER_SYMBOL_MAP = {
     "litecoin": "LTCUSDT",
 }
 
-ALPACA_SYMBOL_MAP = {
+ASTER_SYMBOL_MAP = {
     "bitcoin": "BTC/USD",
     "ethereum": "ETH/USD",
     "solana": "SOL/USD",
@@ -226,8 +226,8 @@ class TakerDivergenceStrategy(Strategy):
 
         for coin_id in TAKER_COINS:
             aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
-            alpaca_symbol = ALPACA_SYMBOL_MAP.get(coin_id)
-            if not aster_symbol or not alpaca_symbol:
+            aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
+            if not aster_symbol or not aster_symbol:
                 continue
 
             try:
@@ -310,7 +310,7 @@ class TakerDivergenceStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_symbol,
+                    symbol=aster_symbol,
                     action=action,
                     strength=strength,
                     reason=f"{coin_id} {' | '.join(reason_parts)}",
@@ -321,7 +321,7 @@ class TakerDivergenceStrategy(Strategy):
                 log.error("taker_divergence error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_symbol,
+                    symbol=aster_symbol,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} taker_divergence error: {e}",

@@ -15,8 +15,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
-from trading.data.aster import alpaca_to_aster, aster_to_alpaca
+from trading.config import ASTER_SYMBOLS
+from trading.data.aster import aster_to_alpaca
 
 log = logging.getLogger(__name__)
 
@@ -29,12 +29,8 @@ USE_LIMIT_ORDERS = os.getenv("USE_LIMIT_ORDERS", "true").lower() == "true"
 # Symbol mapping
 # ---------------------------------------------------------------------------
 
-# Alpaca symbol -> AsterDex symbol
-_ALPACA_TO_ASTER = {v: ASTER_SYMBOLS[k] for k, v in CRYPTO_SYMBOLS.items()
-                    if k in ASTER_SYMBOLS}
-
 # AsterDex symbol -> Alpaca symbol (for position reporting)
-_ASTER_TO_ALPACA = {v: k for k, v in _ALPACA_TO_ASTER.items()}
+# Since we removed CRYPTO_SYMBOLS, we map dynamically if needed or just use aster_to_alpaca.
 
 # ---------------------------------------------------------------------------
 # AsterDex symbol validation (populated lazily on first order)
@@ -57,18 +53,12 @@ def validate_aster_symbols():
 
 def _to_aster(symbol: str) -> str:
     """Convert any symbol format to AsterDex format."""
-    # Already AsterDex format
-    if symbol.endswith("USDT"):
-        aster = symbol
-    else:
-        # Alpaca format (BTC/USD) or dashboard format (BTCUSD)
-        aster = _ALPACA_TO_ASTER.get(symbol) or alpaca_to_aster(symbol)
-        if not aster:
-            # Strip USD suffix (handles both "BTC/USD" and "BTCUSD")
-            base = symbol.replace("/USD", "").replace("/", "")
-            if base.endswith("USD"):
-                base = base[:-3]  # BTCUSD → BTC
-            aster = f"{base}USDT"
+    # It should already be AsterDex format from the strategies
+    aster = symbol
+    if not aster.endswith("USDT") and not aster.endswith("USD"):
+        # Just in case some legacy signals slip through
+        base = symbol.replace("/USD", "").replace("/", "")
+        aster = f"{base}USDT"
 
     # Warn if converted symbol is not in the validated set
     if _VALID_ASTER_SYMBOLS and aster not in _VALID_ASTER_SYMBOLS:
@@ -88,7 +78,7 @@ def _to_alpaca(symbol: str) -> str:
     """Convert AsterDex symbol back to Alpaca format for internal tracking."""
     if "/" in symbol:
         return symbol  # Already Alpaca format
-    alpaca = _ASTER_TO_ALPACA.get(symbol) or aster_to_alpaca(symbol)
+    alpaca = aster_to_alpaca(symbol)
     if alpaca:
         return alpaca
     # Fallback: BTCUSDT -> BTC/USD

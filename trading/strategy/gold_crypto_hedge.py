@@ -17,7 +17,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+from trading.config import ASTER_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -43,8 +43,8 @@ _GOLD_ASTER = ASTER_SYMBOLS.get("gold", "XAUUSDT")
 _BTC_ASTER = ASTER_SYMBOLS.get("bitcoin", "BTCUSDT")
 _SILVER_ASTER = ASTER_SYMBOLS.get("silver", "XAGUSDT")
 
-_GOLD_SIGNAL = CRYPTO_SYMBOLS.get("gold", "XAU/USD")
-_BTC_SIGNAL = CRYPTO_SYMBOLS.get("bitcoin", "BTC/USD")
+_GOLD_SIGNAL = ASTER_SYMBOLS.get("gold", "XAU/USD")
+_BTC_SIGNAL = ASTER_SYMBOLS.get("bitcoin", "BTC/USD")
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from trading.config import (
-    CRYPTO_SYMBOLS, ASTER_SYMBOLS,
+    ASTER_SYMBOLS,
     CRYPTO_L1, CRYPTO_L2, CRYPTO_DEFI, CRYPTO_AI, CRYPTO_MEME,
     STOCK_PERPS, COMMODITY_PERPS, INDEX_PERPS,
 )
@@ -29,7 +29,7 @@ def _get_all_tradeable_symbols() -> dict[str, str]:
     """Build map of coin_id → trading symbol for all tradeable assets."""
     symbols = {}
     for coin_id in (CRYPTO_L1 + CRYPTO_L2 + CRYPTO_DEFI + CRYPTO_AI + CRYPTO_MEME):
-        sym = CRYPTO_SYMBOLS.get(coin_id) or ASTER_SYMBOLS.get(coin_id)
+        sym = ASTER_SYMBOLS.get(coin_id) or ASTER_SYMBOLS.get(coin_id)
         if sym:
             symbols[coin_id] = sym
     for asset_id in (STOCK_PERPS + COMMODITY_PERPS + INDEX_PERPS):

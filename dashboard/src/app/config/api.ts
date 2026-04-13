@@ -39,6 +39,9 @@ export const api = {
   journalDaily: `${API_BASE_URL}/api/journal/daily`,
   journalWeekly: `${API_BASE_URL}/api/journal/weekly`,
   llmWeeklyReview: `${API_BASE_URL}/api/llm/weekly-review`,
+  // AI Analyst Tear Sheets
+  reviews: `${API_BASE_URL}/api/reviews`,
+  reviewsGenerate: `${API_BASE_URL}/api/reviews/generate`,
   // LLM AI Co-Pilot
   llmStatus: `${API_BASE_URL}/api/llm/status`,
   llmJournal: `${API_BASE_URL}/api/llm/journal`,

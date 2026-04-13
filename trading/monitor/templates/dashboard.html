@@ -3202,19 +3202,15 @@ function renderActionsLive(actions) {
 
 // ---- AJAX auto-refresh (10s) ----
 (function() {
-    const REFRESH_INTERVAL = 10;
-    let countdown = REFRESH_INTERVAL;
     let _heavyRefreshCounter = 0;
 
-    function updateStatus() {
-        const el = document.getElementById('refresh-status-header');
-        if (el) el.textContent = 'Refreshing in ' + countdown + 's';
-        countdown--;
-        if (countdown < 0) { countdown = REFRESH_INTERVAL; fetchUpdate(); }
-    }
-    function fetchUpdate() {
-        // Lightweight status every 10s
-        fetch('/api/status').then(r => r.json()).then(data => {
+    const evtSource = new EventSource('/api/stream');
+    evtSource.addEventListener('status', function(e) {
+        try {
+            const data = JSON.parse(e.data);
+            const el = document.getElementById('refresh-status-header');
+            if (el) el.textContent = 'Live Streaming';
+
             // Update hero strip
             const heroVal = document.querySelector('.hero-value');
             if (heroVal && data.account) heroVal.textContent = '$' + (data.account.portfolio_value || 0).toFixed(2);
@@ -3308,9 +3304,11 @@ function renderActionsLive(actions) {
                 _lastErrorCount = newErrors;
             }
 
-            // Heavy refresh: trades, actions, strategies (every 30s = every 3rd cycle)
+            }
+            
+            // Heavy refresh: trades, actions, strategies (every 30 events = ~30s)
             _heavyRefreshCounter++;
-            if (_heavyRefreshCounter >= 3) {
+            if (_heavyRefreshCounter >= 30) {
                 _heavyRefreshCounter = 0;
                 fetch('/api/trades').then(r => r.json()).then(renderTradesLive).catch(() => {});
                 fetch('/api/actions').then(r => r.json()).then(renderActionsLive).catch(() => {});
@@ -3318,12 +3316,15 @@ function renderActionsLive(actions) {
                 loadMarketIntelligence();
                 loadAgentActivity();
             }
-        }).catch(err => {
-            const el = document.getElementById('refresh-status-header');
-            if (el) el.textContent = 'Refresh failed';
-        });
-    }
-    setInterval(updateStatus, 1000);
+        } catch (err) {
+            console.error('SSE Error:', err);
+        }
+    });
+    
+    evtSource.onerror = function() {
+        const el = document.getElementById('refresh-status-header');
+        if (el) el.textContent = 'Stream disconnected. Reconnecting...';
+    };
 
     // Initial alert banner check
     updateAlertBanner({{ summary|tojson }});

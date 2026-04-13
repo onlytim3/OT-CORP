@@ -220,11 +220,9 @@ export function Overview() {
   const mode = status?.mode || 'paper';
   const positionPnl = positions.reduce((sum, p) => sum + (p.unrealized_pnl || 0), 0);
   const pnlSnapshot = (status as Record<string, unknown>)?.pnl_snapshot as { portfolio_value?: number; daily_return?: number; cumulative_return?: number } | undefined;
-  // Use position P&L if available, otherwise fall back to daily_pnl cumulative return
-  const totalPnl = positionPnl !== 0 ? positionPnl
-    : pnlSnapshot?.cumulative_return && account?.portfolio_value
-      ? pnlSnapshot.cumulative_return * account.portfolio_value
-      : 0;
+  
+  // Ghost P&L Fix: Unrealized P&L comes strictly from active positions.
+  const totalPnl = positions.length > 0 ? positionPnl : 0;
   const pnlPct = positionPnl !== 0
     ? (account?.portfolio_value ? (positionPnl / account.portfolio_value) * 100 : 0)
     : (pnlSnapshot?.cumulative_return ? pnlSnapshot.cumulative_return * 100 : 0);

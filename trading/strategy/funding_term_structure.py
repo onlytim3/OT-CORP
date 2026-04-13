@@ -162,7 +162,7 @@ class FundingTermStructureStrategy(Strategy):
         context_data: dict[str, Any] = {}
 
         try:
-            from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+            from trading.config import ASTER_SYMBOLS
         except ImportError:
             log.error("Cannot import symbol config — funding_term_structure disabled")
             return signals
@@ -174,7 +174,7 @@ class FundingTermStructureStrategy(Strategy):
 
         for coin_id in TERM_STRUCTURE_COINS:
             aster_symbol = ASTER_SYMBOLS.get(coin_id)
-            trade_symbol = CRYPTO_SYMBOLS.get(coin_id)
+            trade_symbol = ASTER_SYMBOLS.get(coin_id)
             if not aster_symbol or not trade_symbol:
                 continue
 

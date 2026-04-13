@@ -149,7 +149,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
 
     def generate_signals(self) -> list[Signal]:
         try:
-            from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+            from trading.config import ASTER_SYMBOLS
         except ImportError:
             log.error("Cannot import symbol mappings from trading.config")
             return [self._hold("Config import failed")]
@@ -228,7 +228,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
                     0.85,
                 )
                 for cid in crypto_ids:
-                    sym = CRYPTO_SYMBOLS.get(cid)
+                    sym = ASTER_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -257,7 +257,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
                     0.85,
                 )
                 for cid in crypto_ids:
-                    sym = CRYPTO_SYMBOLS.get(cid)
+                    sym = ASTER_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -289,7 +289,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
                 if equity_momentum > EQUITY_MOMENTUM_THRESHOLD and crypto_momentum < 0:
                     strength = min(0.3 + abs(correlation) * 0.5, 0.55)
                     for cid in crypto_ids:
-                        sym = CRYPTO_SYMBOLS.get(cid)
+                        sym = ASTER_SYMBOLS.get(cid)
                         if sym:
                             signals.append(Signal(
                                 strategy=self.name,

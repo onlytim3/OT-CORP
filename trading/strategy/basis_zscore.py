@@ -43,7 +43,7 @@ ASTER_SYMBOL_MAP = {
     "litecoin": "LTCUSDT",
 }
 
-ALPACA_SYMBOL_MAP = {
+ASTER_SYMBOL_MAP = {
     "bitcoin": "BTC/USD",
     "ethereum": "ETH/USD",
     "solana": "SOL/USD",
@@ -188,9 +188,9 @@ class BasisZScoreStrategy(Strategy):
         active_positions: dict[str, dict] = json.loads(get_setting("basis_positions", "{}"))
 
         for coin_id in BASIS_COINS:
-            alpaca_symbol = ALPACA_SYMBOL_MAP.get(coin_id)
             aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
-            if not alpaca_symbol or not aster_symbol:
+            aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
+            if not aster_symbol or not aster_symbol:
                 continue
 
             try:
@@ -200,7 +200,7 @@ class BasisZScoreStrategy(Strategy):
                     log.debug("basis_zscore: no basis data for %s, skipping", coin_id)
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=alpaca_symbol,
+                        symbol=aster_symbol,
                         action="hold",
                         strength=0.0,
                         reason=f"{coin_id} no basis data available",
@@ -221,7 +221,7 @@ class BasisZScoreStrategy(Strategy):
                     )
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=alpaca_symbol,
+                        symbol=aster_symbol,
                         action="hold",
                         strength=0.0,
                         reason=f"{coin_id} insufficient basis history ({len(history)}/{MIN_BASIS_DATA})",
@@ -249,7 +249,7 @@ class BasisZScoreStrategy(Strategy):
                     close_action = "buy" if existing_pos["action"] == "sell" else "sell"
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=alpaca_symbol,
+                        symbol=aster_symbol,
                         action=close_action,
                         strength=0.3,
                         reason=f"{coin_id} closing {existing_pos['action']}: z={z:.2f} returned to neutral",
@@ -269,7 +269,7 @@ class BasisZScoreStrategy(Strategy):
                         # Z-score hasn't moved significantly further from entry — hold
                         signals.append(Signal(
                             strategy=self.name,
-                            symbol=alpaca_symbol,
+                            symbol=aster_symbol,
                             action="hold",
                             strength=0.0,
                             reason=f"{coin_id} already positioned {action}, z={z:.2f} (entry z={z_at_entry:.2f})",
@@ -283,7 +283,7 @@ class BasisZScoreStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_symbol,
+                    symbol=aster_symbol,
                     action=action,
                     strength=strength,
                     reason=f"{coin_id} {reason}",
@@ -294,7 +294,7 @@ class BasisZScoreStrategy(Strategy):
                 log.error("basis_zscore error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=alpaca_symbol,
+                    symbol=aster_symbol,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} basis_zscore error: {e}",

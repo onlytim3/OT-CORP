@@ -233,6 +233,36 @@ def _apply_multi_timeframe_confirmation(signal: Signal) -> Signal:
     return signal
 
 
+def _apply_aggression_scaling(consolidated: list[Signal]) -> list[Signal]:
+    """If the market is in extreme panic (Fear & Greed < 25), heavily boost buy signals.
+    
+    This acts as a contrarian multiplier, and overrides the MIN_CONFLUENCE_STRENGTH
+    so we can catch market bottoms aggressively.
+    """
+    try:
+        import requests
+        resp = requests.get("https://api.alternative.me/fng/", timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            fng = int(data["data"][0]["value"])
+            if fng <= 25:
+                # Extreme fear -> apply aggression scaling
+                for i, sig in enumerate(consolidated):
+                    if sig.action == "buy":
+                        mult = 1.35 if fng <= 15 else 1.20
+                        # Auto-pass the confluence gate by forcing strength to >= 0.60
+                        new_strength = max(round(min(sig.strength * mult, 1.0), 4), 0.60)
+                        consolidated[i] = Signal(
+                            strategy=sig.strategy, symbol=sig.symbol, action=sig.action,
+                            strength=new_strength,
+                            reason=sig.reason + f" [AGGR: F&G {fng}]",
+                            data=sig.data,
+                        )
+    except Exception as e:
+        _log.warning("Failed to fetch Fear & Greed for aggression scaling: %s", e)
+    return consolidated
+
+
 def _apply_regime_guard(signals: list, raw_all: list) -> list:
     """Dampen short signals during detected bull regimes (P1 — regime-aware direction).
 
@@ -436,6 +466,9 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     for i, sig in enumerate(consolidated):
         if sig.action in ("buy", "sell"):
             consolidated[i] = _apply_multi_timeframe_confirmation(sig)
+
+    # Phase 4.8: Contrarian Aggression Scaling (Fear & Greed)
+    consolidated = _apply_aggression_scaling(consolidated)
 
     # P0: Apply confluence gate (blocks single-strategy low-conviction trades)
     consolidated = _apply_confluence_gate(consolidated, by_symbol)
