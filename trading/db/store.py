@@ -744,13 +744,50 @@ def insert_knowledge(title, source, category, content, key_rules=""):
         )
 
 
+def _sanitize_fts_query(query: str) -> str:
+    """Sanitize a user message for safe use in an SQLite FTS5 MATCH clause.
+
+    FTS5 treats characters like ?, !, *, -, (, ), ", ^ as operators.
+    We strip punctuation, split into tokens, and wrap each in double-quotes
+    so every word is treated as a literal phrase prefix search.
+    Returns an empty string if no valid tokens remain.
+    """
+    import re
+    # Remove all non-alphanumeric characters except whitespace
+    cleaned = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE)
+    tokens = [t.strip() for t in cleaned.split() if len(t.strip()) >= 2]
+    if not tokens:
+        return ""
+    # Wrap each token in double-quotes for exact-token matching
+    return " OR ".join(f'"{t}"' for t in tokens[:10])  # Cap at 10 tokens
+
+
 def search_knowledge(query, limit=10):
+    """Search the knowledge base using FTS5 full-text search.
+
+    Sanitizes the query before passing to SQLite so raw user messages
+    with punctuation (?, !, etc.) don't cause fts5 syntax errors.
+    Falls back to a simple LIKE search if FTS returns nothing.
+    """
+    safe_query = _sanitize_fts_query(query)
     with get_db() as conn:
+        if safe_query:
+            try:
+                rows = conn.execute(
+                    "SELECT k.* FROM knowledge k "
+                    "JOIN knowledge_fts f ON k.id = f.rowid "
+                    "WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (safe_query, limit),
+                ).fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except Exception:
+                pass  # FTS failed — fall through to LIKE search
+        # Fallback: broad LIKE search across title + content
+        like = f"%{query[:50]}%"
         rows = conn.execute(
-            "SELECT k.* FROM knowledge k "
-            "JOIN knowledge_fts f ON k.id = f.rowid "
-            "WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?",
-            (query, limit),
+            "SELECT * FROM knowledge WHERE title LIKE ? OR content LIKE ? LIMIT ?",
+            (like, like, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 
