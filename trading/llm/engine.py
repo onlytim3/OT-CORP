@@ -1,14 +1,17 @@
-"""Gemini-powered LLM engine for OT-CORP trading system.
+"""LLM engine for OT-CORP trading system.
 
-All LLM calls route through Gemini with call-type-specific model selection:
-  - gemini-2.5-flash: fast/cheap for narratives, annotations, pre-trade reasoning
-  - gemini-2.5-flash: deeper reasoning for chat, analysis, reviews (same model, higher token budget)
+Primary: Groq (free tier, Llama 4 Scout) via OpenAI-compatible API.
+Fallback: Gemini 2.5 Flash via google-genai SDK (if GROQ_API_KEY not set).
+
+All LLM calls route through a unified interface with call-type-specific
+token budgets. Downstream code (chat.py, strategies, journal) is unaffected.
 
 Usage:
     from trading.llm.engine import ask_llm, explain_trade, generate_journal
 
-Environment variables:
-    GEMINI_API_KEY — Google Gemini API key (required)
+Environment variables (checked in order):
+    GROQ_API_KEY   — Groq free tier (preferred, $0/mo)
+    GEMINI_API_KEY — Google Gemini (fallback)
 """
 
 from __future__ import annotations
@@ -25,27 +28,28 @@ log = logging.getLogger(__name__)
 # Model configuration
 # ---------------------------------------------------------------------------
 
-MODEL_FLASH = "gemini-2.5-flash"
-MODEL_THINKING = "gemini-2.5-flash"
+# Groq models (primary — free tier)
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-# Per-call-type configuration: model selection + token budget + thinking budget
-# For Gemini 2.5 models, max_tokens includes thinking tokens.
-# thinking_budget limits reasoning tokens so more go to visible output.
+# Gemini models (fallback)
+GEMINI_MODEL_FLASH = "gemini-2.5-flash"
+
+# Per-call-type token budgets (model-agnostic)
 CALL_PROFILES: dict[str, dict] = {
-    "chat":             {"model": MODEL_THINKING, "max_tokens": 8000, "thinking_budget": 4096},
-    "chat_full":        {"model": MODEL_THINKING, "max_tokens": 12000, "thinking_budget": 8192},
-    "narrative":        {"model": MODEL_FLASH,    "max_tokens": 2000, "thinking_budget": 512},
-    "explain_trade":    {"model": MODEL_THINKING, "max_tokens": 4000, "thinking_budget": 1024},
-    "journal":          {"model": MODEL_THINKING, "max_tokens": 5000, "thinking_budget": 1024},
-    "performance":      {"model": MODEL_THINKING, "max_tokens": 4000, "thinking_budget": 1024},
-    "risk_event":       {"model": MODEL_THINKING, "max_tokens": 2000, "thinking_budget": 512},
-    "signal_summary":   {"model": MODEL_FLASH,    "max_tokens": 1000, "thinking_budget": 256},
-    "annotate":         {"model": MODEL_FLASH,    "max_tokens": 500,  "thinking_budget": 128},
-    "pre_trade":        {"model": MODEL_FLASH,    "max_tokens": 2000, "thinking_budget": 512},
-    "post_trade":       {"model": MODEL_THINKING, "max_tokens": 3000, "thinking_budget": 1024},
-    "agent_synthesis":  {"model": MODEL_THINKING, "max_tokens": 4000, "thinking_budget": 1024},
-    "weekly_synthesis": {"model": MODEL_THINKING, "max_tokens": 6000, "thinking_budget": 1024},
-    "news_analysis":    {"model": MODEL_THINKING, "max_tokens": 5000, "thinking_budget": 1024},
+    "chat":             {"max_tokens": 4096},
+    "chat_full":        {"max_tokens": 6144},
+    "narrative":        {"max_tokens": 1024},
+    "explain_trade":    {"max_tokens": 2048},
+    "journal":          {"max_tokens": 3072},
+    "performance":      {"max_tokens": 2048},
+    "risk_event":       {"max_tokens": 1024},
+    "signal_summary":   {"max_tokens": 512},
+    "annotate":         {"max_tokens": 256},
+    "pre_trade":        {"max_tokens": 1024},
+    "post_trade":       {"max_tokens": 1536},
+    "agent_synthesis":  {"max_tokens": 2048},
+    "weekly_synthesis": {"max_tokens": 3072},
+    "news_analysis":    {"max_tokens": 2560},
 }
 
 
@@ -66,7 +70,72 @@ def _rate_limit():
 
 
 # ---------------------------------------------------------------------------
-# Gemini provider
+# Provider: Groq (primary) — OpenAI-compatible API
+# ---------------------------------------------------------------------------
+
+_groq_client = None
+_groq_init_attempted = False
+
+
+def _get_groq_client():
+    """Lazy-init the Groq client (uses OpenAI SDK with custom base_url)."""
+    global _groq_client, _groq_init_attempted
+    if _groq_client is not None:
+        return _groq_client
+
+    # Ensure dotenv is loaded
+    try:
+        import trading.config  # noqa: F401 — side-effect: loads .env
+    except Exception:
+        pass
+
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        if not _groq_init_attempted:
+            _groq_init_attempted = True
+            log.info("GROQ_API_KEY not set — will try Gemini fallback")
+        return None
+
+    try:
+        from openai import OpenAI
+        _groq_client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1",
+        )
+        log.info("Groq client initialized (model: %s)", GROQ_MODEL)
+        return _groq_client
+    except ImportError:
+        log.warning("openai package not installed — pip install openai")
+        return None
+    except Exception as e:
+        log.warning("Failed to initialize Groq client: %s", e)
+        return None
+
+
+def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
+    """Call Groq API via OpenAI-compatible SDK. Returns response text or None."""
+    client = _get_groq_client()
+    if client is None:
+        return None
+    _rate_limit()
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        log.warning("Groq API error: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Provider: Gemini (fallback)
 # ---------------------------------------------------------------------------
 
 _genai_client = None
@@ -74,23 +143,19 @@ _genai_init_attempted = False
 
 
 def _get_genai_client():
-    """Lazy-init the google.genai Client singleton.
-
-    Retries if a previous attempt failed (e.g., env var not yet loaded).
-    """
+    """Lazy-init the google.genai Client singleton (fallback only)."""
     global _genai_client, _genai_init_attempted
     if _genai_client is not None:
         return _genai_client
-    # Ensure dotenv is loaded (config.py does load_dotenv on import)
     try:
-        import trading.config  # noqa: F401 — side-effect: loads .env
+        import trading.config  # noqa: F401
     except Exception:
         pass
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
         if not _genai_init_attempted:
             _genai_init_attempted = True
-            log.warning("GEMINI_API_KEY not set — LLM features disabled")
+            log.warning("GEMINI_API_KEY not set — LLM fallback unavailable")
         return None
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -99,14 +164,8 @@ def _get_genai_client():
     return _genai_client
 
 
-def _call_gemini(system: str, prompt: str, model: str = MODEL_FLASH,
-                 max_tokens: int = 1500,
-                 thinking_budget: int | None = None) -> str | None:
-    """Call Gemini API via google.genai SDK. Returns response text or None on failure.
-
-    For Gemini 2.5 models, max_output_tokens includes thinking tokens.
-    Set thinking_budget to control how many tokens go to reasoning vs output.
-    """
+def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
+    """Call Gemini API via google.genai SDK. Fallback provider."""
     client = _get_genai_client()
     if client is None:
         return None
@@ -116,43 +175,45 @@ def _call_gemini(system: str, prompt: str, model: str = MODEL_FLASH,
             "system_instruction": system,
             "max_output_tokens": max_tokens,
         }
-        # Constrain thinking budget so more tokens go to visible output
-        if thinking_budget is not None:
-            config["thinking_config"] = {"thinking_budget": thinking_budget}
         response = client.models.generate_content(
-            model=model,
+            model=GEMINI_MODEL_FLASH,
             contents=prompt,
             config=config,
         )
         return response.text
     except Exception as e:
-        log.warning("Gemini API error (%s): %s", model, e)
+        log.warning("Gemini API error: %s", e)
         return None
 
 
 # ---------------------------------------------------------------------------
-# Core dispatch
+# Core dispatch — tries Groq first, falls back to Gemini
 # ---------------------------------------------------------------------------
 
 def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
-    """Send prompt to Gemini with call-type-specific model and token budget.
+    """Send prompt to LLM with call-type-specific token budget.
 
+    Provider priority: Groq (free) → Gemini (fallback).
     Always returns a string (graceful degradation to a static message).
 
     Call types: chat, narrative, explain_trade, journal, performance,
     risk_event, signal_summary, annotate, pre_trade, post_trade,
-    agent_synthesis, weekly_synthesis.
+    agent_synthesis, weekly_synthesis, news_analysis.
     """
     profile = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])
-    result = _call_gemini(
-        system, prompt,
-        model=profile["model"],
-        max_tokens=profile["max_tokens"],
-        thinking_budget=profile.get("thinking_budget"),
-    )
+    max_tokens = profile["max_tokens"]
+
+    # Try Groq first (free tier)
+    result = _call_groq(system, prompt, max_tokens=max_tokens)
     if result:
         return result
-    return "(LLM unavailable — set GEMINI_API_KEY in .env)"
+
+    # Fallback to Gemini
+    result = _call_gemini(system, prompt, max_tokens=max_tokens)
+    if result:
+        return result
+
+    return "(LLM unavailable — set GROQ_API_KEY or GEMINI_API_KEY in .env)"
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +407,7 @@ def synthesize_position_review(structured_assessment: dict,
                                 analysis_parts: list[str]) -> str:
     """Take structured position review data and produce a human-readable synthesis.
 
-    Hybrid approach: rules produce the structured assessment, Gemini synthesizes
+    Hybrid approach: rules produce the structured assessment, LLM synthesizes
     a richer narrative from it.
     """
     prompt = f"""You are reviewing an open trading position. The system's rule-based analysis produced this assessment:
@@ -405,9 +466,9 @@ Use markdown formatting. Be analytical and specific."""
 
 def analyze_news_impact(headlines: list[dict], positions: list[dict],
                         regime: str, traded_assets: list[str]) -> str:
-    """Use Gemini to interpret market news and assess impact on specific assets.
+    """Interpret market news and assess impact on specific assets.
 
-    Returns structured JSON-like analysis with per-asset sentiment,
+    Returns structured analysis with per-asset sentiment,
     key events, actionable signals, and risk alerts.
     """
     # Trim headlines to titles + source for token efficiency
@@ -460,14 +521,24 @@ Be direct. Cite specific headlines. Don't hedge excessively."""
 # ---------------------------------------------------------------------------
 
 def check_llm_availability() -> dict:
-    """Check if Gemini is configured and reachable."""
+    """Check if any LLM provider is configured and reachable."""
     status = {
+        "groq": {"configured": bool(os.getenv("GROQ_API_KEY")), "reachable": False},
         "gemini": {"configured": bool(os.getenv("GEMINI_API_KEY")), "reachable": False},
     }
 
+    if status["groq"]["configured"]:
+        result = _call_groq("Say OK", "ping", max_tokens=10)
+        status["groq"]["reachable"] = result is not None
+
     if status["gemini"]["configured"]:
-        result = _call_gemini("Say OK", "ping")
+        result = _call_gemini("Say OK", "ping", max_tokens=10)
         status["gemini"]["reachable"] = result is not None
 
-    status["any_available"] = status["gemini"]["reachable"]
+    status["any_available"] = status["groq"]["reachable"] or status["gemini"]["reachable"]
+    status["active_provider"] = (
+        "groq" if status["groq"]["reachable"]
+        else "gemini" if status["gemini"]["reachable"]
+        else "none"
+    )
     return status

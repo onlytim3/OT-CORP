@@ -40,6 +40,10 @@ services:
       - key: ASTER_API_SECRET
         sync: false
 
+      # ── LLM (Groq free tier — Llama 4 Scout) ──
+      - key: GROQ_API_KEY
+        sync: false
+
       # ── Data Sources ──
       - key: FRED_API_KEY
         sync: false
@@ -66,7 +70,7 @@ services:
       - key: LEVERAGE_PROFILE
         value: conservative
       - key: DAEMON_INTERVAL_HOURS
-        value: "1"
+        value: "4"
 
     disk:
       name: agency-data

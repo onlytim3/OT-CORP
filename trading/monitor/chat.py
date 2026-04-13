@@ -240,10 +240,11 @@ def _llm_respond(message: str, structured_data: str) -> str | None:
 
     # Check if any LLM provider is configured before doing expensive context gather
     import os
-    has_claude = bool(os.getenv("ANTHROPIC_API_KEY", ""))
+    has_groq = bool(os.getenv("GROQ_API_KEY", ""))
     has_gemini = bool(os.getenv("GEMINI_API_KEY", ""))
-    if not has_claude and not has_gemini:
-        log.debug("No LLM API keys configured (ANTHROPIC_API_KEY or GEMINI_API_KEY)")
+    has_claude = bool(os.getenv("ANTHROPIC_API_KEY", ""))
+    if not has_groq and not has_gemini and not has_claude:
+        log.debug("No LLM API keys configured (GROQ_API_KEY, GEMINI_API_KEY, or ANTHROPIC_API_KEY)")
         return None
 
     # Gather comprehensive system context — give LLM everything
