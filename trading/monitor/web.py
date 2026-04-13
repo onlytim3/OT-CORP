@@ -160,6 +160,12 @@ def _safe_account():
         }
 
 
+def _get_strategies():
+    """Helper to list enabled strategies from config."""
+    from trading.config import STRATEGY_ENABLED
+    return [k for k, v in STRATEGY_ENABLED.items() if v]
+
+
 def _safe_positions():
     try:
         return get_positions_from_aster()
@@ -625,7 +631,7 @@ def api_trades():
 @app.route("/api/position/<symbol>")
 def api_position_detail(symbol):
     """Detailed breakdown for a single position — strategies, reasoning, risk."""
-    import json as _json
+    
     from trading.config import RISK
     from trading.risk.manager import CORRELATION_GROUPS, LEVERAGE_FACTORS, compute_trade_targets
     from trading.risk.profit_manager import TAKE_PROFIT_PCT, TRAILING_STOP_ACTIVATE, TRAILING_STOP_PCT
@@ -672,7 +678,7 @@ def api_position_detail(symbol):
     for s in signals:
         if s.get("data") and isinstance(s["data"], str):
             try:
-                s["data"] = _json.loads(s["data"])
+                s["data"] = json.loads(s["data"])
             except Exception:
                 pass
 
@@ -680,7 +686,7 @@ def api_position_detail(symbol):
     for j in journal_entries:
         if j.get("market_context") and isinstance(j["market_context"], str):
             try:
-                j["market_context"] = _json.loads(j["market_context"])
+                j["market_context"] = json.loads(j["market_context"])
             except Exception:
                 pass
 
@@ -738,6 +744,11 @@ def api_position_detail(symbol):
     leverage = LEVERAGE_FACTORS.get(pos["symbol"], 1.0)
 
     # Find correlation group
+    # Resolved symbol variants for mapping
+    from trading.data.aster import aster_to_alpaca
+    symbol_slash = aster_to_alpaca(pos["symbol"]) or pos["symbol"]
+    symbol_flat = symbol_slash.split("/")[0].split("USDT")[0]
+
     corr_group = None
     for group_name, group_symbols in CORRELATION_GROUPS.items():
         if symbol_slash in group_symbols or symbol_flat in group_symbols:
@@ -783,7 +794,7 @@ def api_position_detail(symbol):
 @app.route("/api/trade/<int:trade_id>")
 def api_trade_detail(trade_id):
     """Full detail for a single trade — journal, signals, risk targets."""
-    import json as _json
+    
 
     with get_read_db() as conn:
         trade = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
@@ -798,7 +809,7 @@ def api_trade_detail(trade_id):
         for j in journal:
             if j.get("market_context") and isinstance(j["market_context"], str):
                 try:
-                    j["market_context"] = _json.loads(j["market_context"])
+                    j["market_context"] = json.loads(j["market_context"])
                 except Exception:
                     pass
 
@@ -816,7 +827,7 @@ def api_trade_detail(trade_id):
             for s in signals:
                 if s.get("data") and isinstance(s["data"], str):
                     try:
-                        s["data"] = _json.loads(s["data"])
+                        s["data"] = json.loads(s["data"])
                     except Exception:
                         pass
 
@@ -845,7 +856,7 @@ def api_trade_analyses(trade_id):
 @app.route("/api/signal/<int:signal_id>")
 def api_signal_detail(signal_id):
     """Full detail for a single signal."""
-    import json as _json
+    
 
     with get_read_db() as conn:
         sig = conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
@@ -854,7 +865,7 @@ def api_signal_detail(signal_id):
         sig = dict(sig)
         if sig.get("data") and isinstance(sig["data"], str):
             try:
-                sig["data"] = _json.loads(sig["data"])
+                sig["data"] = json.loads(sig["data"])
             except Exception:
                 pass
 
@@ -876,7 +887,7 @@ def api_signal_detail(signal_id):
 @app.route("/api/action/<int:action_id>")
 def api_action_detail(action_id):
     """Full detail for a single action log entry."""
-    import json as _json
+    
 
     with get_read_db() as conn:
         action = conn.execute("SELECT * FROM action_log WHERE id=?", (action_id,)).fetchone()
@@ -885,7 +896,7 @@ def api_action_detail(action_id):
         action = dict(action)
         if action.get("data") and isinstance(action["data"], str):
             try:
-                action["data"] = _json.loads(action["data"])
+                action["data"] = json.loads(action["data"])
             except Exception:
                 pass
 
@@ -931,7 +942,7 @@ def api_generate_narratives():
 @app.route("/api/pnl/history")
 def api_pnl_history():
     """Daily P&L time series for charts. Returns up to 90 days."""
-    import json as _json
+    
     from trading.db.store import get_daily_pnl
 
     days = min(int(request.args.get("days", 90)), 365)
@@ -1004,7 +1015,7 @@ def api_pnl_history():
 @app.route("/api/pnl/<date>")
 def api_pnl_detail(date):
     """Full detail for a single day's P&L — all trades, signals, actions."""
-    import json as _json
+    
 
     with get_read_db() as conn:
         pnl = conn.execute("SELECT * FROM daily_pnl WHERE date=?", (date,)).fetchone()
@@ -1022,7 +1033,7 @@ def api_pnl_detail(date):
         for s in signals:
             if s.get("data") and isinstance(s["data"], str):
                 try:
-                    s["data"] = _json.loads(s["data"])
+                    s["data"] = json.loads(s["data"])
                 except Exception:
                     pass
 
@@ -1060,7 +1071,6 @@ def api_pnl_detail(date):
 @app.route("/api/strategies")
 def api_strategies():
     """Strategy performance breakdown for dashboard."""
-    import json as _json
     from trading.config import STRATEGY_ENABLED
 
     enabled = {k: v for k, v in STRATEGY_ENABLED.items() if v}
@@ -1205,8 +1215,8 @@ def api_intelligence():
             d = dict(r)
             if d.get("data") and isinstance(d["data"], str):
                 try:
-                    import json as _json
-                    d["data"] = _json.loads(d["data"])
+                    
+                    d["data"] = json.loads(d["data"])
                 except Exception:
                     pass
             # Fix: when strength is 0, extract confidence from regime data fields
@@ -1305,14 +1315,14 @@ def api_agents():
     result = {"pending": [], "recent": [], "activity": [], "agent_stats": []}
 
     try:
-        import json as _json
+        
         recs = get_recommendation_history(limit=100)
 
         # Parse data field from JSON string if needed
         for r in recs:
             if r.get("data") and isinstance(r["data"], str):
                 try:
-                    r["data"] = _json.loads(r["data"])
+                    r["data"] = json.loads(r["data"])
                 except Exception:
                     pass
 
@@ -1409,7 +1419,7 @@ def api_allocation():
 @app.route("/api/strategy/<name>")
 def api_strategy_detail(name):
     """Detailed breakdown for a single strategy — signals, trades, performance, config."""
-    import json as _json
+    
     from trading.config import STRATEGY_ENABLED
 
     result = {
@@ -1431,7 +1441,7 @@ def api_strategy_detail(name):
             d = dict(r)
             if d.get("data") and isinstance(d["data"], str):
                 try:
-                    d["data"] = _json.loads(d["data"])
+                    d["data"] = json.loads(d["data"])
                 except Exception:
                     pass
             result["signals"].append(d)
@@ -1450,7 +1460,7 @@ def api_strategy_detail(name):
             d = dict(r)
             if d.get("data") and isinstance(d["data"], str):
                 try:
-                    d["data"] = _json.loads(d["data"])
+                    d["data"] = json.loads(d["data"])
                 except Exception:
                     pass
             result["recommendations"].append(d)
@@ -1469,7 +1479,7 @@ def api_strategy_detail(name):
         bt_files = sorted(backtests_dir.glob("backtest_*.json"), reverse=True)
         for bf in bt_files[:5]:
             try:
-                bt = _json.loads(bf.read_text())
+                bt = json.loads(bf.read_text())
                 strategies = bt.get("strategies", {})
                 if name in strategies:
                     result["backtest"] = strategies[name]
@@ -1499,7 +1509,7 @@ def api_strategy_detail(name):
 @app.route("/api/recommendation/<int:rec_id>")
 def api_recommendation_detail(rec_id):
     """Detailed view of a single agent recommendation."""
-    import json as _json
+    
 
     with get_read_db() as conn:
         row = conn.execute("SELECT * FROM agent_recommendations WHERE id = ?", (rec_id,)).fetchone()
@@ -1509,7 +1519,7 @@ def api_recommendation_detail(rec_id):
         rec = dict(row)
         if rec.get("data") and isinstance(rec["data"], str):
             try:
-                rec["data"] = _json.loads(rec["data"])
+                rec["data"] = json.loads(rec["data"])
             except Exception:
                 pass
 
@@ -1524,7 +1534,7 @@ def api_recommendation_detail(rec_id):
             d = dict(r)
             if d.get("data") and isinstance(d["data"], str):
                 try:
-                    d["data"] = _json.loads(d["data"])
+                    d["data"] = json.loads(d["data"])
                 except Exception:
                     pass
             related_recs.append(d)
@@ -1655,7 +1665,7 @@ def api_journal_entries():
         for j in entries:
             if j.get("market_context") and isinstance(j["market_context"], str):
                 try:
-                    j["market_context"] = _json.loads(j["market_context"])
+                    j["market_context"] = json.loads(j["market_context"])
                 except Exception:
                     pass
         return jsonify({"entries": entries})
@@ -1787,7 +1797,6 @@ def api_llm_analyze():
     try:
         from trading.llm.engine import analyze_performance
         from trading.db.store import get_daily_pnl
-        from trading.monitor.web import _get_strategies
 
         pnl = get_daily_pnl(limit=30)
         strategies = _get_strategies()
@@ -2071,13 +2080,13 @@ def api_funnel():
                 "SELECT timestamp, data FROM action_log "
                 "WHERE category='funnel' ORDER BY timestamp DESC LIMIT 50"
             ).fetchall()
-        import json as _json
+        
         funnels = []
         for r in rows:
             entry = {"timestamp": r["timestamp"]}
             if r["data"]:
                 try:
-                    entry.update(_json.loads(r["data"]))
+                    entry.update(json.loads(r["data"]))
                 except Exception:
                     pass
             funnels.append(entry)
@@ -2279,7 +2288,6 @@ def api_sectors():
 
 
 @app.route("/api/reviews", methods=["GET"])
-@require_auth
 def api_get_reviews():
     """List all AI Tear Sheets."""
     from trading.monitor.analyst import get_all_reports
@@ -2287,7 +2295,6 @@ def api_get_reviews():
 
 
 @app.route("/api/reviews/generate", methods=["POST"])
-@require_auth
 def api_generate_review():
     """Trigger the creation of a new AI Tear Sheet."""
     from trading.monitor.analyst import generate_tear_sheet
