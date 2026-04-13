@@ -99,6 +99,57 @@ DEFAULT_COINS = [
     "near", "injective", "arbitrum", "optimism", "toncoin",
 ]
 
+# --- Symbol Mappings ---
+# Maps CoinGecko IDs to AsterDex symbols (Perps)
+ASTER_SYMBOLS = {
+    "bitcoin": "BTCUSDT",
+    "ethereum": "ETHUSDT",
+    "solana": "SOLUSDT",
+    "bnb": "BNBUSDT",
+    "xrp": "XRPUSDT",
+    "avalanche-2": "AVAXUSDT",
+    "polkadot": "DOTUSDT",
+    "chainlink": "LINKUSDT",
+    "uniswap": "UNIUSDT",
+    "aave": "AAVEUSDT",
+    "litecoin": "LTCUSDT",
+    "bitcoin-cash": "BCHUSDT",
+    "dogecoin": "DOGEUSDT",
+    "sui": "SUIUSDT",
+    "aptos": "APTUSDT",
+    "near": "NEARUSDT",
+    "injective": "INJUSDT",
+    "arbitrum": "ARBUSDT",
+    "optimism": "OPUSDT",
+    "toncoin": "TONUSDT",
+    "gold": "GOLDUSDT",
+}
+
+# Maps CoinGecko IDs to Alpaca symbols (Legacy/Compatibility)
+CRYPTO_SYMBOLS = {
+    "bitcoin": "BTC/USD",
+    "ethereum": "ETH/USD",
+    "solana": "SOL/USD",
+    "bnb": "BNB/USD",
+    "xrp": "XRP/USD",
+    "avalanche-2": "AVAX/USD",
+    "polkadot": "DOT/USD",
+    "chainlink": "LINK/USD",
+    "uniswap": "UNI/USD",
+    "aave": "AAVE/USD",
+    "litecoin": "LTC/USD",
+    "bitcoin-cash": "BCH/USD",
+    "dogecoin": "DOGE/USD",
+    "sui": "SUI/USD",
+    "aptos": "APT/USD",
+    "near": "NEAR/USD",
+    "injective": "INJ/USD",
+    "arbitrum": "ARB/USD",
+    "optimism": "OP/USD",
+    "toncoin": "TON/USD",
+    "gold": "GLD",
+}
+
 # --- Strategy Parameters ---
 # Only strategies with positive 2-year backtest returns are kept.
 # Deleted: momentum (-39%), mean_reversion (-13%), fg_multi_timeframe (-14%),
