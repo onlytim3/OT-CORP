@@ -20,13 +20,9 @@ services:
       - key: PORT
         value: "10000"
 
-      # ── Alpaca (paper trading) ──
-      - key: ALPACA_API_KEY
+      # ── Security ──
+      - key: DASHBOARD_PIN
         sync: false
-      - key: ALPACA_SECRET_KEY
-        sync: false
-      - key: ALPACA_BASE_URL
-        value: "https://paper-api.alpaca.markets"
 
       # ── AsterDex Perpetual Futures ──
       - key: ASTER_USER_ADDRESS

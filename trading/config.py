@@ -8,10 +8,6 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-# --- Alpaca ---
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
-ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 # --- AsterDex (perpetual futures exchange) ---
 ASTER_USER_ADDRESS = os.getenv("ASTER_USER_ADDRESS", "")
@@ -33,6 +29,9 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")   # Claude (unused, legac
 
 # --- Trading Mode ---
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
+
+# --- Security ---
+DASHBOARD_PIN = os.getenv("DASHBOARD_PIN", None)   # Required to unlock dashboard if set
 
 # --- Timezone ---
 # Display timezone for dashboard and logs (internal storage stays UTC)
@@ -461,17 +460,7 @@ def validate_config(test_api: bool = True) -> list[str]:
             f"TRADING_MODE must be 'paper' or 'live', got '{TRADING_MODE}'"
         )
 
-    if TRADING_MODE == "live" and "paper-api" in ALPACA_BASE_URL:
-        raise ConfigError(
-            "TRADING_MODE is 'live' but ALPACA_BASE_URL points to paper API. "
-            "Set ALPACA_BASE_URL to 'https://api.alpaca.markets' for live trading."
-        )
 
-    # -- Optional but warned --------------------------------------------------
-    if not ALPACA_API_KEY:
-        warnings.append(
-            "ALPACA_API_KEY not set — ETF strategies (dxy_dollar, cross_asset_momentum) disabled."
-        )
     if not FRED_API_KEY:
         warnings.append(
             "FRED_API_KEY not set — macro data strategies will have limited data."

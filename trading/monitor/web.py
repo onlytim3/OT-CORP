@@ -21,7 +21,8 @@ from trading.db.store import (
     get_journal, get_reviews, get_setting, get_open_trades,
     symbol_variants,
 )
-from trading.execution.router import get_account, get_positions_from_aster as get_positions_from_alpaca
+from trading.execution.router import get_account, get_positions_from_aster
+from trading.monitor.auth import get_auth_middleware
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ app = Flask(
 # Enable CORS for React dashboard dev server
 if _CORS:
     _CORS(app, origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"])
+
+get_auth_middleware(app)
 
 _START_TIME = time.monotonic()
 
@@ -54,6 +57,79 @@ def serve_react(path=""):
         return send_from_directory(str(_REACT_DIST), path)
     # SPA fallback — serve index.html for all routes
     return send_from_directory(str(_REACT_DIST), "index.html")
+
+
+# ---------------------------------------------------------------------------
+# Auth Endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    from trading.config import DASHBOARD_PIN
+    data = request.json or {}
+    pin = data.get("pin")
+    
+    if not DASHBOARD_PIN or str(pin) == str(DASHBOARD_PIN):
+        # Set cookie dynamically here
+        resp = jsonify({"success": True})
+        resp.set_cookie("dashboard_pin", str(pin), httponly=True, samesite="Lax", max_age=86400*30)
+        return resp
+        
+    return jsonify({"error": "Invalid PIN"}), 401
+
+
+@app.route("/login")
+def login_page():
+    from trading.monitor.auth import check_dashboard_auth
+    if check_dashboard_auth():
+        return redirect("/")
+        
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>AsterDex | Authenticate</title>
+        <style>
+            body { margin: 0; padding: 0; background: #0D1117; color: #E6EDF3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; }
+            .lock-card { background: rgba(22, 27, 34, 0.65); padding: 40px; border-radius: 16px; border: 1px solid rgba(148, 163, 184, 0.12); text-align: center; max-width: 400px; width: 90%; }
+            h2 { margin-top: 0; font-weight: 500; letter-spacing: 2px; }
+            input { background: rgba(139, 148, 158, 0.12); border: 1px solid rgba(148, 163, 184, 0.15); color: #FFF; font-size: 24px; letter-spacing: 12px; padding: 16px; border-radius: 8px; width: 100%; text-align: center; margin: 24px 0; outline: none; }
+            input:focus { border-color: #58A6FF; }
+            .err { color: #F85149; margin-top: -12px; margin-bottom: 24px; font-size: 14px; display: none; }
+            button { background: #58A6FF; color: #FFF; border: none; padding: 12px 24px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: 500; }
+            button:hover { background: #79C0FF; }
+        </style>
+    </head>
+    <body>
+        <div class="lock-card">
+            <h2>SYSTEM LOCKED</h2>
+            <div style="font-size: 14px; color: #8C9BAF;">Enter your 4-digit PIN to access the terminal.</div>
+            <input type="password" id="pin" maxlength="4" placeholder="••••" autofocus>
+            <div id="err" class="err">Invalid PIN</div>
+            <button onclick="submitPin()">UNLOCK</button>
+        </div>
+        <script>
+            function submitPin() {
+                const pin = document.getElementById('pin').value;
+                fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({pin: pin})
+                }).then(r => {
+                    if (r.ok) { window.location.href = '/'; }
+                    else { document.getElementById('err').style.display = 'block'; document.getElementById('pin').value = ''; }
+                });
+            }
+            document.getElementById('pin').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') submitPin();
+            });
+        </script>
+    </body>
+    </html>
+    """
+    return html
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +162,9 @@ def _safe_account():
 
 def _safe_positions():
     try:
-        return get_positions_from_alpaca()
+        return get_positions_from_aster()
     except Exception:
-        log.exception("Failed to fetch positions from Alpaca")
+        log.exception("Failed to fetch positions from AsterDex")
         return []
 
 
@@ -1895,7 +1971,7 @@ def api_health():
     # --- Positions count ---
     positions_count = 0
     try:
-        positions_count = len(get_positions_from_alpaca())
+        positions_count = len(get_positions_from_aster())
     except Exception:
         log.exception("Health check: failed to count positions")
 
@@ -1944,7 +2020,7 @@ def api_volume_all():
     try:
         from trading.risk.volume_gate import full_volume_analysis
         from trading.data.aster import alpaca_to_aster
-        positions = get_positions_from_alpaca()
+        positions = get_positions_from_aster()
         results = []
         for pos in positions:
             sym = pos.get("symbol", "")
@@ -2052,7 +2128,7 @@ def api_attribution():
 def api_margin():
     """Margin health for all leveraged positions."""
     try:
-        positions = get_positions_from_alpaca()
+        positions = get_positions_from_aster()
         result = []
         for pos in positions:
             leverage = pos.get("leverage", 1)
@@ -2126,7 +2202,7 @@ def api_leverage():
 def api_sectors():
     """Sector exposure breakdown."""
     try:
-        positions = get_positions_from_alpaca()
+        positions = get_positions_from_aster()
         account = _safe_account()
         portfolio_value = account.get("portfolio_value", 0)
 

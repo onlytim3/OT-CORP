@@ -27,7 +27,7 @@ from trading.db.store import (
     update_trade_status,
     upsert_position,
 )
-from trading.execution.router import get_order_status, get_positions_from_aster as get_positions_from_alpaca
+from trading.execution.router import get_order_status, get_positions_from_aster
 from trading.learning.journal import record_outcome
 
 console = Console()
@@ -39,7 +39,7 @@ class SyncError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# 1. sync_positions — Alpaca (or paper) positions  -->  local DB
+# 1. sync_positions — AsterDex (or paper) positions  -->  local DB
 # ---------------------------------------------------------------------------
 
 def sync_positions() -> int:
@@ -57,7 +57,7 @@ def sync_positions() -> int:
     Returns the number of positions synced.
     """
     try:
-        broker_positions = get_positions_from_alpaca()
+        broker_positions = get_positions_from_aster()
     except Exception as exc:
         console.print(f"[red]sync_positions: failed to fetch broker positions: {exc}[/red]")
         log_action("error", "sync_positions_fetch", details=str(exc))
