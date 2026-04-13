@@ -1494,7 +1494,18 @@ th.text-right, td.text-right {
 </div>
 
 <!-- Hero Strip -->
-<div class="content-wrap">
+<div class="content-wrap" style="padding-top:10px;">
+    <!-- System Halt / Recovery Banner -->
+    <div id="recoveryBanner" style="display:none;background:var(--bg-card);border:1px solid var(--color-orange);border-radius:12px;padding:16px;margin-bottom:20px;display:none;align-items:center;justify-content:space-between;">
+        <div>
+            <h3 style="margin:0 0 4px;color:var(--color-orange);font-size:16px;" id="recoveryTitle">Critical Emergency Halt</h3>
+            <p style="margin:0;color:var(--text-secondary);font-size:13px;" id="recoveryDesc">Drawdown threshold exceeded. Trading is disabled.</p>
+        </div>
+        <div id="recoveryActions">
+            <button onclick="requestResume()" style="background:var(--color-orange);color:#000;border:none;border-radius:6px;padding:8px 16px;font-weight:600;cursor:pointer;">Resume (Conservative Mode)</button>
+        </div>
+    </div>
+
     <div class="hero-strip">
         <div class="hero-card">
             <div class="label">Portfolio Value</div>
@@ -1888,6 +1899,18 @@ th.text-right, td.text-right {
 <script id="sparklineData" type="application/json">{{ sparkline_data }}</script>
 
 <script>
+// ---- Format Helpers ----
+function formatNumber(num, decimals = 4) {
+    if (num === null || num === undefined) return '0.0000';
+    const val = Number(num);
+    if (isNaN(val)) return String(num);
+    // Prevent small numbers from showing up as scientific notation like 1.2e-5
+    if (Math.abs(val) > 0 && Math.abs(val) < 0.001) {
+        return val.toFixed(decimals + 2); // Show extra decimals for tiny crypto quantities
+    }
+    return val.toFixed(decimals);
+}
+
 // ---- Mode switch ----
 let _currentMode = '{{ mode }}';
 
@@ -1943,6 +1966,29 @@ function openModal(title, loadingText) {
     _modalBody.innerHTML = '<div class="modal-loading">' + (loadingText || 'Loading...') + '</div>';
     _modal.classList.add('active');
 }
+
+// ---- Recovery Protocol Support ----
+function requestResume() {
+    if (!confirm("Resume trading? The system will enter Conservative Recovery Mode (50% position sizes, 2-strategy minimum) until portfolio peak recovers to 80%.")) return;
+    
+    document.getElementById('recoveryActions').innerHTML = '<span style="color:var(--text-secondary);">Resuming...</span>';
+    fetch('/api/resume_trading', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+         body: JSON.stringify({ reason: "Manual dashboard override" })
+    })
+    .then(r => r.json())
+    .then(data => {
+         if (data.error) {
+             alert("Resume failed: " + data.error);
+             location.reload();
+         } else {
+             showToast("Trading resumed in conservative mode", "success");
+             fetchUpdate(); // Force UI refresh
+         }
+    })
+    .catch(err => alert("Network error: " + err.message));
+}
 function closeModal() { _modal.classList.remove('active'); }
 _modal.addEventListener('click', function(e) { if (e.target === this) closeModal(); });
 
@@ -1984,7 +2030,7 @@ function renderPositionDetail(d) {
 
     // Overview section
     let html = '<div class="detail-section"><h3>Position Overview</h3><div class="detail-grid">';
-    html += detailItem('Quantity', d.qty.toFixed(6));
+    html += detailItem('Quantity', formatNumber(d.qty, 6));
     html += detailItem('Avg Cost', '$' + d.avg_cost.toFixed(2));
     html += detailItem('Current Price', '$' + d.current_price.toFixed(2));
     html += detailItem('Market Value', '$' + d.market_value.toFixed(2));
@@ -2125,7 +2171,7 @@ function renderTradeDetail(data) {
     let html = '<div class="detail-section"><h3>Trade Overview</h3><div class="detail-grid">';
     html += detailItem('Symbol', '<span class="action-symbol">' + t.symbol + '</span>');
     html += detailItem('Side', '<span class="' + sideClass + '">' + (t.side || '').toUpperCase() + '</span>');
-    html += detailItem('Quantity', (t.qty || 0).toFixed(6));
+    html += detailItem('Quantity', formatNumber(t.qty || 0, 6));
     html += detailItem('Price', '$' + (t.price || 0).toFixed(2));
     html += detailItem('Total', '$' + (t.total || 0).toFixed(2));
     html += detailItem('Status', '<span class="' + statusColor + '">' + (t.status || 'unknown') + '</span>');
@@ -2225,7 +2271,7 @@ function renderSignalDetail(data) {
             if (typeof v === 'object' && v !== null) {
                 html += detailItem(k, '<code style="font-size:11px;">' + JSON.stringify(v) + '</code>');
             } else {
-                const val = typeof v === 'number' ? v.toFixed(4) : String(v);
+                const val = typeof v === 'number' ? formatNumber(v, 4) : String(v);
                 html += detailItem(k, val);
             }
         }
@@ -2289,7 +2335,7 @@ function renderActionDetail(data) {
             if (typeof v === 'object' && v !== null) {
                 html += detailItem(k, '<code style="font-size:11px;word-break:break-all;">' + JSON.stringify(v) + '</code>');
             } else {
-                const val = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v);
+                const val = typeof v === 'number' ? (Number.isInteger(v) ? v : formatNumber(v, 4)) : String(v);
                 html += detailItem(k, val);
             }
         }
@@ -2509,7 +2555,7 @@ function renderRecommendationDetail(data) {
             if (typeof v === 'object' && v !== null) {
                 html += detailItem(k, '<code style="font-size:11px;word-break:break-all;">' + JSON.stringify(v) + '</code>');
             } else {
-                const val = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v);
+                const val = typeof v === 'number' ? (Number.isInteger(v) ? v : formatNumber(v, 4)) : String(v);
                 html += detailItem(k, val);
             }
         }
@@ -3081,7 +3127,7 @@ function renderPositionsLive(positions, portfolioValue) {
         const pnlClass = pnl >= 0 ? 'green' : 'red';
         tableHtml += '<tr class="clickable" onclick="openPositionDetail(\'' + p.symbol + '\')" data-pnl="' + pnlDir + '">';
         tableHtml += '<td class="action-symbol">' + p.symbol + '</td>';
-        tableHtml += '<td class="text-right">' + p.qty.toFixed(4) + '</td>';
+        tableHtml += '<td class="text-right">' + formatNumber(p.qty, 4) + '</td>';
         tableHtml += '<td class="text-right">$' + p.avg_cost.toFixed(2) + '</td>';
         tableHtml += '<td class="text-right">$' + p.current_price.toFixed(2) + '</td>';
         tableHtml += '<td class="text-right ' + pnlClass + '">$' + (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '</td>';
@@ -3220,6 +3266,33 @@ function renderActionsLive(actions) {
             if (data.summary) {
                 updateAlertBanner(data.summary);
             }
+
+            // Recovery Status Support
+            fetch('/api/recovery_status').then(r => r.json()).then(recovery => {
+                 const banner = document.getElementById('recoveryBanner');
+                 if (!banner) return;
+                 if (recovery.active) {
+                      banner.style.display = 'flex';
+                      banner.style.borderColor = 'var(--color-blue)';
+                      banner.style.background = 'rgba(10, 132, 255, 0.05)';
+                      document.getElementById('recoveryTitle').textContent = 'Conservative Mode Active';
+                      document.getElementById('recoveryTitle').style.color = 'var(--color-blue)';
+                      document.getElementById('recoveryDesc').textContent = 'Trading resumed with ' + (recovery.position_scale * 100) + '% position sizing. Requires ' + recovery.min_strategies + '+ strategies per trade. Progress: ' + (recovery.progress_pct || 0) + '% / ' + (recovery.recovery_target_pct * 100) + '% to graduate.';
+                      document.getElementById('recoveryActions').innerHTML = '<span style="font-size:12px;color:rgba(255,255,255,0.6);">Auto-graduates at target</span>';
+                 } else if (data.summary && data.summary.daily_halt_date) {
+                      // We are halted, but NOT in conservative recovery mode.
+                      banner.style.display = 'flex';
+                      banner.style.borderColor = 'var(--color-red)';
+                      banner.style.background = 'rgba(255, 69, 58, 0.05)';
+                      document.getElementById('recoveryTitle').textContent = 'System Drawdown Halt';
+                      document.getElementById('recoveryTitle').style.color = 'var(--color-red)';
+                      document.getElementById('recoveryDesc').textContent = 'Maximum drawdown threshold exceeded. All opening trading halted.';
+                      document.getElementById('recoveryActions').innerHTML = '<button onclick="requestResume()" style="background:var(--color-red);color:#000;border:none;border-radius:6px;padding:8px 16px;font-weight:600;cursor:pointer;">Resume (Conservative)</button>';
+                 } else {
+                      // Normal mode, no halt
+                      banner.style.display = 'none';
+                 }
+            }).catch(() => {});
 
             // Toast for new trades
             if (data.summary) {

@@ -62,18 +62,29 @@ REVIEWS_DIR = KNOWLEDGE_DIR / "reviews"
 STRATEGIES_DIR = KNOWLEDGE_DIR / "strategies"
 
 # --- Risk Parameters ---
+# NOTE: Tightened 2026-04-13 after -36.7% drawdown analysis.
+# Root cause: single-strategy signals opened 6 simultaneous altcoin shorts
+# at 5-11% each during a violent rally. Fixes applied:
+#   - max_position_pct: 0.25 → 0.08   (max 8% per trade)
+#   - max_drawdown_pct: 0.20 → 0.12   (halt earlier at 12%)
+#   - max_daily_loss_pct: 0.05 → 0.03 (halt day at 3%)
+#   - stop_loss_pct: 0.05 → 0.03      (tighter per-trade stop)
+#   - max_open_positions: 6 (NEW)     (hard cap on open trades)
+#   - max_same_strategy_positions: 3 (NEW) (prevent pile-on)
 RISK = {
-    "risk_per_trade_pct": 0.01,     # Risk 1% of portfolio per trade (loss at stop = 1%)
-    "max_position_pct": 0.25,       # Max 25% of portfolio per position (leverage-aware sizing needs room)
-    "stop_loss_pct": 0.05,          # 5% stop loss (tightened from 7% — losses must be smaller than wins)
-    "max_daily_loss_pct": 0.05,     # 5% max daily loss
-    "max_drawdown_pct": 0.20,       # 20% max total drawdown → halt trading
-    "min_cash_reserve_pct": 0.05,   # Keep 5% in cash (aggressive deployment)
-    "max_trades_per_day": 25,       # 20+ active strategies
-    "min_volume_ratio": 0.30,       # Block entries when volume < 30% of 7d average
-    "volume_exit_ratio": 0.20,      # Exit positions when volume < 20% of 7d average
-    "max_spread_bps": 50,           # Block entries when bid-ask spread > 50 basis points
-    "max_market_impact_pct": 0.01,  # Block entries when order > 1% of recent 4h quote volume
+    "risk_per_trade_pct": 0.01,            # Risk 1% of portfolio per trade
+    "max_position_pct": 0.08,             # Max 8% of portfolio per position (was 25%)
+    "stop_loss_pct": 0.03,                # 3% stop loss (was 5%)
+    "max_daily_loss_pct": 0.03,           # 3% max daily loss (was 5%)
+    "max_drawdown_pct": 0.12,             # Halt at 12% drawdown (was 20%)
+    "min_cash_reserve_pct": 0.10,         # Keep 10% cash minimum (was 5%)
+    "max_trades_per_day": 15,             # Max 15 trades/day (was 25)
+    "max_open_positions": 6,              # [NEW] Hard cap on simultaneous open positions
+    "max_same_strategy_positions": 3,     # [NEW] No strategy can drive > 3 open trades
+    "min_volume_ratio": 0.30,             # Block entries when volume < 30% of 7d average
+    "volume_exit_ratio": 0.20,            # Exit positions when volume < 20% of 7d average
+    "max_spread_bps": 50,                 # Block entries when bid-ask spread > 50 bps
+    "max_market_impact_pct": 0.01,        # Block entries when order > 1% of recent 4h volume
 }
 
 # --- Short Selling ---

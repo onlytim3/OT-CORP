@@ -170,6 +170,8 @@ class RiskManager:
             lambda: self._check_buying_power(order_value),
             lambda: self._check_volume(signal),
             lambda: self._check_liquidity(signal, order_value),
+            lambda: self._check_open_positions_cap(positions),
+            lambda: self._check_same_strategy_cap(signal, positions),
             lambda: self._check_position_size(signal, order_value, positions),
             lambda: self._check_crypto_exposure(signal, order_value, positions),
             lambda: self._check_correlation_group(signal, order_value, positions),
@@ -298,6 +300,60 @@ class RiskManager:
             )
 
         return RiskCheck(allowed=True, reason="Liquidity OK", signal=signal)
+
+    # ------------------------------------------------------------------
+    # Hard caps (NEW — prevent pile-on)
+    # ------------------------------------------------------------------
+
+    def _check_open_positions_cap(self, positions: list[dict]) -> RiskCheck:
+        """Block new entries if total open positions >= max_open_positions.
+
+        This prevents the scenario (March 25) where 6+ simultaneous altcoin
+        shorts all moved against us in the same cycle.
+        """
+        max_positions = self.rules.get("max_open_positions", 6)
+        if signal := None:  # noqa: confusing but we need a dummy signal
+            pass
+        dummy = Signal("risk", "", "hold", 0, "")
+        open_count = len([p for p in positions if p.get("qty", 0) != 0])
+        if open_count >= max_positions:
+            return RiskCheck(
+                allowed=False,
+                reason=f"Open position cap reached: {open_count}/{max_positions} positions open. "
+                       "Close existing positions before opening new ones.",
+                signal=dummy,
+            )
+        return RiskCheck(allowed=True, reason=f"Open positions: {open_count}/{max_positions} OK", signal=dummy)
+
+    def _check_same_strategy_cap(self, signal: Signal, positions: list[dict]) -> RiskCheck:
+        """Block a strategy from opening more than max_same_strategy_positions trades.
+
+        Prevents a single strategy (e.g. multi_factor_rank) from opening
+        many correlated positions that fail together.
+        """
+        max_same = self.rules.get("max_same_strategy_positions", 3)
+        strategy = signal.strategy or ""
+        if not strategy or strategy in ("risk", "aggregator"):
+            return RiskCheck(allowed=True, reason="Strategy cap: no limit for aggregator", signal=signal)
+        try:
+            from trading.db.store import get_trades
+            open_trades = get_trades(limit=200)
+            same_strategy_open = [
+                t for t in open_trades
+                if t.get("strategy") == strategy
+                and t.get("status") in ("filled", "pending")
+                and not t.get("closed_at")
+            ]
+            if len(same_strategy_open) >= max_same:
+                return RiskCheck(
+                    allowed=False,
+                    reason=f"Strategy '{strategy}' already has {len(same_strategy_open)} open positions "
+                           f"(max {max_same}). Prevents correlated pile-on.",
+                    signal=signal,
+                )
+        except Exception:
+            pass
+        return RiskCheck(allowed=True, reason=f"Strategy cap OK for {strategy}", signal=signal)
 
     # ------------------------------------------------------------------
     # Position-level checks

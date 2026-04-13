@@ -52,6 +52,20 @@ _CONFLICT_MARGIN_THRESHOLD: float = 0.15
 required to declare a winner when signals conflict. Below this the
 aggregator emits a 'hold' signal for the symbol."""
 
+MIN_CONFLUENCE_STRENGTH: float = 0.55
+"""Minimum strength required when only ONE strategy votes for a trade.
+
+This is the PRIMARY gate that prevents the March 25 scenario:
+  - multi_factor_rank alone voted 'sell' on 6 altcoins at strength 0.34-0.64
+  - All 6 short positions opened simultaneously
+  - Violent altcoin rally wiped -30.45% in one cycle
+
+With this gate:
+  - 1 strategy + strength < 0.55 → hold (high-conviction required)
+  - 2+ strategies → proceed as normal
+  - Recovery mode → requires 2+ strategies regardless of strength
+"""
+
 # Strategy correlation groups — strategies measuring the same underlying signal.
 # Each group counts as at most 1 vote in confluence scoring.
 # The strongest signal from the group represents the group.
@@ -219,6 +233,133 @@ def _apply_multi_timeframe_confirmation(signal: Signal) -> Signal:
     return signal
 
 
+def _apply_regime_guard(signals: list, raw_all: list) -> list:
+    """Dampen short signals during detected bull regimes (P1 — regime-aware direction).
+
+    When hmm_regime strategy signals a bull market, reduce all 'sell' signal
+    strengths by 50%. At very high confidence (>= 0.80), block shorts entirely.
+    This prevents the catastrophic scenario of piling into shorts during a rally.
+
+    Falls back gracefully if hmm_regime data is unavailable.
+    """
+    # Find the hmm_regime signal in the raw signals
+    hmm_signals = [
+        s for s in raw_all
+        if s.strategy == "hmm_regime" and hasattr(s, 'data') and isinstance(s.data, dict)
+    ]
+    if not hmm_signals:
+        return signals  # No regime data — don't interfere
+
+    # Use the strongest hmm signal
+    hmm = max(hmm_signals, key=lambda s: s.strength)
+    regime = (hmm.data or {}).get("regime", "").lower()
+    regime_confidence = hmm.strength  # strength = regime confidence
+
+    if regime not in ("bull", "bullish", "trending_up", "uptrend"):
+        return signals  # Only apply guard in bull regimes
+
+    result = []
+    for sig in signals:
+        if sig.action != "sell":
+            result.append(sig)
+            continue
+
+        # Very high bull confidence: block shorts entirely
+        if regime_confidence >= 0.80:
+            result.append(Signal(
+                strategy=sig.strategy, symbol=sig.symbol, action="hold",
+                strength=0.0,
+                reason=(
+                    f"{sig.reason} [REGIME BLOCK: HMM bull @ {regime_confidence:.0%} confidence — "
+                    f"short blocked to prevent rally wipeout]"
+                ),
+                data=sig.data,
+            ))
+            _log.info(
+                f"Regime guard BLOCKED short on {sig.symbol} "
+                f"(bull confidence={regime_confidence:.0%})"
+            )
+        else:
+            # Moderate bull: dampen short strength 50%
+            dampened = round(sig.strength * 0.50, 4)
+            result.append(Signal(
+                strategy=sig.strategy, symbol=sig.symbol, action=sig.action,
+                strength=dampened,
+                reason=(
+                    f"{sig.reason} [REGIME DAMPEN: HMM bull @ {regime_confidence:.0%} — "
+                    f"short strength halved {sig.strength:.2f}→{dampened:.2f}]"
+                ),
+                data=sig.data,
+            ))
+
+    return result
+
+
+def _apply_confluence_gate(consolidated: list, by_symbol: dict) -> list:
+    """Block low-conviction single-strategy signals from becoming trades.
+
+    If only 1 strategy voted for a symbol (after deduplication) and the
+    strength is below MIN_CONFLUENCE_STRENGTH, convert to hold.
+
+    Also enforces recovery mode minimum strategy requirement.
+    """
+    try:
+        from trading.strategy.circuit_breaker import get_recovery_mode, CONSERVATIVE_MIN_STRATEGIES
+        recovery = get_recovery_mode()
+        recovery_active = recovery.get("active", False)
+        min_in_recovery = recovery.get("min_strategies", CONSERVATIVE_MIN_STRATEGIES)
+    except Exception:
+        recovery_active = False
+        min_in_recovery = 2
+
+    result = []
+    for sig in consolidated:
+        if sig.action not in ("buy", "sell"):
+            result.append(sig)
+            continue
+
+        contributing = by_symbol.get(sig.symbol, [])
+        n_strategies = len(contributing)
+
+        # Recovery mode: require minimum number of confirming strategies
+        if recovery_active and n_strategies < min_in_recovery:
+            result.append(Signal(
+                strategy=sig.strategy, symbol=sig.symbol, action="hold",
+                strength=0.0,
+                reason=(
+                    f"{sig.reason} [RECOVERY GATE: need {min_in_recovery}+ strategies, "
+                    f"only {n_strategies} voted]"
+                ),
+                data=sig.data,
+            ))
+            _log.info(
+                f"Confluence gate (recovery): blocked {sig.action} on {sig.symbol} "
+                f"({n_strategies} strategies, need {min_in_recovery})"
+            )
+            continue
+
+        # Normal mode: single-strategy trades need high-conviction strength
+        if n_strategies == 1 and sig.strength < MIN_CONFLUENCE_STRENGTH:
+            result.append(Signal(
+                strategy=sig.strategy, symbol=sig.symbol, action="hold",
+                strength=0.0,
+                reason=(
+                    f"{sig.reason} [CONFLUENCE GATE: single-strategy strength "
+                    f"{sig.strength:.2f} < {MIN_CONFLUENCE_STRENGTH} minimum. "
+                    f"Need 2+ strategies or strength ≥ {MIN_CONFLUENCE_STRENGTH}]"
+                ),
+                data=sig.data,
+            ))
+            _log.info(
+                f"Confluence gate blocked {sig.action} on {sig.symbol}: "
+                f"1 strategy, strength={sig.strength:.2f} < {MIN_CONFLUENCE_STRENGTH}"
+            )
+        else:
+            result.append(sig)
+
+    return result
+
+
 def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     """Aggregate raw signals from every strategy into one signal per symbol.
 
@@ -228,7 +369,9 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
         3. For each symbol, determine whether strategies agree or conflict.
         4. Resolve conflicts via strength comparison or merge agreements.
         5. Apply the MAX_SINGLE_ASSET_SIGNALS cap.
-        6. Log the aggregation event and print a summary table.
+        6. Apply regime guard (dampen/block shorts in bull markets).
+        7. Apply confluence gate (require 2+ strategies OR strength >= 0.55).
+        8. Log the aggregation event and print a summary table.
 
     Args:
         all_signals: Flat list of Signal objects from all strategies.
@@ -253,6 +396,9 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
 
     # Deduplicate correlated strategies before grouping
     actionable = _deduplicate_correlated(actionable)
+
+    # Apply regime guard BEFORE grouping (dampens raw sell signals in bull markets)
+    actionable = _apply_regime_guard(actionable, all_signals)
 
     # Group by symbol
     by_symbol: dict[str, list[Signal]] = defaultdict(list)
@@ -290,6 +436,9 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     for i, sig in enumerate(consolidated):
         if sig.action in ("buy", "sell"):
             consolidated[i] = _apply_multi_timeframe_confirmation(sig)
+
+    # P0: Apply confluence gate (blocks single-strategy low-conviction trades)
+    consolidated = _apply_confluence_gate(consolidated, by_symbol)
 
     # Log aggregation summary
     _log_aggregation(all_signals, actionable, consolidated)

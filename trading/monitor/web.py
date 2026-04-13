@@ -1501,6 +1501,55 @@ def api_llm_status():
         return jsonify({"error": "LLM module not installed", "any_available": False})
 
 
+@app.route("/api/resume_trading", methods=["POST"])
+def api_resume_trading():
+    """Resume trading after an emergency halt in conservative recovery mode.
+
+    Clears the drawdown halt and enters conservative mode:
+    - Position sizes reduced to 50%
+    - Requires 2+ strategies to confirm any trade
+    - Auto-graduates to normal when portfolio hits 80% of peak
+
+    Body (optional JSON): { "reason": "Manual operator resume" }
+    """
+    try:
+        from trading.strategy.circuit_breaker import resume_trading_conservatively
+        body = request.get_json(silent=True) or {}
+        reason = body.get("reason", "Manual operator resume via dashboard")
+        result = resume_trading_conservatively(reason=reason)
+        log.info(f"Resume trading requested: {reason}")
+        return jsonify(result)
+    except Exception as e:
+        log.exception("Resume trading failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/recovery_status", methods=["GET"])
+def api_recovery_status():
+    """Get current recovery mode status and progress toward normal trading."""
+    try:
+        from trading.strategy.circuit_breaker import get_recovery_mode, RECOVERY_TARGET_PCT
+        from trading.db.store import get_daily_pnl
+        mode = get_recovery_mode()
+
+        # Compute recovery progress
+        progress = None
+        if mode.get("active"):
+            pnl_records = get_daily_pnl(limit=90)
+            if len(pnl_records) >= 2:
+                peak = max(r["portfolio_value"] for r in pnl_records)
+                current = pnl_records[0]["portfolio_value"]
+                progress = round((current / peak) * 100, 1) if peak > 0 else 0
+
+        return jsonify({
+            **mode,
+            "recovery_target_pct": RECOVERY_TARGET_PCT,
+            "progress_pct": progress,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/journal/entries", methods=["GET"])
 def api_journal_entries():
     """Get past journal entries from the database (trade-level journal)."""
