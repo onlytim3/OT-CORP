@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
-from trading.db.store import get_conn
+from trading.db.store import get_db as get_conn
 from trading.llm.engine import ask_llm
 from trading.config import KNOWLEDGE_DIR, JOURNALS_DIR
 
