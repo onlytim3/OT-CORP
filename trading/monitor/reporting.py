@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 
 from trading.db.store import get_daily_pnl, get_trades, get_positions, get_recommendation_history
-from trading.risk.portfolio import RISK
+from trading.config import RISK
 from trading.risk.hedger import hedger
 
 log = logging.getLogger(__name__)
