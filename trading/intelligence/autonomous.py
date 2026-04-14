@@ -44,6 +44,7 @@ from trading.db.store import (
     get_strategies_needing_backtest,
     get_setting, set_setting,
 )
+from trading.intelligence.filter import is_recommendation_safe, guardrail, refresh_guardrail
 
 log = logging.getLogger(__name__)
 
@@ -1407,6 +1408,21 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
     applied = []
 
     for rec in recommendations:
+        # --- GUARDRAIL CHECK ---
+        # If the pattern is historically failing, veto auto-execution
+        if not is_recommendation_safe(rec["from_agent"], rec.get("category", ""), rec["action"]):
+            log.warning(
+                "VETO: Guardrail blocked auto-execution of %s recommendation (%s)",
+                rec["from_agent"], rec["action"]
+            )
+            # Downgrade to 'resolved' with 'vetoed' outcome
+            resolve_recommendation(
+                rec.get("id", 0), 
+                resolution="vetoed", 
+                outcome="neutral"
+            )
+            continue
+
         data = rec.get("data", {})
         # Full autonomy: mark all recommendations as auto_approve
         data["auto_approve"] = True
@@ -2355,6 +2371,9 @@ def run_autonomous_cycle() -> dict:
     # so that previous cycle's changes survive process restarts
     load_persisted_state()
 
+    # Ensure the recommendation guardrail has the latest failure patterns
+    refresh_guardrail()
+
     all_recommendations = []
     agent_results = {}
 
@@ -2397,6 +2416,7 @@ def run_autonomous_cycle() -> dict:
         ("backtest", _backtest_agent_think),
         ("position_review", _position_review_agent_think),
         ("news_interpretation", _news_agent_think),
+        ("signal_filter", _signal_filter_agent_think),
     ]
 
     for agent_name, think_fn in agents:
@@ -2456,6 +2476,41 @@ def run_autonomous_cycle() -> dict:
     )
 
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Signal Filter Agent — reports on the guardrail's active veteos
+# ---------------------------------------------------------------------------
+
+def _signal_filter_agent_think() -> list[dict]:
+    """Signal Filter agent reports on current blacklist and veto statistics."""
+    from trading.intelligence.filter import guardrail
+    recommendations = []
+    
+    try:
+        blacklist = guardrail.get_blacklist()
+        if blacklist:
+            recommendations.append({
+                "from_agent": "signal_filter_agent",
+                "to_agent": "learning_agent",
+                "category": "performance_alert",
+                "action": "active_blacklist",
+                "target": "recommendation_system",
+                "reasoning": (
+                    f"Activated {len(blacklist)} recommendation veto patterns due to low success rates (<30%). "
+                    f"Most recent failures being actively blocked: "
+                    f"{', '.join([str(b['pattern']) for b in blacklist[:3]])}."
+                ),
+                "data": {
+                    "blacklist_count": len(blacklist),
+                    "blacklist_details": blacklist,
+                    "auto_approve": False,
+                },
+            })
+    except Exception as e:
+        log.debug("Signal filter agent failed to get blacklist: %s", e)
+        
+    return recommendations
 
 
 def get_autonomous_status() -> dict:

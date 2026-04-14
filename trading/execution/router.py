@@ -17,6 +17,7 @@ from typing import Optional
 
 from trading.config import ASTER_SYMBOLS
 from trading.data.aster import aster_to_alpaca
+from trading.execution.schedule import get_intraday_activity_mult
 
 log = logging.getLogger(__name__)
 
@@ -419,21 +420,16 @@ def submit_order(
     When USE_LIMIT_ORDERS is enabled and order_type is MARKET, the order
     is automatically upgraded to a limit-with-fallback. Large orders
     (>5% of 1h volume) are routed through TWAP.
-
-    Args:
-        symbol: Alpaca-style symbol (BTC/USD) or AsterDex (BTCUSDT).
-        side: 'buy' or 'sell'.
-        notional: Dollar amount to trade (converted to qty via mark price).
-        qty: Exact quantity (overrides notional if both provided).
-        order_type: MARKET or LIMIT (default MARKET).
-        leverage: Leverage multiplier (default 1x).
-        stop_loss_price: Optional stop-loss trigger price.
-        limit_price: Limit price (required when order_type is LIMIT).
-        time_in_force: GTC, IOC, FOK (default GTC, used for LIMIT orders).
-
-    Returns dict matching Alpaca order response format:
-        id, status, symbol, side, qty, filled_qty, filled_avg_price, etc.
     """
+    # Scale order size based on intraday momentum (peak vs dead hours)
+    activity_mult = get_intraday_activity_mult()
+    if activity_mult != 1.0:
+        if notional:
+            notional *= activity_mult
+        if qty:
+            qty *= activity_mult
+        log.info("Intraday scaling for %s: %.2fx", symbol, activity_mult)
+
     # Check if paper mode -- simulate locally
     from trading.config import TRADING_MODE
     from trading.db.store import get_setting

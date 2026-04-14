@@ -70,9 +70,9 @@ CONFLUENCE_MULTIPLIERS = {
 CONFLUENCE_MAX_MULT = 3.0  # Cap for 5+ strategies confirming
 
 # Regime alignment boost
-REGIME_ALIGNMENT_BOOST = 1.25   # Intelligence briefing confirms direction
-REGIME_MISALIGN_PENALTY = 0.7   # Intelligence briefing contradicts direction
-EVENT_RISK_DAMPENER = 0.6       # Reduce sizing during event risk
+REGIME_ALIGNMENT_BOOST = 1.5     # Intelligence briefing confirms direction
+REGIME_MISALIGN_PENALTY = 0.5    # Intelligence briefing contradicts direction
+EVENT_RISK_DAMPENER = 0.4       # Reduce sizing during event risk
 
 # Performance tilt
 PERF_LOOKBACK_TRADES = 30       # Recent trades to evaluate
@@ -176,23 +176,27 @@ def _regime_alignment_multiplier(signal: Signal) -> float:
 
     # Check alignment: buy in bullish regime or sell in bearish regime
     if signal.action == "buy":
-        if regime_score > 0.2:
-            log.debug(
-                "Regime aligned: buy %s in bullish %s (%.2f) → %.1fx",
-                signal.symbol, category, regime_score, REGIME_ALIGNMENT_BOOST,
-            )
+        if regime_score > 0.4:  # Strong conviction
+            mult = REGIME_ALIGNMENT_BOOST * 1.2
+            log.info("Strong regime alignment for %s: %.2fx", signal.symbol, mult)
+            return mult
+        elif regime_score > 0.2:
             return REGIME_ALIGNMENT_BOOST
+        elif regime_score < -0.4: # Strong contradiction
+            mult = REGIME_MISALIGN_PENALTY * 0.5
+            log.warning("Strong regime contradiction for %s: %.2fx", signal.symbol, mult)
+            return mult
         elif regime_score < -0.2:
-            log.debug(
-                "Regime misaligned: buy %s in bearish %s (%.2f) → %.1fx",
-                signal.symbol, category, regime_score, REGIME_MISALIGN_PENALTY,
-            )
             return REGIME_MISALIGN_PENALTY
     elif signal.action == "sell":
-        if regime_score < -0.2:
-            return REGIME_ALIGNMENT_BOOST  # Sell in bearish = aligned
+        if regime_score < -0.4:
+            return REGIME_ALIGNMENT_BOOST * 1.2
+        elif regime_score < -0.2:
+            return REGIME_ALIGNMENT_BOOST
+        elif regime_score > 0.4:
+            return REGIME_MISALIGN_PENALTY * 0.5
         elif regime_score > 0.2:
-            return REGIME_MISALIGN_PENALTY  # Sell in bullish = misaligned
+            return REGIME_MISALIGN_PENALTY
 
     return 1.0
 
