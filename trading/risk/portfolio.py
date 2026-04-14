@@ -22,6 +22,7 @@ from trading.config import RISK
 from trading.db.store import get_positions, get_trades
 from trading.strategy.base import Signal
 from trading.risk.hedger import hedger
+from trading.strategy.circuit_breaker import get_position_scale
 
 log = logging.getLogger(__name__)
 
@@ -542,8 +543,13 @@ def calculate_order_size(
     if hedge_mult < 1.0:
         log.warning("TAIL RISK HEDGE: Scaling sizing by %.2fx due to extreme regime score", hedge_mult)
 
+    # --- Factor 9: Recovery Mode Scaling ---
+    recovery_mult = get_position_scale()
+    if recovery_mult < 1.0:
+        log.info("RECOVERY MODE: Scaling sizing by %.2fx", recovery_mult)
+
     # Cap combined multiplier to prevent runaway sizing (was unbounded up to ~7x)
-    combined_mult = confluence_mult * regime_mult * perf_mult * volume_mult * corr_mult * dd_mult * hedge_mult
+    combined_mult = confluence_mult * regime_mult * perf_mult * volume_mult * corr_mult * dd_mult * hedge_mult * recovery_mult
     MAX_COMBINED_MULTIPLIER = 5.0
     if combined_mult > MAX_COMBINED_MULTIPLIER:
         log.warning("Sizing multiplier capped: %.2fx → %.1fx (confluence=%.1f regime=%.2f perf=%.2f vol=%.2f corr=%.2f dd=%.2f hedge=%.2f)",
@@ -566,9 +572,15 @@ def calculate_order_size(
     # Also cap at free capital
     order_value = min(order_value, free_capital * 0.95)
 
-    # Minimum order size
+    # Minimum order size (AsterDex hard floor: $5.00)
     if order_value < 5.0:
-        return 0.0
+        # SMALL ACCOUNT FLOOR: If portfolio is small (< $1500) and strength is high (> 0.6),
+        # nudge up to $5.01 to allow execution instead of returning 0.0.
+        if portfolio_value < 1500 and signal.strength > 0.6 and order_value > 2.0:
+            log.info("SMALL ACCOUNT FLOOR: Nudging $%.2f up to $5.01 for %s", order_value, signal.symbol)
+            order_value = 5.01
+        else:
+            return 0.0
 
     log.info(
         "Risk-based sizing %s %s: risk=$%.0f stop=%.2f%% → risk_size=$%.0f "

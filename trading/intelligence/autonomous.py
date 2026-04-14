@@ -302,6 +302,7 @@ LEARNING_AGENT = "learning_agent"
 BACKTEST_AGENT = "backtest_agent"
 EXECUTOR_AGENT = "executor_agent"
 POSITION_REVIEW_AGENT = "position_review_agent"
+RECOVERY_AGENT = "recovery_agent"
 
 # Position review thresholds
 POSITION_REVIEW_INTERVAL_HOURS = 12   # How often we review open positions
@@ -1160,6 +1161,99 @@ def _backtest_agent_think() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Recovery & Self-Healing Agent (Wave 7)
+# ---------------------------------------------------------------------------
+
+def _recovery_agent_think() -> list[dict]:
+    """Analyzes the circuit breaker state and recommends self-healing actions.
+
+    If the fund is in 'Conservative Mode' but market conditions are excellent,
+    it recommends 'Force Graduation' or 'Relax Confluence'.
+    """
+    from trading.strategy.circuit_breaker import get_recovery_mode
+    from trading.db.store import get_intelligence_briefing
+
+    recommendations = []
+    mode = get_recovery_mode()
+    if not mode.get("active"):
+        return []
+
+    # Get intelligence briefing for regime context
+    briefing = get_intelligence_briefing()
+    regime_score = briefing.get("regime_score", 0.0)
+    is_bullish = regime_score > 0.4
+    is_extreme_bullish = regime_score > 0.7
+
+    activated_at = mode.get("activated_at", "")
+    age_days = 0
+    if activated_at:
+        try:
+            dt = datetime.fromisoformat(activated_at)
+            age_days = (datetime.now(timezone.utc) - dt).days
+        except Exception:
+            pass
+
+    # Recommendation 1: Force Graduation (Extreme High Conviction)
+    if is_extreme_bullish and age_days >= 7:
+        recommendations.append({
+            "from_agent": RECOVERY_AGENT,
+            "to_agent": EXECUTOR_AGENT,
+            "category": "system_config",
+            "action": "force_graduate",
+            "target": "circuit_breaker",
+            "reasoning": (
+                f"Fund has been in conservative mode for {age_days} days. "
+                f"Market regime is extremely bullish (score {regime_score:.2f}). "
+                f"Wave 5 guardrails are active. Recommending immediate return to normal operations."
+            ),
+            "data": {"auto_approve": True},
+        })
+
+    # Recommendation 2: Relax Confluence (Moderate High Conviction)
+    elif is_bullish and mode.get("min_strategies", 2) > 1:
+        recommendations.append({
+            "from_agent": RECOVERY_AGENT,
+            "to_agent": EXECUTOR_AGENT,
+            "category": "system_config",
+            "action": "relax_confluence",
+            "target": "circuit_breaker",
+            "reasoning": (
+                f"Market regime is bullish (score {regime_score:.2f}). "
+                "Current 2-strategy confluence requirement is creating a mathematical deadlock. "
+                "Recommending relaxation to 1-strategy confluence under Wave 5 Signal Guardrails."
+            ),
+            "data": {"auto_approve": True},
+        })
+
+    # Recommendation 3: Rehabilitate Strategies
+    try:
+        from trading.db.store import get_setting
+        from trading.config import STRATEGY_ENABLED
+        for name in STRATEGY_ENABLED:
+            cb_raw = get_setting(f"cb_{name}")
+            if cb_raw:
+                cb_state = json.loads(cb_raw)
+                if cb_state.get("consecutive_losses", 0) >= 5:
+                    recommendations.append({
+                        "from_agent": RECOVERY_AGENT,
+                        "to_agent": EXECUTOR_AGENT,
+                        "category": "strategy_config",
+                        "action": "rehabilitate_strategy",
+                        "target": name,
+                        "reasoning": (
+                            f"Strategy '{name}' was circuit-broken due to consecutive losses. "
+                            "With Wave 5 Signal Filter now active, this strategy can be safely re-enabled "
+                            "under the new guardrail protection."
+                        ),
+                        "data": {"auto_approve": True},
+                    })
+    except Exception:
+        pass
+
+    return recommendations
+
+
+# ---------------------------------------------------------------------------
 # Verification — ensure previous cycle's actions actually took effect
 # ---------------------------------------------------------------------------
 
@@ -1433,7 +1527,32 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
         result = None
 
         try:
-            if action == "auto_disable" and target in STRATEGY_ENABLED:
+            # --- Wave 7: Recovery & Self-Healing Actions ---
+            if action == "force_graduate":
+                from trading.strategy.circuit_breaker import force_graduate as _fg
+                _fg(reason=rec["reasoning"])
+                result = "Forced graduation complete — conservative mode disabled"
+                log.warning("RECOVERY: %s", result)
+
+            elif action == "relax_confluence":
+                from trading.db.store import get_setting, set_setting
+                raw = get_setting("recovery_mode")
+                if raw:
+                    state = json.loads(raw)
+                    state["min_strategies"] = 1
+                    set_setting("recovery_mode", json.dumps(state))
+                    result = "Confluence relaxed to 1-strategy requirement"
+                else:
+                    result = "Confluence relaxation failed: recovery_mode not active"
+                log.warning("RECOVERY: %s", result)
+
+            elif action == "rehabilitate_strategy":
+                from trading.strategy.circuit_breaker import rehabilitate_strategy as _rs
+                _rs(target, reason=rec["reasoning"])
+                result = f"Rehabilitated strategy '{target}'"
+                log.warning("RECOVERY: %s", result)
+
+            elif action == "auto_disable" and target in STRATEGY_ENABLED:
                 # Disable the strategy in runtime config
                 STRATEGY_ENABLED[target] = False
                 result = f"Disabled strategy '{target}'"
@@ -2417,6 +2536,7 @@ def run_autonomous_cycle() -> dict:
         ("position_review", _position_review_agent_think),
         ("news_interpretation", _news_agent_think),
         ("signal_filter", _signal_filter_agent_think),
+        ("recovery", _recovery_agent_think),
     ]
 
     for agent_name, think_fn in agents:

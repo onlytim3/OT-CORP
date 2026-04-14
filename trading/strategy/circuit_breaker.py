@@ -148,6 +148,41 @@ def deactivate_recovery_mode():
     logger.info("Recovery mode deactivated — normal trading resumed")
 
 
+def force_graduate(reason: str = "Autonomous graduation"):
+    """Forcefully exit conservative recovery mode.
+
+    Called by the Autonomous Agent when market conditions are favorable
+    and new guardrails (Wave 5) are active.
+    """
+    from trading.db.store import log_action
+    mode = get_recovery_mode()
+    if not mode.get("active"):
+        return
+
+    deactivate_recovery_mode()
+    log_action(
+        "autonomous_agent", "force_graduate",
+        details=f"Forced graduation from recovery mode. Reason: {reason}",
+        result="success",
+    )
+    logger.info(f"FORCE GRADUATE: {reason}")
+
+
+def rehabilitate_strategy(strategy_name: str, reason: str = "Autonomous rehabilitation"):
+    """Reset the circuit breaker for a strategy and log the event.
+
+    Used when a strategy has been improved or filtered by new logic.
+    """
+    from trading.db.store import log_action
+    reset_circuit_breaker(strategy_name)
+    log_action(
+        "autonomous_agent", "strategy_rehabilitated",
+        details=f"Strategy '{strategy_name}' circuit breaker reset. Reason: {reason}",
+        result="success",
+    )
+    logger.info(f"REHABILITATED STRATEGY: {strategy_name} ({reason})")
+
+
 def check_recovery_graduation():
     """Auto-exit conservative mode when portfolio recovers to 80% of peak.
 
