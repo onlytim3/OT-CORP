@@ -21,6 +21,7 @@ import numpy as np
 from trading.config import RISK
 from trading.db.store import get_positions, get_trades
 from trading.strategy.base import Signal
+from trading.risk.hedger import hedger
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +146,9 @@ def _regime_alignment_multiplier(signal: Signal) -> float:
             }
         except Exception:
             _regime_cache = {"categories": {}, "overall_score": 0.0, "event_risk": False}
+
+    # Update the tail risk hedger with the latest overall score
+    hedger.check_regime(_regime_cache.get("overall_score", 0.0))
 
     # Event risk dampens everything
     if _regime_cache.get("event_risk"):
@@ -533,13 +537,18 @@ def calculate_order_size(
     corr_mult = _correlation_group_multiplier(signal, positions, portfolio_value)
     dd_mult = _drawdown_multiplier(portfolio_value)
 
+    # --- Factor 8: Tail Risk Hedge ---
+    hedge_mult = hedger.get_hedge_multiplier()
+    if hedge_mult < 1.0:
+        log.warning("TAIL RISK HEDGE: Scaling sizing by %.2fx due to extreme regime score", hedge_mult)
+
     # Cap combined multiplier to prevent runaway sizing (was unbounded up to ~7x)
-    combined_mult = confluence_mult * regime_mult * perf_mult * volume_mult * corr_mult * dd_mult
+    combined_mult = confluence_mult * regime_mult * perf_mult * volume_mult * corr_mult * dd_mult * hedge_mult
     MAX_COMBINED_MULTIPLIER = 5.0
     if combined_mult > MAX_COMBINED_MULTIPLIER:
-        log.warning("Sizing multiplier capped: %.2fx → %.1fx (confluence=%.1f regime=%.2f perf=%.2f vol=%.2f corr=%.2f dd=%.2f)",
+        log.warning("Sizing multiplier capped: %.2fx → %.1fx (confluence=%.1f regime=%.2f perf=%.2f vol=%.2f corr=%.2f dd=%.2f hedge=%.2f)",
                      combined_mult, MAX_COMBINED_MULTIPLIER,
-                     confluence_mult, regime_mult, perf_mult, volume_mult, corr_mult, dd_mult)
+                     confluence_mult, regime_mult, perf_mult, volume_mult, corr_mult, dd_mult, hedge_mult)
         combined_mult = MAX_COMBINED_MULTIPLIER
     order_value *= combined_mult
 

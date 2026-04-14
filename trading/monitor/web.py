@@ -2319,6 +2319,38 @@ def api_generate_review():
         return jsonify({"error": str(e)}), 400
 
 
+@app.route("/api/reports/institutional")
+def api_reports_institutional():
+    """Get the latest institutional report (raw markdown)."""
+    try:
+        from trading.monitor.reporting import generate_institutional_report
+        report = generate_institutional_report()
+        return jsonify({
+            "success": True,
+            "report_md": report,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+    except Exception as e:
+        log.error("Failed to generate institutional report: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/reports/institutional/generate", methods=["POST"])
+def api_reports_institutional_generate():
+    """Generate and save a persistent institutional report file."""
+    try:
+        from trading.monitor.reporting import save_institutional_report
+        path = save_institutional_report()
+        return jsonify({
+            "success": True,
+            "message": "Institutional report saved.",
+            "file": os.path.basename(path)
+        })
+    except Exception as e:
+        log.error("Failed to save institutional report: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 def start_dashboard(host="127.0.0.1", port=None, debug=False):
     """Start the web dashboard server."""
     if port is None:
