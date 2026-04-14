@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
 from trading.db.store import get_conn
-from trading.llm.engine import query_llm
+from trading.llm.engine import ask_llm
 from trading.config import KNOWLEDGE_DIR, JOURNALS_DIR
 
 log = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ Do not be overly polite. Be clinical, ruthless, and precise like a Wall Street r
 """
     
     try:
-        report_md = query_llm(prompt, model_type="fast", temperature=0.3)
+        report_md = ask_llm("You are OT-CORP's elite quantitative analyst.", prompt, call_type="journal")
     except Exception as e:
         log.error("LLM failed to generate tear sheet: %s", e)
         return f"Error generating report: {str(e)}"
