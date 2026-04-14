@@ -227,3 +227,215 @@ STRATEGY_REGIME_REQUIREMENTS = {
 FEAR_GREED_URL = "https://api.alternative.me/fng/"
 FRED_BASE = "https://api.stlouisfed.org/fred"
 
+
+class ConfigError(Exception):
+    """Raised for fatal configuration errors."""
+    pass
+
+
+def validate_config(test_api: bool = True) -> list[str]:
+    """Validate all required config values and optionally test API connectivity.
+
+    Returns a list of warnings (non-fatal issues).
+    Raises ConfigError for fatal misconfigurations.
+    """
+    warnings: list[str] = []
+
+    # -- Required keys: AsterDex (primary execution venue) --------------------
+    if not ASTER_API_KEY or not ASTER_API_SECRET:
+        raise ConfigError(
+            "ASTER_API_KEY and ASTER_API_SECRET are required. "
+            "Get keys at https://www.asterdex.com → sign with wallet → create API key."
+        )
+
+    # -- Trading mode sanity --------------------------------------------------
+    if TRADING_MODE not in ("paper", "live"):
+        raise ConfigError(
+            f"TRADING_MODE must be 'paper' or 'live', got '{TRADING_MODE}'"
+        )
+
+
+    if not FRED_API_KEY:
+        warnings.append(
+            "FRED_API_KEY not set — macro data strategies will have limited data."
+        )
+
+    # -- API connectivity test (AsterDex) -------------------------------------
+    if test_api:
+        try:
+            from trading.execution.router import get_account
+            account = get_account()
+            if account.get("trading_blocked"):
+                raise ConfigError(
+                    "AsterDex account is inactive or not configured. "
+                    "Check your API keys and wallet address."
+                )
+            status = account.get("status", "UNKNOWN")
+            if status not in ("ACTIVE", "active"):
+                warnings.append(f"Account status is '{status}', expected ACTIVE.")
+        except ConfigError:
+            raise
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to connect to AsterDex API: {e}. "
+                "Check your API keys and network connectivity."
+            ) from e
+
+    # -- Strategy file existence check -----------------------------------------
+    strategy_dir = PROJECT_ROOT / "trading" / "strategy"
+    missing_strategies = []
+    for name, enabled in STRATEGY_ENABLED.items():
+        if not enabled:
+            continue
+        module_file = strategy_dir / f"{name}.py"
+        if not module_file.exists():
+            missing_strategies.append(name)
+    if missing_strategies:
+        raise ConfigError(
+            f"Enabled strategies missing files: {', '.join(missing_strategies)}. "
+            "Either disable them in STRATEGY_ENABLED or add the strategy files."
+        )
+
+    return warnings
+
+# --- Leverage Configuration ---
+# Per-strategy leverage based on 90-day backtest analysis (Dec 2025 - Mar 2026)
+# Conservative: capital preservation, minimal liquidation risk
+LEVERAGE_CONSERVATIVE = {
+    "default": 1,
+}
+
+# Moderate: balanced risk/reward for proven strategies
+LEVERAGE_MODERATE = {
+    "default": 1,
+    "kalman_trend": 3,       # Sharpe 3.49, no liquidations up to 10x
+}
+
+# Aggressive: high returns for high risk tolerance
+LEVERAGE_AGGRESSIVE = {
+    "default": 2, "kalman_trend": 5, "hmm_regime": 3, "whale_flow": 3,
+    "funding_arb": 3, "pairs_trading": 2, "taker_divergence": 1,
+    "cross_basis_rv": 1, "meme_momentum": 1, "basis_zscore": 2,
+    "regime_mean_reversion": 2, "factor_crypto": 2, "funding_term_structure": 3,
+    "oi_price_divergence": 2, "microstructure_composite": 2,
+    "cross_asset_momentum": 2, "gold_crypto_hedge": 2,
+    "equity_crypto_correlation": 2, "multi_factor_rank": 2,
+    "volatility_regime": 2, "rsi_divergence": 2,
+    "onchain_flow": 2, "funding_forecast": 3,
+}
+
+# Greedy: maximum returns, accepts heavy losses and liquidations
+LEVERAGE_GREEDY = {
+    "default": 3,
+    "kalman_trend": 10,      # Sharpe 3.49 even at 10x
+    "whale_flow": 7,         # +1.4% at 7x, Sharpe 0.40
+    "taker_divergence": 1,   # STILL never leverage
+    "cross_basis_rv": 1,     # STILL never leverage
+    "factor_crypto": 2,
+}
+
+# Active leverage profile (change this to switch)
+LEVERAGE_PROFILE = os.getenv("LEVERAGE_PROFILE", "aggressive")  # conservative|moderate|aggressive|greedy
+
+def _get_active_profile() -> str:
+    """Get the active profile — DB setting takes precedence over env/default."""
+    try:
+        from trading.db.store import get_setting
+        return get_setting("trading_profile", LEVERAGE_PROFILE)
+    except Exception:
+        return LEVERAGE_PROFILE
+
+def get_leverage(strategy_name: str) -> int:
+    """Get leverage multiplier for a strategy based on active profile."""
+    profiles = {
+        "conservative": LEVERAGE_CONSERVATIVE,
+        "moderate": LEVERAGE_MODERATE,
+        "aggressive": LEVERAGE_AGGRESSIVE,
+        "greedy": LEVERAGE_GREEDY,
+    }
+    active = _get_active_profile()
+    profile = profiles.get(active, LEVERAGE_CONSERVATIVE)
+    return profile.get(strategy_name, profile.get("default", 1))
+
+def validate_leverage_profile() -> list[str]:
+    """Check the active leverage profile for dangerous configurations.
+
+    Returns a list of warnings. Called during daemon startup.
+    """
+    warnings: list[str] = []
+    profiles = {
+        "conservative": LEVERAGE_CONSERVATIVE,
+        "moderate": LEVERAGE_MODERATE,
+        "aggressive": LEVERAGE_AGGRESSIVE,
+        "greedy": LEVERAGE_GREEDY,
+    }
+    active = LEVERAGE_PROFILE
+    try:
+        from trading.db.store import get_setting
+        active = get_setting("trading_profile", LEVERAGE_PROFILE)
+    except Exception:
+        pass
+
+    profile = profiles.get(active, LEVERAGE_CONSERVATIVE)
+
+    # Check for strategies with leverage > 5x (high liquidation risk)
+    high_lev = {k: v for k, v in profile.items() if k != "default" and v > 5}
+    if high_lev:
+        for strat, lev in high_lev.items():
+            warnings.append(
+                f"LEVERAGE WARNING: {strat} at {lev}x — liquidation risk is significant. "
+                f"A {100/lev:.0f}% adverse move wipes the position."
+            )
+
+    # Check total portfolio leverage exposure
+    # With max_position_pct=25% and 22 strategies, worst case is many concurrent positions
+    enabled_count = sum(1 for k, v in STRATEGY_ENABLED.items() if v)
+    default_lev = profile.get("default", 1)
+    max_lev = max(profile.values()) if profile else 1
+    if max_lev >= 7:
+        warnings.append(
+            f"LEVERAGE WARNING: Profile '{active}' has max {max_lev}x leverage. "
+            f"Backtests don't capture exchange outages, cascading liquidations, "
+            f"or flash crashes beyond historical data."
+        )
+
+    # Check total leverage cap vs risk manager setting
+    total_cap = RISK.get("max_total_leverage", 5)
+    if default_lev > total_cap:
+        warnings.append(
+            f"LEVERAGE CONFLICT: Default leverage ({default_lev}x) exceeds "
+            f"risk manager cap ({total_cap}x). Risk manager will block most trades."
+        )
+
+    if active == "greedy":
+        warnings.append(
+            "LEVERAGE WARNING: 'greedy' profile is active — this accepts heavy losses "
+            "and possible liquidations. Switch to 'aggressive' for production use."
+        )
+
+    return warnings
+
+
+# --- Learning ---
+LEARNING = {
+    "min_trades_for_adaptation": 20,    # Need 20+ trades before suggesting changes
+    "auto_apply": True,                  # Autonomous agents auto-apply safe actions
+    "review_frequency": "weekly",
+}
+
+# --- Startup Validation ---
+RUN_STARTUP_BACKTEST = os.getenv("RUN_STARTUP_BACKTEST", "false").lower() == "true"
+
+# --- Autonomous Improvement ---
+# The system continuously self-evaluates and improves through agent conversations.
+# Safe actions (disable losers, tighten risk, shift allocation) are auto-applied.
+# Dangerous actions (enable new strategies, loosen risk) require human review.
+AUTONOMOUS = {
+    "enabled": True,                     # Enable autonomous improvement loop
+    "auto_disable_losers": True,         # Auto-disable strategies with <25% win rate
+    "auto_rebalance": True,              # Auto-shift allocation toward winners
+    "auto_tighten_risk": True,           # Auto-tighten risk during drawdown
+    "auto_defensive_posture": True,      # Auto-reduce long bias in bearish regimes
+    "log_conversations": True,           # Log all agent-to-agent conversations
+}
+
