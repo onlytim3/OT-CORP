@@ -1966,7 +1966,9 @@ def api_health():
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
                 age = (now - last_dt).total_seconds() / 60.0
                 daemon_last_cycle_age_minutes = round(age, 1)
-                if age > 360:  # 6 hours
+                # Don't flag stale cycle during startup — a redeploy always
+                # starts with the last cycle timestamp from the persistent disk.
+                if age > 360 and not _in_startup_grace:  # 6 hours
                     degraded = True
             else:
                 # No cycle recorded yet — only degraded outside the startup grace window
