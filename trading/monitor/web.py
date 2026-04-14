@@ -1947,6 +1947,11 @@ def api_health():
     # --- Daemon last cycle ---
     daemon_last_cycle = None
     daemon_last_cycle_age_minutes = None
+    # On a fresh deployment the daemon runs its first cycle after startup.
+    # Allow 30 minutes before flagging a missing cycle as degraded so that
+    # Render's health checks pass during the initial boot window.
+    _STARTUP_GRACE_SECONDS = 1800  # 30 minutes
+    _in_startup_grace = (time.monotonic() - _START_TIME) < _STARTUP_GRACE_SECONDS
     try:
         with get_read_db() as conn:
             row = conn.execute(
@@ -1964,7 +1969,9 @@ def api_health():
                 if age > 360:  # 6 hours
                     degraded = True
             else:
-                degraded = True
+                # No cycle recorded yet — only degraded outside the startup grace window
+                if not _in_startup_grace:
+                    degraded = True
     except Exception:
         log.exception("Health check: failed to query last cycle")
         degraded = True
@@ -2009,6 +2016,7 @@ def api_health():
         "daemon_last_cycle_age_minutes": daemon_last_cycle_age_minutes,
         "consecutive_errors": consecutive_errors,
         "uptime": uptime_seconds,
+        "startup_grace": _in_startup_grace,
         "db_size_mb": db_size_mb,
         "positions_count": positions_count,
     }
