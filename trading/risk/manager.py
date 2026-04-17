@@ -497,6 +497,14 @@ class RiskManager:
         return RiskCheck(allowed=True, reason="Daily loss OK", signal=Signal("risk", "", "hold", 0, ""))
 
     def _check_max_drawdown(self) -> RiskCheck:
+        # Recovery mode is the explicit acknowledgment of the drawdown — bypass the check
+        # so conservative trading can proceed after the operator resumes.
+        try:
+            from trading.strategy.circuit_breaker import get_recovery_mode
+            if get_recovery_mode().get("active"):
+                return RiskCheck(allowed=True, reason="Drawdown check bypassed — recovery mode active", signal=Signal("risk", "", "hold", 0, ""))
+        except Exception:
+            pass
         pnl_records = get_daily_pnl(limit=90)
         if len(pnl_records) < 2:
             return RiskCheck(allowed=True, reason="Insufficient data for drawdown check", signal=Signal("risk", "", "hold", 0, ""))

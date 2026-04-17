@@ -377,7 +377,20 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
         if result:
             return result
 
-    # 2. Strategy control (disable, enable)
+    # 2a. Trading-level halt / resume (more specific — must come before strategy enable/disable)
+    if re.search(r"\b(halt|stop|freeze)\s+(all\s+)?(trading|trades)\b", lower) or \
+       re.search(r"\bemergency\s+(halt|stop)\b", lower):
+        return _intent_halt_trading(msg, lower)
+
+    if re.search(r"\b(resume|restart|unhalt|clear.?halt|restore)\s+(all\s+)?(trading|trades)\b", lower) or \
+       (re.search(r"\b(resume|unhalt)\s+trading\b", lower)):
+        return _intent_resume_trading(msg, lower)
+
+    # 2b. Agent queries
+    if re.search(r"\b(query\s+agents?|agent\s+status|what\s+(are\s+the\s+)?agents\s+(doing|up\s+to)|agent\s+activity)\b", lower):
+        return _read_agent_history(msg, lower)
+
+    # 2c. Strategy control (disable, enable)
     if re.search(r"\b(disable|turn\s+off|pause|deactivate)\b", lower):
         return _intent_disable_strategy(msg, lower)
 
@@ -2309,6 +2322,38 @@ def _intent_open_trade(msg: str, lower: str, default_side: str) -> dict:
             return f"**Order rejected:** {result.get('reason', result.get('status', 'unknown'))}"
 
     return _queue_action("open_trade", desc, execute, warning=warning)
+
+
+def _intent_halt_trading(msg: str, lower: str) -> dict:
+    from trading.db.store import set_setting, log_action
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    desc = "Halt all trading immediately"
+
+    def execute():
+        set_setting("daily_halt_date", today)
+        log_action("operator", "halt_trading",
+                   details=f"Emergency trading halt via chatbot. Message: {msg}")
+        return ("Trading halted. All new trades are blocked for today. "
+                "Say **resume trading** to restart in conservative mode.")
+
+    return _queue_action("halt_trading", desc, execute,
+                         warning="This will block ALL new trades until manually resumed.")
+
+
+def _intent_resume_trading(msg: str, lower: str) -> dict:
+    from trading.strategy.circuit_breaker import resume_trading_conservatively
+    desc = "Resume trading in conservative mode"
+
+    def execute():
+        result = resume_trading_conservatively(reason="Operator chatbot resume command")
+        return (
+            f"Trading resumed in **conservative mode**.\n"
+            f"- Position sizes reduced to {result['position_scale']*100:.0f}%\n"
+            f"- Minimum {result['min_strategies']} confirming strategies required\n"
+            f"- Auto-graduates when portfolio reaches {result['recovery_target_pct']*100:.0f}% of peak"
+        )
+
+    return _queue_action("resume_trading", desc, execute)
 
 
 def _intent_llm_execute(msg: str, lower: str) -> dict:
