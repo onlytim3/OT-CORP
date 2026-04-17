@@ -1645,10 +1645,10 @@ def api_recovery_status():
                 current = pnl_records[0]["portfolio_value"]
                 progress = round((current / peak) * 100, 1) if peak > 0 else 0
 
-        # Halt state — system is halted if daily_halt_date matches today (UTC).
+        # Halt state — daily_halt_date is set (non-empty) whenever the system
+        # is in an emergency halt, regardless of which day it was triggered.
         halt_date = get_setting("daily_halt_date") or ""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        halted = bool(halt_date) and halt_date == today
+        halted = bool(halt_date)
 
         return jsonify({
             **mode,
