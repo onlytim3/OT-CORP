@@ -51,6 +51,9 @@ export const api = {
   tradeAnalyses: (id: number) => `${API_BASE_URL}/api/trade/${id}/analyses`,
   actionDetail: (id: number) => `${API_BASE_URL}/api/action/${id}`,
   generateNarratives: `${API_BASE_URL}/api/actions/generate-narratives`,
+  // Halt / recovery
+  recoveryStatus: `${API_BASE_URL}/api/recovery_status`,
+  resumeTrading: `${API_BASE_URL}/api/resume_trading`,
 };
 
 // --- Types ---
@@ -306,6 +309,18 @@ export interface SectorExposure {
   exposure_pct: number;
   limit_pct: number;
   positions: string[];
+}
+
+export interface RecoveryStatus {
+  active: boolean;
+  halted?: boolean;
+  halt_date?: string | null;
+  reason?: string;
+  activated_at?: string;
+  position_scale?: number;
+  min_strategies?: number;
+  recovery_target_pct?: number;
+  progress_pct?: number | null;
 }
 
 // --- Fetch helper ---

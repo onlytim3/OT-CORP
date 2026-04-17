@@ -1633,7 +1633,7 @@ def api_recovery_status():
     """Get current recovery mode status and progress toward normal trading."""
     try:
         from trading.strategy.circuit_breaker import get_recovery_mode, RECOVERY_TARGET_PCT
-        from trading.db.store import get_daily_pnl
+        from trading.db.store import get_daily_pnl, get_setting
         mode = get_recovery_mode()
 
         # Compute recovery progress
@@ -1645,10 +1645,17 @@ def api_recovery_status():
                 current = pnl_records[0]["portfolio_value"]
                 progress = round((current / peak) * 100, 1) if peak > 0 else 0
 
+        # Halt state — system is halted if daily_halt_date matches today (UTC).
+        halt_date = get_setting("daily_halt_date") or ""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        halted = bool(halt_date) and halt_date == today
+
         return jsonify({
             **mode,
             "recovery_target_pct": RECOVERY_TARGET_PCT,
             "progress_pct": progress,
+            "halted": halted,
+            "halt_date": halt_date or None,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

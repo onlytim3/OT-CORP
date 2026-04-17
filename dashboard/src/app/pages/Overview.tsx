@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Badge } from "../components/ui/badge";
 import { MetricCard } from "../components/MetricCard";
+import { RecoveryBanner } from "../components/RecoveryBanner";
 import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart, Volume2, ShieldAlert } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
@@ -278,6 +279,8 @@ export function Overview() {
           </div>
         </div>
       )}
+
+      <RecoveryBanner />
 
       <div className="flex items-center justify-between">
         <div>
