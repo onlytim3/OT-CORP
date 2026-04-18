@@ -522,6 +522,28 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
        _extract_symbol_from_msg(lower):
         return _intent_llm_execute(msg, lower)
 
+    # 29. Leverage profile switching
+    if re.search(r"\b(switch|change|set|go|use)\b.*\b(leverage|profile)\b", lower) or \
+       re.search(r"\b(aggressive|conservative|moderate|greedy)\b.*\b(mode|profile|leverage)\b", lower) or \
+       re.search(r"\b(leverage|profile)\b.*\b(aggressive|conservative|moderate|greedy)\b", lower):
+        return _intent_change_leverage_profile(msg, lower)
+
+    # 30. Circuit breaker reset
+    if re.search(r"\b(reset|clear|fix|rehabilitate)\b.*\b(circuit.?breaker|cb)\b", lower) or \
+       re.search(r"\bcircuit.?breaker\b.*\b(reset|clear|fix)\b", lower):
+        return _intent_reset_circuit_breaker(msg, lower)
+
+    # 31. Force graduate / exit recovery mode
+    if re.search(r"\b(graduate|exit|leave|end|stop)\b.*\b(recovery|conservative)\b.*\b(mode)?\b", lower) or \
+       re.search(r"\b(force\s+graduate|exit\s+recovery|leave\s+conservative)\b", lower):
+        return _intent_force_graduate(msg, lower)
+
+    # 32. Universal LLM catch-all — fire for command-like messages that didn't match
+    if re.search(r"^(buy|sell|close|open|halt|resume|enable|disable|set|change|switch|reset|"
+                 r"run|force|execute|place|short|long|reduce|trim|approve|reject|alert|"
+                 r"schedule|rebalance|backtest|flatten|graduate|rehabilitate|quit|stop)\b", lower):
+        return _intent_llm_universal(msg, lower)
+
     # Not an operator message — fall through to chat.py
     return None
 
@@ -2354,6 +2376,119 @@ def _intent_resume_trading(msg: str, lower: str) -> dict:
         )
 
     return _queue_action("resume_trading", desc, execute)
+
+
+def _intent_change_leverage_profile(msg: str, lower: str) -> dict:
+    import trading.config as cfg
+    from trading.db.store import set_setting, log_action
+
+    profiles = ["conservative", "moderate", "aggressive", "greedy"]
+    matched = next((p for p in profiles if p in lower), None)
+
+    current = cfg._get_active_profile()
+    if not matched:
+        return {"answer": f"Current leverage profile: **{current}**\n"
+                         f"Available: {', '.join(profiles)}\n"
+                         f"Example: 'switch to aggressive' or 'set leverage profile to moderate'"}
+
+    if current == matched:
+        return {"answer": f"Already on **{matched}** leverage profile."}
+
+    desc = f"Switch leverage profile: **{current}** → **{matched}**"
+    warning = ("GREEDY profile uses up to 10x leverage — extreme liquidation risk. "
+               "A 10% adverse move can wipe a leveraged position.") if matched == "greedy" else None
+
+    def execute():
+        set_setting("trading_profile", matched)
+        log_action("operator", "change_leverage_profile",
+                   details=f"Leverage profile: {current} → {matched}")
+        return (f"Leverage profile switched to **{matched}**. "
+                f"Takes effect on the next trading cycle.")
+
+    return _queue_action("change_leverage_profile", desc, execute, warning=warning)
+
+
+def _intent_reset_circuit_breaker(msg: str, lower: str) -> dict:
+    from trading.strategy.circuit_breaker import rehabilitate_strategy, check_circuit_breaker
+    from trading.config import STRATEGY_ENABLED
+
+    strategy = _extract_strategy_from_msg(msg)
+    if not strategy:
+        broken = [s for s in STRATEGY_ENABLED if check_circuit_breaker(s)]
+        if not broken:
+            return {"answer": "No strategies currently have active circuit breakers."}
+        return {"answer": f"Strategies with active circuit breakers: **{', '.join(broken)}**\n"
+                         f"Say 'reset circuit breaker for [strategy]' to clear one."}
+
+    if not check_circuit_breaker(strategy):
+        return {"answer": f"**{strategy}** does not have an active circuit breaker."}
+
+    desc = f"Reset circuit breaker for **{strategy}**"
+
+    def execute():
+        rehabilitate_strategy(strategy, reason="Operator chatbot reset command")
+        return (f"Circuit breaker for **{strategy}** cleared. "
+                f"It will generate signals again on the next cycle.")
+
+    return _queue_action("reset_circuit_breaker", desc, execute)
+
+
+def _intent_force_graduate(msg: str, lower: str) -> dict:
+    from trading.strategy.circuit_breaker import get_recovery_mode, force_graduate
+
+    mode = get_recovery_mode()
+    if not mode.get("active"):
+        return {"answer": "System is not in conservative recovery mode — nothing to graduate from."}
+
+    desc = "Force graduate out of conservative recovery mode → normal trading"
+    warning = ("Normal mode removes the 50% position size cap. The underlying drawdown "
+               "has not been recovered — monitor closely after graduating.")
+
+    def execute():
+        force_graduate(reason="Operator chatbot graduation command")
+        return ("Graduated to **normal trading mode**.\n"
+                "- Position sizes: back to 100%\n"
+                "- Strategy minimum: normal confluence\n"
+                "Monitor positions carefully — the drawdown that triggered recovery has not been recovered.")
+
+    return _queue_action("force_graduate", desc, execute, warning=warning)
+
+
+def _intent_llm_universal(msg: str, lower: str) -> dict:
+    """Universal LLM-powered catch-all — handles command-like messages that didn't match any pattern."""
+    from trading.llm.engine import ask_llm
+    from trading.config import STRATEGY_ENABLED, RISK
+    from trading.strategy.circuit_breaker import get_recovery_mode
+
+    mode = get_recovery_mode()
+    recovery_note = " [CONSERVATIVE MODE ACTIVE — 50% position sizes]" if mode.get("active") else ""
+
+    system = (
+        "You are the operator console for an autonomous crypto trading system. "
+        "The operator has given you a command you must interpret and act on.\n\n"
+        "Supported actions (tell the operator the exact phrasing to use if needed):\n"
+        "- Trades: 'buy $X of SYMBOL', 'sell SYMBOL', 'close all positions', 'flatten', 'short SYMBOL $X'\n"
+        "- Strategies: 'disable STRATEGY', 'enable STRATEGY', 'reset circuit breaker for STRATEGY'\n"
+        "- Risk: 'set stop loss to X%', 'set max position to X%', 'set max daily loss to X%'\n"
+        "- System: 'halt trading', 'resume trading', 'switch to paper', 'switch to live'\n"
+        "- Leverage: 'switch to aggressive/conservative/moderate/greedy'\n"
+        "- Recovery: 'graduate from recovery mode', 'exit conservative mode'\n"
+        "- Analysis: 'backtest STRATEGY 30 days', 'briefing', 'compare X vs Y', 'what happened last cycle'\n\n"
+        f"System state: {recovery_note or 'Normal trading mode'}\n"
+        f"Active strategies: {sum(1 for v in STRATEGY_ENABLED.values() if v)}/{len(STRATEGY_ENABLED)}\n\n"
+        "Be direct and brief (2-3 sentences max). If you can determine the exact command "
+        "the operator meant, state it clearly. If the command cannot be executed, say why."
+    )
+
+    try:
+        response = ask_llm(
+            prompt=f"Operator command: {msg}",
+            system=system,
+            max_tokens=250,
+        )
+        return {"answer": response or f"Command received but could not be interpreted: **{msg}**"}
+    except Exception:
+        return {"answer": f"Command received: **{msg}**\nCould not parse intent — try a more specific phrasing like 'buy $50 of BTC' or 'disable kalman_trend'."}
 
 
 def _intent_llm_execute(msg: str, lower: str) -> dict:
