@@ -973,6 +973,27 @@ def run_trading_cycle():
             console.print(f"[yellow]Autonomous cycle skipped: {e}[/yellow]")
 
         # ---------------------------------------------------------------
+        # Phase 7.5: Journal Agent — reads daily journal and executes improvements
+        # ---------------------------------------------------------------
+        try:
+            from trading.intelligence.journal_agent import run_journal_agent
+            journal_result = run_journal_agent()
+            j_actions = journal_result.get("actions_executed", 0)
+            j_needs = journal_result.get("needs_detected", 0)
+            if j_actions > 0 or j_needs > 0:
+                console.print(
+                    f"\n[bold cyan]Journal Agent: {j_needs} needs detected, "
+                    f"{j_actions} actions executed[/bold cyan]"
+                )
+                for r in journal_result.get("results", []):
+                    if not r.startswith("skip"):
+                        console.print(f"  [cyan]→ {r}[/cyan]")
+            else:
+                console.print("[dim]Journal Agent: no actions needed[/dim]")
+        except Exception as e:
+            log.warning("Journal Agent failed (non-fatal): %s", e)
+
+        # ---------------------------------------------------------------
         # Phase 8: Check operator alerts
         # ---------------------------------------------------------------
         try:
