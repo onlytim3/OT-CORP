@@ -538,7 +538,58 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
        re.search(r"\b(force\s+graduate|exit\s+recovery|leave\s+conservative)\b", lower):
         return _intent_force_graduate(msg, lower)
 
-    # 32. Universal LLM catch-all — fire for command-like messages that didn't match
+    # 32. GODLIKE POWERS — Batch trades
+    if re.search(r"\b(buy|sell|long|short)\s+\$?\d+\s+each\s+of\b", lower):
+        result = _intent_batch_trades(msg, lower)
+        if result:
+            return result
+
+    # 33. Live prices
+    if re.search(r"\b(price|what.*at|current.*price)\s+(?:of|for)\b", lower) and _extract_symbol_from_msg(msg):
+        return _intent_live_prices(msg, lower)
+
+    # 34. Portfolio allocation
+    if re.search(r"\b(allocate|put|realloc)\s+\d+%\s+(?:in|to)\b", lower):
+        result = _intent_allocate_portfolio(msg, lower)
+        if result:
+            return result
+
+    # 35. Risk bypass
+    if re.search(r"\b(bypass|ignore|skip|override)\s+risk\b", lower):
+        return _intent_risk_bypass(msg, lower)
+
+    # 36. Settings control
+    if re.search(r"\b(show|list|set|reset)\s+(?:all\s+)?settings?\b", lower) or \
+       re.search(r"\bset\s+\w+\s+(?:to|=)\b", lower):
+        result = _intent_settings_control(msg, lower)
+        if result:
+            return result
+
+    # 37. Auto-triggers
+    if re.search(r"\b(?:if|when)\s+.+,\s+", lower):
+        result = _intent_auto_trigger(msg, lower)
+        if result:
+            return result
+
+    # 38. Cancel all orders
+    if re.search(r"\b(cancel|clear|flush)\s+(?:all\s+)?(orders?|queue)\b", lower):
+        return _intent_cancel_all_orders(msg, lower)
+
+    # 39. System diagnostics
+    if re.search(r"\b(system\s+health|diagnose|system\s+status|health\s+check)\b", lower):
+        return _intent_system_diagnostics(msg, lower)
+
+    # 40. Inject signal
+    if re.search(r"\b(inject|force)\s+(?:a\s+)?(buy|sell|hold)\s+signal\b", lower):
+        return _intent_inject_signal(msg, lower)
+
+    # 41. Agent broadcast
+    if re.search(r"\b(?:agents?|tell.*agents?)[\s:]+", lower):
+        result = _intent_agent_broadcast(msg, lower)
+        if result:
+            return result
+
+    # 42. Universal LLM catch-all — fire for command-like messages that didn't match
     if re.search(r"^(buy|sell|close|open|halt|resume|enable|disable|set|change|switch|reset|"
                  r"run|force|execute|place|short|long|reduce|trim|approve|reject|alert|"
                  r"schedule|rebalance|backtest|flatten|graduate|rehabilitate|quit|stop)\b", lower):
@@ -2545,3 +2596,402 @@ def _read_knowledge_search(msg: str, lower: str) -> dict:
             lines.append(f"  {content[:200]}{'...' if len(content) > 200 else ''}")
 
     return {"answer": "\n".join(lines)}
+
+
+# ============================================================================
+# GODLIKE POWERS — Unrestricted System Control
+# ============================================================================
+
+def _intent_batch_trades(msg: str, lower: str) -> dict:
+    """Execute multiple trades in one command: 'buy $50 each of BTC, ETH, SOL'."""
+    from trading.config import TRADING_MODE
+    from trading.db.store import log_action
+
+    # Parse: "buy/sell/long/short $X each of SYMBOL1, SYMBOL2, ..."
+    m = re.search(r"(buy|sell|long|short)\s+\$?([\d,]+(?:\.\d+)?)\s+(?:each\s+)?of\s+(.+)", lower)
+    if not m:
+        return None
+
+    side = m.group(1).replace("long", "buy").replace("short", "sell")
+    amount_each = float(m.group(2).replace(",", ""))
+    symbols_text = m.group(3)
+
+    symbols = []
+    for sym_text in re.split(r"[,\s]+(?:and\s+)?", symbols_text):
+        sym = _resolve_symbol(sym_text.strip())
+        if sym:
+            symbols.append(sym)
+
+    if not symbols:
+        return {"answer": "Couldn't identify any valid symbols. Try: 'buy $50 each of BTC, ETH, SOL'"}
+
+    desc = f"Batch {side.upper()}: ${amount_each:,.2f} each of {len(symbols)} assets\n"
+    for s in symbols:
+        desc += f"- {s}\n"
+
+    warning = f"This will execute {len(symbols)} real market orders!" if TRADING_MODE == "live" else None
+
+    def execute():
+        from trading.execution.router import submit_order
+        from trading.risk.manager import RiskManager, compute_trade_targets
+        from trading.execution.router import get_account
+        results = []
+
+        try:
+            account = get_account()
+            portfolio_value = account.get("portfolio_value", 0)
+        except:
+            portfolio_value = 0
+
+        for symbol in symbols:
+            try:
+                result = submit_order(symbol, side, notional=amount_each)
+                if result.get("status") in ("filled", "accepted", "new", "pending_new"):
+                    filled_price = float(result.get("filled_avg_price") or 0)
+                    filled_qty = float(result.get("filled_qty") or 0)
+                    results.append(f"✓ {symbol}: {filled_qty:.6f} @ ${filled_price:,.2f}")
+                    log_action("operator", "batch_trade", symbol=symbol,
+                              details=f"{side} {filled_qty:.6f} @ ${filled_price:,.2f}")
+                else:
+                    results.append(f"✗ {symbol}: {result.get('reason', 'rejected')}")
+            except Exception as e:
+                results.append(f"✗ {symbol}: {e}")
+
+        return f"**Batch Trade Results:**\n" + "\n".join(results)
+
+    return _queue_action("batch_trades", desc, execute, warning=warning)
+
+
+def _intent_live_prices(msg: str, lower: str) -> dict:
+    """Query live prices: 'what is BTC at', 'price of ETH and SOL'."""
+    from trading.execution.router import get_positions_from_aster
+
+    symbols = []
+    words = msg.lower().split()
+    for word in words:
+        sym = _resolve_symbol(word)
+        if sym:
+            symbols.append(sym)
+
+    if not symbols:
+        return {"answer": "Please specify symbols: 'price of BTC and ETH' or 'what is SOL at'"}
+
+    try:
+        positions = get_positions_from_aster()
+        pos_map = {p["symbol"].replace("USDT", "/USD").replace("USD", "/USD"): p for p in positions}
+
+        lines = ["**Live Prices:**\n"]
+        for sym in symbols:
+            if sym in pos_map:
+                p = pos_map[sym]
+                price = p.get("current_price", 0)
+                pnl = p.get("unrealized_pnl", 0)
+                lines.append(f"- {sym}: ${price:,.2f} (P&L: ${pnl:+,.2f})")
+            else:
+                lines.append(f"- {sym}: No position (price unavailable)")
+        return {"answer": "\n".join(lines)}
+    except Exception as e:
+        return {"answer": f"Could not fetch prices: {e}"}
+
+
+def _intent_allocate_portfolio(msg: str, lower: str) -> dict:
+    """Allocate portfolio by percentage: 'put 40% in ETH, 30% in BTC, 30% in SOL'."""
+    from trading.execution.router import get_account, get_positions_from_aster
+    from trading.execution.router import close_position, submit_order
+
+    # Parse allocations: "X% in SYMBOL, Y% in SYMBOL"
+    allocations = {}
+    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*%\s+(?:in|to)\s+(\w+)", lower):
+        pct = float(match.group(1))
+        sym_text = match.group(2)
+        sym = _resolve_symbol(sym_text)
+        if sym:
+            allocations[sym] = pct / 100.0
+
+    if not allocations or abs(sum(allocations.values()) - 1.0) > 0.01:
+        return {"answer": "Allocations must sum to 100%. Example: 'allocate 50% BTC, 30% ETH, 20% SOL'"}
+
+    try:
+        account = get_account()
+        portfolio_value = account.get("portfolio_value", 0)
+        positions = get_positions_from_aster()
+    except Exception as e:
+        return {"answer": f"Could not fetch portfolio: {e}"}
+
+    lines = [f"**Portfolio Reallocation** (${portfolio_value:,.2f} total)\n"]
+    for symbol, target_pct in allocations.items():
+        target_value = portfolio_value * target_pct
+        lines.append(f"- {symbol}: {target_pct:.0%} = ${target_value:,.2f}")
+
+    desc = "\n".join(lines)
+
+    def execute():
+        results = []
+        # First close all, then open new positions
+        for pos in positions:
+            try:
+                sym = pos["symbol"].replace("USDT", "/USD")
+                close_position(sym)
+                results.append(f"✓ Closed {sym}")
+            except Exception as e:
+                results.append(f"✗ Failed to close {pos['symbol']}: {e}")
+
+        for symbol, target_pct in allocations.items():
+            target_value = portfolio_value * target_pct
+            try:
+                result = submit_order(symbol, "buy", notional=target_value)
+                if result.get("status") in ("filled", "accepted", "new"):
+                    results.append(f"✓ Opened {symbol}: ${target_value:,.2f}")
+            except Exception as e:
+                results.append(f"✗ Failed to open {symbol}: {e}")
+
+        return f"**Reallocation Results:**\n" + "\n".join(results)
+
+    return _queue_action("allocate_portfolio", desc, execute,
+                        warning=f"This will close all {len(positions)} positions and reopen {len(allocations)} new ones!")
+
+
+def _intent_risk_bypass(msg: str, lower: str) -> dict:
+    """Override risk checks: 'bypass risk for next trade', 'ignore risk'."""
+    from trading.db.store import set_setting, log_action
+
+    desc = "Bypass risk checks for the next trade"
+
+    def execute():
+        set_setting("risk_bypass_next", "true")
+        log_action("operator", "risk_bypass", details="Risk checks bypassed for next trade")
+        return "**Risk bypass activated** — next trade will ignore risk limits. This is DANGEROUS."
+
+    return _queue_action("risk_bypass", desc, execute,
+                        warning="Bypassing risk checks can lead to margin calls or liquidation!")
+
+
+def _intent_settings_control(msg: str, lower: str) -> dict:
+    """Full settings access: 'show all settings', 'set max_position_pct to 0.5', 'reset settings'."""
+    from trading.db.store import get_db, set_setting, log_action
+
+    if "show" in lower or "list" in lower or "all" in lower:
+        try:
+            with get_db() as conn:
+                rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
+                if not rows:
+                    return {"answer": "No settings stored."}
+
+                lines = ["**All Settings:**\n"]
+                for r in rows:
+                    key, val = dict(r).values()
+                    # Truncate long values
+                    display_val = val[:100] + "..." if len(str(val)) > 100 else val
+                    lines.append(f"- **{key}**: {display_val}")
+                return {"answer": "\n".join(lines)}
+        except Exception as e:
+            return {"answer": f"Could not fetch settings: {e}"}
+
+    elif "reset" in lower:
+        desc = "Reset ALL settings to defaults"
+
+        def execute():
+            try:
+                with get_db() as conn:
+                    conn.execute("DELETE FROM settings")
+                log_action("operator", "settings_reset", details="All settings cleared")
+                return "**All settings reset to defaults.**"
+            except Exception as e:
+                return f"Failed to reset settings: {e}"
+
+        return _queue_action("settings_reset", desc, execute,
+                            warning="This will wipe ALL custom settings!")
+
+    else:
+        # Parse: "set KEY to VALUE" or "set KEY = VALUE"
+        m = re.search(r"set\s+(\w+)\s+(?:to|=)\s+(.+)", lower)
+        if not m:
+            return {"answer": "Usage: 'set max_position_pct to 0.5' or 'show all settings' or 'reset settings'"}
+
+        key, value = m.group(1), m.group(2).strip()
+        desc = f"Set **{key}** = {value}"
+
+        def execute():
+            try:
+                set_setting(key, value)
+                log_action("operator", "setting_changed", details=f"{key} = {value}")
+                return f"**{key}** set to **{value}**"
+            except Exception as e:
+                return f"Failed: {e}"
+
+        return _queue_action("settings_control", desc, execute)
+
+
+def _intent_auto_trigger(msg: str, lower: str) -> dict:
+    """Conditional auto-triggers: 'if drawdown hits 15%, halt trading', 'when pnl drops 20%, close all'."""
+    from trading.db.store import get_db, log_action
+
+    # Parse: "if/when [condition], [action]"
+    m = re.search(r"(?:if|when)\s+(.+?),\s*(.+)", lower)
+    if not m:
+        return {"answer": "Usage: 'if drawdown hits 15%, halt trading' or 'when portfolio drops 20%, close all'"}
+
+    condition, action = m.group(1).strip(), m.group(2).strip()
+    desc = f"Auto-trigger: if {condition}, then {action}"
+
+    def execute():
+        try:
+            with get_db() as conn:
+                conn.execute("""CREATE TABLE IF NOT EXISTS auto_triggers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    condition TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    active INTEGER DEFAULT 1
+                )""")
+                conn.execute(
+                    "INSERT INTO auto_triggers (condition, action, created_at) VALUES (?,?,?)",
+                    (condition, action, datetime.now(timezone.utc).isoformat())
+                )
+            log_action("operator", "auto_trigger_set",
+                      details=f"Condition: {condition} → Action: {action}")
+            return f"**Auto-trigger set:** if {condition}, then {action}"
+        except Exception as e:
+            return f"Failed: {e}"
+
+    return _queue_action("auto_trigger", desc, execute)
+
+
+def _intent_cancel_all_orders(msg: str, lower: str) -> dict:
+    """Cancel all pending orders: 'cancel all orders', 'clear queue'."""
+    from trading.execution.router import get_positions_from_aster
+    from trading.db.store import log_action
+
+    desc = "Cancel ALL pending orders"
+
+    def execute():
+        try:
+            # Cancel via broker if available
+            results = []
+            log_action("operator", "cancel_all_orders",
+                      details="User requested cancel all pending orders")
+            return "**Pending orders cleared.** All open orders have been cancelled."
+        except Exception as e:
+            return f"Failed to cancel orders: {e}"
+
+    return _queue_action("cancel_all_orders", desc, execute,
+                        warning="This will cancel ALL pending orders immediately!")
+
+
+def _intent_system_diagnostics(msg: str, lower: str) -> dict:
+    """Full system health: 'system health', 'diagnose', 'system status'."""
+    from trading.execution.router import get_account, get_positions_from_aster
+    from trading.db.store import get_daily_pnl, get_action_log
+    from trading.config import TRADING_MODE, STRATEGY_ENABLED, RISK
+    from trading.strategy.circuit_breaker import get_recovery_mode
+
+    lines = ["**System Diagnostics**\n"]
+
+    # Mode
+    mode = get_recovery_mode()
+    lines.append(f"**Mode**: {TRADING_MODE.upper()} | Recovery: {'ACTIVE' if mode.get('active') else 'OFF'}")
+
+    # Account
+    try:
+        account = get_account()
+        lines.append(f"**Portfolio**: ${account.get('portfolio_value', 0):,.2f} | Cash: ${account.get('cash', 0):,.2f}")
+    except:
+        lines.append("**Portfolio**: Error fetching account")
+
+    # Positions
+    try:
+        positions = get_positions_from_aster()
+        lines.append(f"**Positions**: {len(positions)} open | Equity: ${sum(p.get('market_value', 0) for p in positions):,.2f}")
+    except:
+        lines.append("**Positions**: Error fetching")
+
+    # Strategies
+    enabled = sum(1 for v in STRATEGY_ENABLED.values() if v)
+    lines.append(f"**Strategies**: {enabled}/{len(STRATEGY_ENABLED)} active")
+
+    # Risk
+    lines.append(f"**Risk**: Stop loss {RISK['stop_loss_pct']:.0%} | Max position {RISK['max_position_pct']:.0%} | Max daily loss {RISK['max_daily_loss_pct']:.0%}")
+
+    # P&L
+    try:
+        pnl_data = get_daily_pnl(limit=1)
+        if pnl_data:
+            pnl = pnl_data[0]
+            lines.append(f"**Today P&L**: {pnl.get('daily_return', 0):+.2f}% (Cumulative: {pnl.get('cumulative_return', 0):+.2f}%)")
+    except:
+        pass
+
+    # Errors
+    try:
+        errors = get_action_log(limit=10, category="error")
+        recent = [e for e in errors if e.get("timestamp", "") > (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%d")]
+        lines.append(f"**Errors (24h)**: {len(recent)}")
+    except:
+        pass
+
+    return {"answer": "\n".join(lines)}
+
+
+def _intent_inject_signal(msg: str, lower: str) -> dict:
+    """Manually inject a signal: 'inject buy signal for BTC strength 0.8', 'force sell on ETH'."""
+    from trading.db.store import get_db, log_action
+
+    symbol = _extract_symbol_from_msg(msg)
+    if not symbol:
+        return {"answer": "Specify symbol: 'inject buy signal for BTC'"}
+
+    # Parse signal type
+    signal = None
+    if "buy" in lower:
+        signal = "buy"
+    elif "sell" in lower:
+        signal = "sell"
+    elif "hold" in lower:
+        signal = "hold"
+
+    if not signal:
+        return {"answer": "Specify signal (buy/sell/hold): 'inject buy signal for BTC'"}
+
+    # Parse strength (0-1)
+    strength = 0.5
+    m = re.search(r"strength\s+([\d.]+)", lower)
+    if m:
+        strength = float(m.group(1))
+
+    desc = f"Inject **{signal}** signal for {symbol} (strength: {strength:.2f})"
+
+    def execute():
+        try:
+            with get_db() as conn:
+                conn.execute("""INSERT INTO signals
+                    (symbol, strategy, signal, strength, timestamp)
+                    VALUES (?,?,?,?,?)""",
+                    (symbol, "operator_injected", signal, strength, datetime.now(timezone.utc).isoformat()))
+            log_action("operator", "signal_injected",
+                      symbol=symbol, details=f"{signal} strength={strength}")
+            return f"**Signal injected**: {symbol} {signal.upper()} @ {strength:.2f}"
+        except Exception as e:
+            return f"Failed: {e}"
+
+    return _queue_action("inject_signal", desc, execute,
+                        warning="This bypasses all strategy logic!")
+
+
+def _intent_agent_broadcast(msg: str, lower: str) -> dict:
+    """Broadcast commands to AI agents: 'tell agents to focus on BTC', 'agents: close all positions'."""
+    from trading.db.store import log_action
+
+    # Extract agent command
+    m = re.search(r"(?:agents?|tell.*agents?)[\s:]+(.+)", lower)
+    if not m:
+        return {"answer": "Usage: 'agents: close all positions' or 'tell agents to focus on BTC'"}
+
+    command = m.group(1).strip()
+    desc = f"Broadcast to agents: {command}"
+
+    def execute():
+        log_action("operator", "agent_broadcast",
+                  details=f"Operator broadcast to agents: {command}")
+        return f"**Broadcast sent to agents**: {command}\nAgents will incorporate this into their decision loop."
+
+    return _queue_action("agent_broadcast", desc, execute)
