@@ -214,8 +214,11 @@ def _extract_actions_from_journal(journal_text: str) -> list[dict]:
 def _execute_action(action: dict) -> str:
     """Execute a single action and return a result string."""
     atype = action.get("action", "")
-    target = action.get("target", "")
+    # Accept both "target" and "strategy"/"param" keys (LLM vs rule-based needs)
+    target = action.get("target") or action.get("strategy") or action.get("param") or ""
     value = action.get("value")
+    if value is None:
+        value = action.get("new_value")
     reason = action.get("reason", "Journal agent")
 
     if atype == "disable_strategy":
@@ -245,11 +248,9 @@ def _execute_action(action: dict) -> str:
         return f"enabled {strategy}"
 
     elif atype == "set_risk_param" or atype == "tighten_risk":
-        param = target if atype == "set_risk_param" else action.get("param", target)
+        param = target
         if not param:
             return "skip: no param specified"
-        if value is None:
-            value = action.get("new_value")
         if value is None:
             return "skip: no value specified"
 
@@ -281,13 +282,45 @@ def _execute_action(action: dict) -> str:
         return f"logged insight: {(target or reason)[:80]}"
 
     elif atype == "coverage_review":
-        # List disabled strategies with reasons for review
+        # When strategies are disabled (e.g. emergency halt), log diagnostic insight
         disabled = [s for s, v in STRATEGY_ENABLED.items() if not v]
         if disabled:
+            insight = (
+                f"Coverage review: {len(disabled)}/{len(STRATEGY_ENABLED)} strategies disabled. "
+                f"Reason for review: {reason}. "
+                f"Disabled strategies: {', '.join(disabled[:10])}"
+                f"{'...' if len(disabled) > 10 else ''}"
+            )
+            insert_knowledge(
+                title=f"Coverage Review {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                source="journal_agent",
+                category="journal_insight",
+                content=insight,
+            )
             log_action("journal_agent", "coverage_review",
-                      details=f"Disabled strategies flagged for review: {', '.join(disabled)}")
-            return f"flagged {len(disabled)} disabled strategies for review"
+                      details=f"Logged coverage review insight: {len(disabled)} disabled")
+            return f"logged coverage insight ({len(disabled)} disabled)"
         return "skip: no disabled strategies found"
+
+    elif atype == "check_recovery":
+        # If in recovery mode and drawdown has improved, attempt graduation
+        try:
+            from trading.strategy.circuit_breaker import get_recovery_mode, force_graduate
+            mode = get_recovery_mode()
+            if not mode.get("active"):
+                return "skip: not in recovery mode"
+
+            # Pull recent P&L; if 7-day return is positive, graduate
+            pnl_data = get_daily_pnl(limit=7)
+            pnl_7d = sum(d.get("daily_return", 0) for d in pnl_data) if pnl_data else 0
+            if pnl_7d > 0:
+                force_graduate(reason=f"Journal agent: 7-day P&L recovered to {pnl_7d:+.2f}%")
+                log_action("journal_agent", "force_graduate",
+                          details=f"Graduated from recovery: 7-day P&L {pnl_7d:+.2f}%")
+                return f"graduated from recovery (7-day P&L: {pnl_7d:+.2f}%)"
+            return f"skip: still in drawdown (7-day P&L: {pnl_7d:+.2f}%)"
+        except Exception as e:
+            return f"error: {e}"
 
     return f"skip: unknown action type {atype}"
 
@@ -356,10 +389,24 @@ def run_journal_agent() -> dict:
     # 4. Merge: rule actions + LLM actions
     all_actions: list[dict] = []
 
-    # Rule-based needs → convert to action dicts
+    # Rule-based needs → include high + medium; always include coverage_review
     for need in needs:
-        if need["priority"] == "high":
+        if need["priority"] in ("high", "medium"):
             all_actions.append(need)
+        elif need.get("action") == "coverage_review":
+            all_actions.append(need)
+
+    # Auto-inject check_recovery when recovery mode is active
+    try:
+        from trading.strategy.circuit_breaker import get_recovery_mode
+        if get_recovery_mode().get("active"):
+            all_actions.append({
+                "action": "check_recovery",
+                "reason": "Recovery mode active — attempt graduation if conditions met",
+                "priority": "medium",
+            })
+    except Exception:
+        pass
 
     # LLM actions
     for a in llm_actions:
