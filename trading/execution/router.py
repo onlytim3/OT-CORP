@@ -52,8 +52,20 @@ def validate_aster_symbols():
         log.warning("Could not validate AsterDex symbols: %s", e)
 
 
+_ALPACA_TO_ASTER: dict[str, str] = {
+    "XAU/USD": "GOLDUSDT",
+    "XAG/USD": "SILVERUSDT",
+    "GLD": "GOLDUSDT",
+    "AGQ": "SILVERUSDT",
+}
+
+
 def _to_aster(symbol: str) -> str:
     """Convert any symbol format to AsterDex format."""
+    # Hard-coded overrides for commodity symbols that don't follow XYZUSDT pattern
+    if symbol in _ALPACA_TO_ASTER:
+        return _ALPACA_TO_ASTER[symbol]
+
     # It should already be AsterDex format from the strategies
     aster = symbol
     if not aster.endswith("USDT") and not aster.endswith("USD"):
