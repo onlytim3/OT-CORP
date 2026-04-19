@@ -471,7 +471,8 @@ def _risk_agent_think() -> list[dict]:
     drawdown = (peak_value - current_value) / peak_value if peak_value > 0 else 0
 
     # --- Emergency halt at severe drawdown ---
-    if drawdown >= get_threshold("drawdown_halt_threshold"):
+    halt_enabled = get_setting("emergency_halt_enabled", "true").lower() not in ("false", "0", "off")
+    if halt_enabled and drawdown >= get_threshold("drawdown_halt_threshold"):
         recommendations.append({
             "from_agent": RISK_AGENT,
             "to_agent": EXECUTOR_AGENT,
@@ -493,7 +494,7 @@ def _risk_agent_think() -> list[dict]:
         })
 
     # --- Tighten risk during moderate drawdown ---
-    elif drawdown >= get_threshold("drawdown_tighten_threshold"):
+    elif halt_enabled and drawdown >= get_threshold("drawdown_tighten_threshold"):
         recommendations.append({
             "from_agent": RISK_AGENT,
             "to_agent": EXECUTOR_AGENT,
@@ -2514,6 +2515,24 @@ def run_autonomous_cycle() -> dict:
     # Restore persisted state (strategy enables, thresholds, budgets, risk)
     # so that previous cycle's changes survive process restarts
     load_persisted_state()
+
+    # Write the emergency halt default setting on first run (persists across restarts)
+    if get_setting("emergency_halt_enabled") is None:
+        set_setting("emergency_halt_enabled", "false")
+
+    # If emergency halt is disabled, clear conservative mode and re-enable any
+    # strategies stuck as "disabled" by a previous halt.
+    if get_setting("emergency_halt_enabled", "true").lower() in ("false", "0", "off"):
+        try:
+            from trading.strategy.circuit_breaker import force_graduate, get_recovery_mode
+            if get_recovery_mode().get("active"):
+                force_graduate("Emergency halt disabled by operator")
+        except Exception:
+            pass
+        for strat in list(STRATEGY_ENABLED.keys()):
+            if get_setting(f"strategy_override_{strat}", "") == "disabled":
+                set_setting(f"strategy_override_{strat}", "enabled")
+                STRATEGY_ENABLED[strat] = True
 
     # Ensure the recommendation guardrail has the latest failure patterns
     refresh_guardrail()
