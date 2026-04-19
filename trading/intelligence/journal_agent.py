@@ -361,8 +361,12 @@ def _write_plan_log(journal_text: str | None, needs: list[dict],
         category="daily_plan",
         content=plan_text,
     )
+    deferred = sum(1 for n in needs if n["priority"] == "low")
     log_action("journal_agent", "plan_logged",
-              details=f"{len(needs)} needs, {len(executed)} actions executed")
+              details=(
+                  f"{len(needs)} needs detected, {len(executed)} actions executed"
+                  + (f", {deferred} low-priority need(s) deferred" if deferred else "")
+              ))
 
 
 # ---------------------------------------------------------------------------
