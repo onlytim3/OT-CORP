@@ -1575,6 +1575,13 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                         set_setting(f"strategy_override_{strat}", "disabled")
                 except Exception:
                     pass
+                insert_knowledge(
+                    title=f"Emergency Halt — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
+                    source=RISK_AGENT,
+                    category="recovery",
+                    content=rec["reasoning"],
+                    key_rules=json.dumps(data),
+                )
 
             elif action == "gradual_recovery":
                 # Re-enable strategies gradually, prioritizing those with passing backtests
@@ -1612,7 +1619,24 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 if enabled_count:
                     result = f"Recovery: re-enabled {enabled_count} strategies: {', '.join(recovery_details)}"
                 else:
-                    result = "Recovery: no backtest-approved disabled strategies available"
+                    # No passing backtests — queue all disabled strategies for re-evaluation
+                    # so the backtest agent can clear them for re-enablement next cycle
+                    disabled_strats = [s for s, v in STRATEGY_ENABLED.items() if not v]
+                    queued = 0
+                    for strat in disabled_strats:
+                        try:
+                            insert_backtest_result(
+                                strategy=strat, days=0,
+                                metrics={"triggered_by": "halt_recovery", "stale": True},
+                                verdict="needs_retest",
+                            )
+                            queued += 1
+                        except Exception:
+                            pass
+                    result = (
+                        f"Recovery stalled: no backtest-approved strategies available. "
+                        f"Queued {queued} strategies for re-evaluation."
+                    )
                 log.warning("GRADUAL RECOVERY: %s", result)
                 insert_knowledge(
                     title=f"Drawdown Recovery — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
@@ -1987,6 +2011,7 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
             data={
                 "from_agent": rec["from_agent"],
                 "reasoning": rec["reasoning"][:500],
+                **data,
             },
         )
 
