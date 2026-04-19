@@ -470,31 +470,143 @@ def _risk_agent_think() -> list[dict]:
     peak_value = max(r["portfolio_value"] for r in daily_records)
     drawdown = (peak_value - current_value) / peak_value if peak_value > 0 else 0
 
-    # --- Emergency halt at severe drawdown ---
+    # --- Smart halt factors: computed once, used to classify the situation ---
     halt_enabled = get_setting("emergency_halt_enabled", "true").lower() not in ("false", "0", "off")
-    if halt_enabled and drawdown >= get_threshold("drawdown_halt_threshold"):
-        recommendations.append({
-            "from_agent": RISK_AGENT,
-            "to_agent": EXECUTOR_AGENT,
-            "category": "change_regime",
-            "action": "emergency_halt",
-            "target": "all_strategies",
-            "reasoning": (
-                f"CRITICAL: Portfolio drawdown at {drawdown*100:.1f}% "
-                f"(current: ${current_value:.0f}, peak: ${peak_value:.0f}). "
-                f"Exceeds {get_threshold('drawdown_halt_threshold')*100:.0f}% threshold. "
-                f"Recommending emergency halt — disable all strategies until review."
-            ),
-            "data": {
-                "drawdown_pct": round(drawdown, 4),
-                "current_value": round(current_value, 2),
-                "peak_value": round(peak_value, 2),
-                "auto_approve": True,
-            },
-        })
+
+    # 1. Consecutive losing days (daily_records sorted DESC — newest first)
+    consecutive_losses = 0
+    for _r in daily_records:
+        if _r.get("daily_return", 0) < 0:
+            consecutive_losses += 1
+        else:
+            break
+
+    # 2. Drawdown velocity: positive = worsening, negative = recovering
+    dd_velocity = 0.0
+    if len(daily_records) >= 4:
+        _val_3d = daily_records[3]["portfolio_value"]
+        _dd_3d = (peak_value - _val_3d) / peak_value if peak_value > 0 else 0
+        dd_velocity = drawdown - _dd_3d
+
+    # 3. Worst single day in last 7 — flags a market-crash event vs. gradual bleed
+    worst_day = min((r.get("daily_return", 0) for r in daily_records[:7]), default=0)
+
+    # 4. Market regime score (-1 bearish … +1 bullish) from the existing briefing system
+    regime_score = 0.0
+    regime_label = "unknown"
+    try:
+        from trading.intelligence.engine import generate_briefing
+        _briefing = generate_briefing()
+        regime_score = getattr(_briefing, "overall_score", 0.0)
+        regime_label = getattr(_briefing, "overall_regime", "unknown")
+    except Exception:
+        pass
+
+    halt_threshold = get_threshold("drawdown_halt_threshold")
+    tighten_threshold = get_threshold("drawdown_tighten_threshold")
+
+    # Early-warning: 5+ consecutive red days → effectively lower the halt trigger by 15%
+    effective_halt_threshold = halt_threshold
+    if consecutive_losses >= 5:
+        effective_halt_threshold = max(halt_threshold * 0.85, 0.12)
+
+    # Situation classifiers
+    _market_crash = regime_score < -0.5    # broad macro selloff — not strategy failure
+    _dd_recovering = dd_velocity < -0.01   # drawdown improved >1% over last 3 days
+    _single_event = worst_day < -0.10      # one day lost >10% — likely external shock
+
+    # --- Emergency halt at severe drawdown (smart) ---
+    if halt_enabled and drawdown >= effective_halt_threshold:
+
+        if _market_crash:
+            # Market is crashing everywhere — halting our strategies doesn't help.
+            # Tighten risk aggressively instead and let the regime resolve.
+            recommendations.append({
+                "from_agent": RISK_AGENT,
+                "to_agent": EXECUTOR_AGENT,
+                "category": "adjust_param",
+                "action": "tighten_risk",
+                "target": "risk_params",
+                "reasoning": (
+                    f"Portfolio drawdown {drawdown*100:.1f}% but market is in broad crash "
+                    f"(regime: {regime_label}, score {regime_score:.2f}). "
+                    f"Drawdown is macro-driven — halting strategies won't help. "
+                    f"Tightening risk parameters aggressively instead."
+                ),
+                "data": {
+                    "drawdown_pct": round(drawdown, 4),
+                    "regime_score": round(regime_score, 3),
+                    "adjustments": {
+                        "max_position_pct": max(RISK["max_position_pct"] * 0.5, 0.03),
+                        "min_cash_reserve_pct": min(RISK["min_cash_reserve_pct"] * 2.0, 0.50),
+                        "stop_loss_pct": max(RISK["stop_loss_pct"] * 0.6, 0.02),
+                    },
+                    "auto_approve": True,
+                },
+            })
+
+        elif _dd_recovering and drawdown < halt_threshold * 1.05:
+            # Drawdown is already improving and we're only just over threshold — defer halt.
+            recommendations.append({
+                "from_agent": RISK_AGENT,
+                "to_agent": EXECUTOR_AGENT,
+                "category": "adjust_param",
+                "action": "tighten_risk",
+                "target": "risk_params",
+                "reasoning": (
+                    f"Drawdown {drawdown*100:.1f}% (threshold {halt_threshold*100:.0f}%) "
+                    f"but recovering — velocity {dd_velocity*100:+.1f}% over 3 days. "
+                    f"Deferring halt; tightening risk until drawdown confirms recovery."
+                ),
+                "data": {
+                    "drawdown_pct": round(drawdown, 4),
+                    "dd_velocity": round(dd_velocity, 4),
+                    "adjustments": {
+                        "max_position_pct": max(RISK["max_position_pct"] * 0.7, 0.05),
+                        "min_cash_reserve_pct": min(RISK["min_cash_reserve_pct"] * 1.5, 0.40),
+                        "stop_loss_pct": max(RISK["stop_loss_pct"] * 0.7, 0.03),
+                    },
+                    "auto_approve": True,
+                },
+            })
+
+        else:
+            # True halt: strategy failure, persistent drawdown, or accelerating losses.
+            _halt_ctx = []
+            if consecutive_losses >= 5:
+                _halt_ctx.append(f"{consecutive_losses} consecutive losing days")
+            if dd_velocity > 0.02:
+                _halt_ctx.append(f"drawdown accelerating {dd_velocity*100:+.1f}% over 3 days")
+            if _single_event:
+                _halt_ctx.append(f"single-day loss of {worst_day*100:.1f}%")
+            _ctx_str = "; ".join(_halt_ctx) if _halt_ctx else "persistent drawdown above threshold"
+
+            recommendations.append({
+                "from_agent": RISK_AGENT,
+                "to_agent": EXECUTOR_AGENT,
+                "category": "change_regime",
+                "action": "emergency_halt",
+                "target": "all_strategies",
+                "reasoning": (
+                    f"CRITICAL: Portfolio drawdown {drawdown*100:.1f}% "
+                    f"(current: ${current_value:.0f}, peak: ${peak_value:.0f}). "
+                    f"Context: {_ctx_str}. "
+                    f"Regime: {regime_label} (score {regime_score:.2f}). "
+                    f"Halting all strategies until operator review."
+                ),
+                "data": {
+                    "drawdown_pct": round(drawdown, 4),
+                    "current_value": round(current_value, 2),
+                    "peak_value": round(peak_value, 2),
+                    "consecutive_losses": consecutive_losses,
+                    "dd_velocity": round(dd_velocity, 4),
+                    "regime_score": round(regime_score, 3),
+                    "auto_approve": True,
+                },
+            })
 
     # --- Tighten risk during moderate drawdown ---
-    elif halt_enabled and drawdown >= get_threshold("drawdown_tighten_threshold"):
+    elif halt_enabled and drawdown >= tighten_threshold:
         recommendations.append({
             "from_agent": RISK_AGENT,
             "to_agent": EXECUTOR_AGENT,
@@ -503,7 +615,7 @@ def _risk_agent_think() -> list[dict]:
             "target": "risk_params",
             "reasoning": (
                 f"Portfolio drawdown at {drawdown*100:.1f}% "
-                f"(threshold: {get_threshold('drawdown_tighten_threshold')*100:.0f}%). "
+                f"(threshold: {tighten_threshold*100:.0f}%). "
                 f"Tightening: reduce max_position_pct, increase cash reserve, "
                 f"tighten stop losses. Will revert when drawdown recovers."
             ),
