@@ -420,3 +420,218 @@ def get_taker_buy_sell_ratio(symbol: str, period: str = "1h",
     except Exception as e:
         log.warning("Failed to fetch taker volume for %s: %s", symbol, e)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Enhanced derivatives data surfaces (roadmap Item 3)
+# ---------------------------------------------------------------------------
+
+@cached(ttl=300)
+def get_funding_surface(symbols: list[str] | None = None) -> dict[str, dict]:
+    """Multi-tenor funding rate surface per symbol.
+
+    Computes rolling averages over the historical funding rate series to expose
+    the term structure of funding: short-term vs long-term rate and the slope
+    (positive slope = longs building leverage, bearish signal for contrarians).
+
+    Returns:
+        {symbol: {"rate_1h": float, "rate_8h": float, "rate_24h": float,
+                  "slope": float, "z_score": float}}
+        slope > 0 means funding is rising (overleveraged longs accumulating).
+        z_score is current 8h rate relative to 30-period history.
+    """
+    target = symbols or _all_aster_symbols()
+    result: dict[str, dict] = {}
+
+    for sym in target:
+        try:
+            history = get_funding_rate_history(sym, limit=100)
+            if len(history) < 4:
+                continue
+
+            # Rolling averages (funding settles every 8h; 3 per day)
+            rate_1h = history[-1]                                       # most recent
+            rate_8h = sum(history[-3:]) / min(3, len(history))         # ~1 day
+            rate_24h = sum(history[-9:]) / min(9, len(history))        # ~3 days
+
+            # Slope: is funding rising or falling?
+            slope = rate_8h - rate_24h
+
+            # Z-score vs 30-period history
+            window = history[-30:]
+            if len(window) >= 5:
+                mean = sum(window) / len(window)
+                variance = sum((x - mean) ** 2 for x in window) / len(window)
+                std = variance ** 0.5
+                z_score = (rate_8h - mean) / std if std > 1e-10 else 0.0
+            else:
+                z_score = 0.0
+
+            result[sym] = {
+                "rate_1h": round(rate_1h, 8),
+                "rate_8h": round(rate_8h, 8),
+                "rate_24h": round(rate_24h, 8),
+                "slope": round(slope, 8),
+                "z_score": round(z_score, 3),
+            }
+        except Exception as e:
+            log.debug("Funding surface failed for %s: %s", sym, e)
+
+    return result
+
+
+@cached(ttl=300)
+def get_oi_delta(symbol: str, periods: int = 4) -> dict:
+    """Open interest delta — rate of change over recent periods.
+
+    Detects whether smart money is entering or exiting positions.
+    Rising OI + rising price = trend confirmation.
+    Rising OI + falling price = shorts piling in (bearish).
+    Falling OI = position unwinding (trend exhaustion signal).
+
+    Returns:
+        {"oi_current": float, "oi_delta_pct": float,
+         "oi_trend": "rising"|"falling"|"flat", "periods": int}
+    """
+    empty = {"oi_current": 0.0, "oi_delta_pct": 0.0, "oi_trend": "flat", "periods": periods}
+    try:
+        history = get_open_interest_history(symbol, period="1h", limit=periods + 1)
+        if len(history) < 2:
+            return empty
+
+        # sumOpenInterest is a string in the API response
+        def _oi(rec: dict) -> float:
+            return float(rec.get("sumOpenInterest", 0) or 0)
+
+        newest = _oi(history[-1])
+        oldest = _oi(history[0])
+        if oldest <= 0:
+            return empty
+
+        delta_pct = (newest - oldest) / oldest
+        trend = "rising" if delta_pct > 0.005 else ("falling" if delta_pct < -0.005 else "flat")
+
+        return {
+            "oi_current": round(newest, 2),
+            "oi_delta_pct": round(delta_pct, 5),
+            "oi_trend": trend,
+            "periods": periods,
+        }
+    except Exception as e:
+        log.debug("OI delta failed for %s: %s", symbol, e)
+        return empty
+
+
+@cached(ttl=300)
+def get_liquidation_estimate(symbol: str) -> dict:
+    """Estimate liquidation cluster zones using long/short ratio and current price.
+
+    Uses the top-trader long/short account ratio as a proxy for average leverage
+    positioning. Assets with high long/short ratio have a downside liquidation
+    cascade risk; low ratio has upside short-squeeze potential.
+
+    Returns:
+        {"long_liq_price": float, "short_liq_price": float,
+         "liq_asymmetry": float, "long_short_ratio": float}
+        liq_asymmetry > 0 → more long liquidation risk (price drop → cascade).
+        liq_asymmetry < 0 → more short liquidation risk (price rise → squeeze).
+    """
+    empty = {
+        "long_liq_price": 0.0, "short_liq_price": 0.0,
+        "liq_asymmetry": 0.0, "long_short_ratio": 1.0,
+    }
+    try:
+        ls_history = get_long_short_ratio(symbol, period="1h", limit=3)
+        if not ls_history:
+            return empty
+
+        latest = ls_history[-1]
+        ls_ratio = float(latest.get("longShortRatio", 1.0) or 1.0)
+        long_pct = float(latest.get("longAccount", 0.5) or 0.5)
+        short_pct = float(latest.get("shortAccount", 0.5) or 0.5)
+
+        # Fetch current mark price
+        try:
+            from trading.execution.aster_client import get_aster_mark_prices
+            prices = get_aster_mark_prices()
+            current_price = next(
+                (float(p.get("markPrice", 0)) for p in (prices if isinstance(prices, list) else [prices])
+                 if p.get("symbol") == symbol),
+                0.0,
+            )
+        except Exception:
+            current_price = 0.0
+
+        if current_price <= 0:
+            return {**empty, "long_short_ratio": ls_ratio}
+
+        # Estimate average leverage from ratio imbalance: more longs → higher avg leverage on long side
+        # Heuristic: assume 5x–20x leverage range; skew based on imbalance
+        avg_long_lev = 5.0 + long_pct * 15.0   # 5x (balanced) to 20x (all-long)
+        avg_short_lev = 5.0 + short_pct * 15.0
+
+        long_liq_price = round(current_price * (1.0 - 1.0 / avg_long_lev), 4)
+        short_liq_price = round(current_price * (1.0 + 1.0 / avg_short_lev), 4)
+
+        # Asymmetry: positive = more longs at risk, negative = more shorts at risk
+        liq_asymmetry = round(long_pct - short_pct, 4)
+
+        return {
+            "long_liq_price": long_liq_price,
+            "short_liq_price": short_liq_price,
+            "liq_asymmetry": liq_asymmetry,
+            "long_short_ratio": round(ls_ratio, 4),
+        }
+    except Exception as e:
+        log.debug("Liquidation estimate failed for %s: %s", symbol, e)
+        return empty
+
+
+@cached(ttl=300)
+def get_enhanced_market_data() -> dict:
+    """Extended market summary combining base summary + derivatives surfaces.
+
+    Extends get_aster_market_summary() with:
+    - funding_surface: multi-tenor funding rates per symbol
+    - oi_deltas: OI trend per symbol
+    - liquidation_estimates: long/short liq zone per symbol
+
+    Used by the intelligence engine and microstructure strategies for richer
+    signal generation without extra API calls (all data sources are cached).
+    """
+    try:
+        base = get_aster_market_summary()
+    except Exception:
+        base = {}
+
+    symbols = _all_aster_symbols()
+
+    funding_surface = get_funding_surface(symbols)
+
+    oi_deltas: dict[str, dict] = {}
+    liq_estimates: dict[str, dict] = {}
+    for sym in symbols:
+        oi_deltas[sym] = get_oi_delta(sym)
+        liq_estimates[sym] = get_liquidation_estimate(sym)
+
+    # Aggregate summary signals
+    rising_oi_count = sum(1 for v in oi_deltas.values() if v.get("oi_trend") == "rising")
+    high_funding_count = sum(
+        1 for v in funding_surface.values() if abs(v.get("z_score", 0)) > 1.5
+    )
+    long_heavy_count = sum(
+        1 for v in liq_estimates.values() if v.get("liq_asymmetry", 0) > 0.1
+    )
+
+    return {
+        **base,
+        "funding_surface": funding_surface,
+        "oi_deltas": oi_deltas,
+        "liquidation_estimates": liq_estimates,
+        "derivatives_summary": {
+            "rising_oi_symbols": rising_oi_count,
+            "high_funding_symbols": high_funding_count,
+            "long_heavy_symbols": long_heavy_count,
+            "total_symbols": len(symbols),
+        },
+    }

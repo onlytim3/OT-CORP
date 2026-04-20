@@ -377,7 +377,17 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
         if result:
             return result
 
-    # 2a. Trading-level halt / resume (more specific — must come before strategy enable/disable)
+    # 2a. Emergency halt toggle — must come before generic halt/resume patterns
+    if re.search(r"\b(turn\s+off|disable|deactivate)\s+(the\s+)?(emergency\s+)?halt\b", lower) or \
+       re.search(r"\bemergency\s+halt.{0,30}(off|disable|resume|turn\s+off)\b", lower) or \
+       re.search(r"\bturn\s+off\s+emergency\s+halt\b", lower):
+        return _intent_disable_emergency_halt(msg, lower)
+
+    if re.search(r"\b(enable|turn\s+on|reactivate)\s+(the\s+)?(emergency\s+)?halt\b", lower) or \
+       re.search(r"\benable\s+emergency\s+halt\b", lower):
+        return _intent_enable_emergency_halt(msg, lower)
+
+    # 2b. Trading-level halt / resume (more specific — must come before strategy enable/disable)
     if re.search(r"\b(halt|stop|freeze)\s+(all\s+)?(trading|trades)\b", lower) or \
        re.search(r"\bemergency\s+(halt|stop)\b", lower):
         return _intent_halt_trading(msg, lower)
@@ -2427,6 +2437,70 @@ def _intent_resume_trading(msg: str, lower: str) -> dict:
         )
 
     return _queue_action("resume_trading", desc, execute)
+
+
+def _intent_disable_emergency_halt(msg: str, lower: str) -> dict:
+    """Disable autonomous emergency halt and fully resume trading at normal sizing."""
+    from trading.db.store import set_setting, log_action, get_setting
+    from trading.config import STRATEGY_ENABLED
+    desc = "Turn off emergency halt and fully resume trading"
+
+    def execute():
+        # 1. Disable autonomous halt mechanism
+        set_setting("emergency_halt_enabled", "false")
+
+        # 2. Clear any manual daily halt flag
+        set_setting("daily_halt_date", "")
+
+        # 3. Force exit conservative mode immediately
+        try:
+            from trading.strategy.circuit_breaker import force_graduate, get_recovery_mode
+            if get_recovery_mode().get("active"):
+                force_graduate("Operator: emergency halt disabled via chat")
+        except Exception:
+            pass
+
+        # 4. Re-enable any strategies stuck as "disabled" by a prior halt
+        re_enabled = []
+        for strat in list(STRATEGY_ENABLED.keys()):
+            if get_setting(f"strategy_override_{strat}", "") == "disabled":
+                set_setting(f"strategy_override_{strat}", "enabled")
+                STRATEGY_ENABLED[strat] = True
+                re_enabled.append(strat)
+
+        log_action("operator", "disable_emergency_halt",
+                   details=f"Emergency halt disabled via operator chat. Re-enabled: {re_enabled}")
+
+        strat_line = (f"\n- Re-enabled {len(re_enabled)} strategies: {', '.join(re_enabled)}"
+                      if re_enabled else "")
+        return (
+            "Emergency halt **disabled**. Trading fully resumed at normal position sizing.\n"
+            "- Autonomous halt mechanism: **OFF**\n"
+            "- Conservative mode: **Cleared**\n"
+            "- Manual halt flag: **Cleared**"
+            + strat_line +
+            "\n\nSay **'enable emergency halt'** to restore automatic halt protection."
+        )
+
+    return _queue_action("disable_emergency_halt", desc, execute)
+
+
+def _intent_enable_emergency_halt(msg: str, lower: str) -> dict:
+    """Re-enable the autonomous emergency halt mechanism."""
+    from trading.db.store import set_setting, log_action
+    desc = "Enable emergency halt protection"
+
+    def execute():
+        set_setting("emergency_halt_enabled", "true")
+        log_action("operator", "enable_emergency_halt",
+                   details="Emergency halt re-enabled via operator chat.")
+        return (
+            "Emergency halt protection **re-enabled**.\n"
+            "The risk agent will now halt all strategies automatically "
+            "if drawdown exceeds the configured threshold."
+        )
+
+    return _queue_action("enable_emergency_halt", desc, execute)
 
 
 def _intent_change_leverage_profile(msg: str, lower: str) -> dict:

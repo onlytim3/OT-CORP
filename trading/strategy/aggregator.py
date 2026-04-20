@@ -29,6 +29,23 @@ from trading.strategy.base import Signal
 
 _log = logging.getLogger(__name__)
 
+
+def _log_counterfactual(sig: "Signal", block_reason: str) -> None:
+    """Persist a blocked signal to counterfactual_signals for later PnL analysis."""
+    try:
+        from trading.db.store import insert_counterfactual
+        insert_counterfactual(
+            symbol=sig.symbol,
+            action=sig.action,
+            strength=sig.strength,
+            strategy=sig.strategy,
+            block_reason=block_reason,
+            entry_price=None,  # filled by fill_counterfactual_exits() via price feed
+            data=sig.data,
+        )
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # Exposure / piling-in guardrails
 # ---------------------------------------------------------------------------
@@ -80,6 +97,91 @@ _STRATEGY_TO_GROUP = {}
 for _group_name, _members in STRATEGY_CORRELATION_GROUPS.items():
     for _member in _members:
         _STRATEGY_TO_GROUP[_member] = _group_name
+
+# ---------------------------------------------------------------------------
+# Regime-conditional routing — strategy type classification
+# ---------------------------------------------------------------------------
+
+STRATEGY_TYPES: dict[str, set[str]] = {
+    "momentum": {
+        "dual_momentum_antonacci", "cross_asset_momentum", "meme_momentum",
+        "kalman_trend", "breakout_detection",
+    },
+    "mean_reversion": {
+        "basis_zscore", "funding_arb", "regime_mean_reversion", "rsi_divergence",
+        "pairs_trading", "cross_basis_rv", "funding_forecast",
+    },
+    "trend": {"garch_volatility", "volatility_regime", "hmm_regime"},
+    "microstructure": {
+        "microstructure_composite", "taker_divergence", "whale_flow", "oi_price_divergence",
+    },
+    "fundamental": {
+        "factor_crypto", "multi_factor_rank", "equity_crypto_correlation",
+        "gold_crypto_hedge", "dxy_dollar", "onchain_flow", "news_sentiment",
+    },
+    "funding": {"funding_term_structure"},
+}
+_STRATEGY_TO_TYPE: dict[str, str] = {s: t for t, ss in STRATEGY_TYPES.items() for s in ss}
+
+# Regime → per-type strength multiplier + directional guards.
+# Regimes match engine.py _score_label output: strongly bullish / bullish / neutral / bearish / strongly bearish
+_REGIME_ROUTING: dict[str, dict] = {
+    "strongly bullish": {
+        "type_mult": {
+            "momentum": 1.30, "trend": 1.20, "mean_reversion": 0.65,
+            "microstructure": 1.10, "fundamental": 1.00, "funding": 0.85,
+        },
+        "buy_mult": 1.10, "sell_mult": 0.40, "block_sells_above": 0.80,
+    },
+    "bullish": {
+        "type_mult": {
+            "momentum": 1.15, "trend": 1.10, "mean_reversion": 0.80,
+            "microstructure": 1.05, "fundamental": 1.00, "funding": 0.90,
+        },
+        "buy_mult": 1.05, "sell_mult": 0.60, "block_sells_above": None,
+    },
+    "neutral": {
+        "type_mult": {
+            "momentum": 1.00, "trend": 1.00, "mean_reversion": 1.00,
+            "microstructure": 1.00, "fundamental": 1.00, "funding": 1.00,
+        },
+        "buy_mult": 1.00, "sell_mult": 1.00, "block_sells_above": None,
+    },
+    "bearish": {
+        "type_mult": {
+            "momentum": 0.70, "trend": 0.85, "mean_reversion": 1.25,
+            "microstructure": 0.90, "fundamental": 0.90, "funding": 1.15,
+        },
+        "buy_mult": 0.65, "sell_mult": 1.10, "block_sells_above": None,
+    },
+    "strongly bearish": {
+        "type_mult": {
+            "momentum": 0.40, "trend": 0.60, "mean_reversion": 1.30,
+            "microstructure": 0.80, "fundamental": 0.75, "funding": 1.20,
+        },
+        "buy_mult": 0.30, "sell_mult": 1.20, "block_sells_above": None,
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Asset correlation groups for portfolio deconcentration
+# ---------------------------------------------------------------------------
+
+_ASSET_CORR_GROUPS: dict[str, list[str]] = {
+    "btc": ["BTC/USDT", "BTCUSDT", "BTC/USD", "BCH/USD", "LTC/USD"],
+    "eth": ["ETH/USDT", "ETHUSDT", "ETH/USD", "LINK/USD", "UNI/USD", "AAVE/USD"],
+    "alt_l1": [
+        "SOL/USDT", "SOLUSDT", "SOL/USD", "AVAX/USDT", "AVAXUSDT",
+        "AVAX/USD", "DOT/USDT", "DOTUSDT",
+    ],
+    "meme": [
+        "DOGE/USDT", "DOGEUSDT", "SHIB/USDT", "SHIBUSDT", "PEPE/USDT", "PEPEUSDT",
+        "WIF/USDT", "WIFUSDT", "BONK/USDT", "BONKUSDT",
+    ],
+}
+_SYMBOL_TO_CORR_GROUP: dict[str, str] = {
+    sym: grp for grp, syms in _ASSET_CORR_GROUPS.items() for sym in syms
+}
 
 _console = Console()
 
@@ -263,66 +365,189 @@ def _apply_aggression_scaling(consolidated: list[Signal]) -> list[Signal]:
     return consolidated
 
 
-def _apply_regime_guard(signals: list, raw_all: list) -> list:
-    """Dampen short signals during detected bull regimes (P1 — regime-aware direction).
+def _apply_regime_routing(signals: list, raw_all: list) -> list:
+    """Full regime-conditional routing: boost/dampen strategies by type and market regime.
 
-    When hmm_regime strategy signals a bull market, reduce all 'sell' signal
-    strengths by 50%. At very high confidence (>= 0.80), block shorts entirely.
-    This prevents the catastrophic scenario of piling into shorts during a rally.
-
-    Falls back gracefully if hmm_regime data is unavailable.
+    Combines HMM regime detection (from raw signals) with the market intelligence
+    briefing (engine.py) to determine a composite regime, then applies per-strategy-type
+    strength multipliers and directional guards. Supersedes the old _apply_regime_guard
+    which only handled the HMM bull → dampen shorts case.
     """
-    # Find the hmm_regime signal in the raw signals
-    hmm_signals = [
+    # --- HMM regime from raw signals ---
+    hmm_sigs = [
         s for s in raw_all
-        if s.strategy == "hmm_regime" and hasattr(s, 'data') and isinstance(s.data, dict)
+        if s.strategy == "hmm_regime" and isinstance(getattr(s, "data", None), dict)
     ]
-    if not hmm_signals:
-        return signals  # No regime data — don't interfere
+    hmm_regime = "neutral"
+    hmm_confidence = 0.0
+    if hmm_sigs:
+        best = max(hmm_sigs, key=lambda s: s.strength)
+        hmm_regime = (best.data or {}).get("regime", "neutral").lower()
+        hmm_confidence = best.strength
 
-    # Use the strongest hmm signal
-    hmm = max(hmm_signals, key=lambda s: s.strength)
-    regime = (hmm.data or {}).get("regime", "").lower()
-    regime_confidence = hmm.strength  # strength = regime confidence
+    # --- Market intelligence briefing regime ---
+    briefing_regime = "neutral"
+    briefing_score = 0.0
+    try:
+        from trading.intelligence.engine import generate_briefing
+        _b = generate_briefing()
+        briefing_regime = getattr(_b, "overall_regime", "neutral").lower()
+        briefing_score = getattr(_b, "overall_score", 0.0)
+    except Exception:
+        pass
 
-    if regime not in ("bull", "bullish", "trending_up", "uptrend"):
-        return signals  # Only apply guard in bull regimes
+    def _norm(label: str, score: float = 0.0) -> str:
+        if "strongly bullish" in label:
+            return "strongly bullish"
+        if label in ("bullish", "bull", "trending_up", "uptrend"):
+            return "bullish"
+        if label in ("bearish", "bear", "trending_down", "downtrend"):
+            return "bearish"
+        if "strongly bearish" in label or label in ("crash", "extreme_bear"):
+            return "strongly bearish"
+        # Fallback: numeric score
+        if score >= 0.5:
+            return "strongly bullish"
+        if score >= 0.2:
+            return "bullish"
+        if score <= -0.5:
+            return "strongly bearish"
+        if score <= -0.2:
+            return "bearish"
+        return "neutral"
+
+    _score_map = {
+        "strongly bearish": -2, "bearish": -1, "neutral": 0,
+        "bullish": 1, "strongly bullish": 2,
+    }
+    norm_hmm = _norm(hmm_regime)
+    norm_briefing = _norm(briefing_regime, briefing_score)
+    # The more extreme signal drives the composite (higher absolute score wins; tie → briefing)
+    composite = (
+        norm_hmm
+        if abs(_score_map[norm_hmm]) > abs(_score_map[norm_briefing])
+        else norm_briefing
+    )
+
+    routing = _REGIME_ROUTING.get(composite, _REGIME_ROUTING["neutral"])
+    type_mult = routing["type_mult"]
+    buy_mult = routing["buy_mult"]
+    sell_mult = routing["sell_mult"]
+    block_sells_above = routing.get("block_sells_above")
+
+    if composite == "neutral" and not hmm_sigs:
+        return signals  # Nothing to adjust
 
     result = []
     for sig in signals:
-        if sig.action != "sell":
+        if sig.action not in ("buy", "sell"):
             result.append(sig)
             continue
 
-        # Very high bull confidence: block shorts entirely
-        if regime_confidence >= 0.80:
+        strat_type = _STRATEGY_TO_TYPE.get(sig.strategy, "fundamental")
+        t_mult = type_mult.get(strat_type, 1.0)
+        d_mult = buy_mult if sig.action == "buy" else sell_mult
+
+        # Block shorts at extreme bull confidence (preserves original regime guard behaviour)
+        if sig.action == "sell" and block_sells_above and hmm_confidence >= block_sells_above:
             result.append(Signal(
                 strategy=sig.strategy, symbol=sig.symbol, action="hold",
                 strength=0.0,
                 reason=(
-                    f"{sig.reason} [REGIME BLOCK: HMM bull @ {regime_confidence:.0%} confidence — "
+                    f"{sig.reason} [REGIME BLOCK: {composite} @{hmm_confidence:.0%} — "
                     f"short blocked to prevent rally wipeout]"
                 ),
                 data=sig.data,
             ))
             _log.info(
-                f"Regime guard BLOCKED short on {sig.symbol} "
-                f"(bull confidence={regime_confidence:.0%})"
+                f"Regime routing BLOCKED short on {sig.symbol} "
+                f"({composite} @{hmm_confidence:.0%})"
             )
-        else:
-            # Moderate bull: dampen short strength 50%
-            dampened = round(sig.strength * 0.50, 4)
-            result.append(Signal(
-                strategy=sig.strategy, symbol=sig.symbol, action=sig.action,
-                strength=dampened,
-                reason=(
-                    f"{sig.reason} [REGIME DAMPEN: HMM bull @ {regime_confidence:.0%} — "
-                    f"short strength halved {sig.strength:.2f}→{dampened:.2f}]"
-                ),
-                data=sig.data,
-            ))
+            _log_counterfactual(sig, "regime_routing")
+            continue
 
+        combined = min(t_mult * d_mult, 2.0)
+        if abs(combined - 1.0) < 0.02:
+            result.append(sig)
+            continue
+
+        new_str = round(min(sig.strength * combined, 1.0), 4)
+        tag = "BOOST" if combined > 1.0 else "DAMPEN"
+        result.append(Signal(
+            strategy=sig.strategy, symbol=sig.symbol, action=sig.action,
+            strength=new_str,
+            reason=(
+                f"{sig.reason} [REGIME {tag}: {composite}, "
+                f"{strat_type} {combined:.2f}x → {new_str:.2f}]"
+            ),
+            data=sig.data,
+        ))
+
+    if composite != "neutral":
+        _log.info(
+            f"Regime routing applied: composite={composite} "
+            f"(HMM={norm_hmm}@{hmm_confidence:.0%}, briefing={norm_briefing}@{briefing_score:+.2f})"
+        )
     return result
+
+
+def _apply_correlation_deconcentration(signals: list) -> list:
+    """Penalise same-direction signals from correlated asset groups.
+
+    When BTC, ETH, and SOL all generate buy signals simultaneously, the system
+    is effectively taking a single concentrated bet on crypto beta. This function
+    ranks signals within each asset correlation group by strength and applies
+    descending penalties: rank #1 = 1.0x, #2 = 0.85x, #3+ = 0.70x.
+    """
+    buys = [s for s in signals if s.action == "buy"]
+    sells = [s for s in signals if s.action == "sell"]
+    others = [s for s in signals if s.action not in ("buy", "sell")]
+
+    def _deconc(directional: list) -> list:
+        if len(directional) <= 1:
+            return directional
+
+        groups: dict[str, list] = defaultdict(list)
+        ungrouped = []
+        for sig in directional:
+            grp = _SYMBOL_TO_CORR_GROUP.get(sig.symbol)
+            if grp:
+                groups[grp].append(sig)
+            else:
+                ungrouped.append(sig)
+
+        result = list(ungrouped)
+        penalties = [1.0, 0.85, 0.70]
+
+        for grp, grp_sigs in groups.items():
+            if len(grp_sigs) == 1:
+                result.extend(grp_sigs)
+                continue
+
+            grp_sigs.sort(key=lambda s: s.strength, reverse=True)
+            for i, sig in enumerate(grp_sigs):
+                p = penalties[min(i, len(penalties) - 1)]
+                if p >= 1.0:
+                    result.append(sig)
+                    continue
+                new_str = round(sig.strength * p, 4)
+                result.append(Signal(
+                    strategy=sig.strategy, symbol=sig.symbol, action=sig.action,
+                    strength=new_str,
+                    reason=(
+                        f"{sig.reason} [CORR DECONC: {grp} rank#{i + 1} "
+                        f"{p:.0%} → {new_str:.2f}]"
+                    ),
+                    data=sig.data,
+                ))
+                _log.info(
+                    f"Corr deconc: {sig.symbol} ({grp}) rank#{i + 1} "
+                    f"penalty {p:.0%}, strength {sig.strength:.2f}→{new_str:.2f}"
+                )
+
+        return result
+
+    return _deconc(buys) + _deconc(sells) + others
 
 
 def _apply_confluence_gate(consolidated: list, by_symbol: dict) -> list:
@@ -366,6 +591,7 @@ def _apply_confluence_gate(consolidated: list, by_symbol: dict) -> list:
                 f"Confluence gate (recovery): blocked {sig.action} on {sig.symbol} "
                 f"({n_strategies} strategies, need {min_in_recovery})"
             )
+            _log_counterfactual(sig, "recovery_gate")
             continue
 
         # Normal mode: single-strategy trades need high-conviction strength
@@ -384,6 +610,7 @@ def _apply_confluence_gate(consolidated: list, by_symbol: dict) -> list:
                 f"Confluence gate blocked {sig.action} on {sig.symbol}: "
                 f"1 strategy, strength={sig.strength:.2f} < {MIN_CONFLUENCE_STRENGTH}"
             )
+            _log_counterfactual(sig, "confluence_gate")
         else:
             result.append(sig)
 
@@ -427,8 +654,8 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     # Deduplicate correlated strategies before grouping
     actionable = _deduplicate_correlated(actionable)
 
-    # Apply regime guard BEFORE grouping (dampens raw sell signals in bull markets)
-    actionable = _apply_regime_guard(actionable, all_signals)
+    # Full regime routing BEFORE grouping (boosts/dampens by strategy type × market regime)
+    actionable = _apply_regime_routing(actionable, all_signals)
 
     # Group by symbol
     by_symbol: dict[str, list[Signal]] = defaultdict(list)
@@ -466,6 +693,9 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     for i, sig in enumerate(consolidated):
         if sig.action in ("buy", "sell"):
             consolidated[i] = _apply_multi_timeframe_confirmation(sig)
+
+    # Correlation deconcentration: penalise correlated-asset pile-ins before aggression scaling
+    consolidated = _apply_correlation_deconcentration(consolidated)
 
     # Phase 4.8: Contrarian Aggression Scaling (Fear & Greed)
     consolidated = _apply_aggression_scaling(consolidated)
