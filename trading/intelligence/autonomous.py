@@ -394,50 +394,101 @@ def _performance_agent_think() -> list[dict]:
                 },
             })
 
-        # --- Recommend allocation shift for underperformers ---
-        elif win_rate < 0.40 and len(recent) >= 10:
-            recommendations.append({
-                "from_agent": PERF_AGENT,
-                "to_agent": RISK_AGENT,
-                "category": "shift_allocation",
-                "action": "reduce_budget",
-                "target": strat_name,
-                "reasoning": (
-                    f"Strategy '{strat_name}' underperforming: {win_rate*100:.0f}% win rate, "
-                    f"${total_pnl:+.2f} P&L over {len(recent)} trades. "
-                    f"Recommend reducing allocation until performance improves."
-                ),
-                "data": {
-                    "win_rate": round(win_rate, 3),
-                    "total_pnl": round(total_pnl, 2),
-                    "suggested_budget_mult": 0.5,
-                    "auto_approve": True,
-                },
-            })
-
-        # --- Recommend allocation boost for top performers ---
-        elif win_rate >= 0.60 and avg_pnl > 0 and len(recent) >= 10:
-            recommendations.append({
-                "from_agent": PERF_AGENT,
-                "to_agent": RISK_AGENT,
-                "category": "shift_allocation",
-                "action": "increase_budget",
-                "target": strat_name,
-                "reasoning": (
-                    f"Strategy '{strat_name}' outperforming: {win_rate*100:.0f}% win rate, "
-                    f"${total_pnl:+.2f} P&L, avg ${avg_pnl:+.2f}/trade over {len(recent)} trades. "
-                    f"Recommend increasing allocation to capture more alpha."
-                ),
-                "data": {
-                    "win_rate": round(win_rate, 3),
-                    "total_pnl": round(total_pnl, 2),
-                    "avg_pnl": round(avg_pnl, 2),
-                    "suggested_budget_mult": 1.5,
-                    "auto_approve": True,
-                },
-            })
+    # --- Thompson Sampling budget allocation (replaces heuristic thresholds) ---
+    thompson_recs = _thompson_budget_recommendations(by_strategy)
+    recommendations.extend(thompson_recs)
 
     return recommendations
+
+
+def _thompson_sample(wins: int, losses: int) -> float:
+    """Sample from Beta(wins+1, losses+1) using gamma-ratio method (stdlib only)."""
+    import random
+    a, b = wins + 1, losses + 1
+    x = random.gammavariate(a, 1)
+    y = random.gammavariate(b, 1)
+    return x / (x + y) if (x + y) > 0 else 0.5
+
+
+def _thompson_budget_recommendations(by_strategy: dict) -> list[dict]:
+    """Rank strategies via Thompson Sampling and emit budget multiplier recommendations.
+
+    For each strategy with ≥10 closed trades: sample Beta(wins+1, losses+1).
+    Rank all sampled scores. Top 25% → 1.3x, Bottom 25% → 0.7x, Middle → 1.0x.
+    Scores persisted to settings["thompson_scores"] for dashboard visibility.
+    """
+    import json as _json
+    from trading.db.store import set_setting
+
+    scored: list[tuple[str, float, int, int, float]] = []  # (strat, score, wins, losses, win_rate)
+
+    for strat_name, trades in by_strategy.items():
+        closed = [t for t in trades if t.get("pnl") is not None]
+        recent = closed[:PERFORMANCE_REVIEW_TRADES]
+        if len(recent) < 10:
+            continue
+        wins = sum(1 for t in recent if t["pnl"] > 0)
+        losses = len(recent) - wins
+        win_rate = wins / len(recent)
+        score = _thompson_sample(wins, losses)
+        scored.append((strat_name, score, wins, losses, win_rate))
+
+    if not scored:
+        return []
+
+    # Persist scores for dashboard
+    try:
+        set_setting("thompson_scores", _json.dumps(
+            {s[0]: round(s[1], 4) for s in scored}
+        ))
+    except Exception:
+        pass
+
+    # Rank and determine tiers
+    scored.sort(key=lambda x: x[1], reverse=True)
+    n = len(scored)
+    top_cutoff = max(1, n // 4)
+    bottom_cutoff = n - max(1, n // 4)
+
+    recs = []
+    for i, (strat_name, score, wins, losses, win_rate) in enumerate(scored):
+        if i < top_cutoff:
+            mult = 1.3
+            action = "increase_budget"
+            tier = "top"
+        elif i >= bottom_cutoff:
+            mult = 0.7
+            action = "reduce_budget"
+            tier = "bottom"
+        else:
+            continue  # Middle tier: no change
+
+        recs.append({
+            "from_agent": PERF_AGENT,
+            "to_agent": RISK_AGENT,
+            "category": "shift_allocation",
+            "action": action,
+            "target": strat_name,
+            "reasoning": (
+                f"Thompson Sampling [{tier} tier, rank {i+1}/{n}]: "
+                f"'{strat_name}' score={score:.3f} "
+                f"(Beta({wins+1},{losses+1}), win_rate={win_rate*100:.0f}%). "
+                f"{'Boosting' if mult > 1 else 'Reducing'} allocation to {mult:.1f}x."
+            ),
+            "data": {
+                "thompson_score": round(score, 4),
+                "win_rate": round(win_rate, 3),
+                "wins": wins,
+                "losses": losses,
+                "suggested_budget_mult": mult,
+                "tier": tier,
+                "rank": i + 1,
+                "total_ranked": n,
+                "auto_approve": True,
+            },
+        })
+
+    return recs
 
 
 # ---------------------------------------------------------------------------
@@ -2139,6 +2190,138 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Challenger agent — peer review of high-stakes recommendations (Phase 1.5)
+# ---------------------------------------------------------------------------
+
+_CHALLENGER_TARGETS = {"emergency_halt", "defensive_posture", "emergency_disable", "tighten_risk"}
+
+
+def _challenger_agent_think(all_recommendations: list[dict]) -> list[dict]:
+    """Review high-stakes recommendations and produce dissent or confirm responses.
+
+    Runs after all 10 primary agents but before execution. Targets only
+    auto-approve recommendations that could halt or severely restrict trading.
+    A dissent strips auto_approve so the journal agent must manually approve it
+    on the next cycle; a confirm adds supporting evidence.
+    """
+    from trading.db.store import get_daily_pnl
+
+    high_stakes = [
+        r for r in all_recommendations
+        if r.get("action") in _CHALLENGER_TARGETS
+        and r.get("data", {}).get("auto_approve")
+    ]
+    if not high_stakes:
+        return []
+
+    # Gather context once for all challenges
+    regime_score = 0.0
+    regime_label = "unknown"
+    try:
+        from trading.intelligence.engine import generate_briefing
+        _b = generate_briefing()
+        regime_score = getattr(_b, "overall_score", 0.0)
+        regime_label = getattr(_b, "overall_regime", "unknown")
+    except Exception:
+        pass
+
+    dd_velocity = 0.0
+    try:
+        daily = get_daily_pnl(days=5)
+        if len(daily) >= 4:
+            peak = max((r.get("portfolio_value", 0) for r in daily), default=0)
+            if peak > 0:
+                current = daily[0].get("portfolio_value", peak)
+                val_3d = daily[3].get("portfolio_value", peak)
+                dd_now = (peak - current) / peak
+                dd_3d = (peak - val_3d) / peak
+                dd_velocity = dd_now - dd_3d  # positive = worsening
+    except Exception:
+        pass
+
+    dissents: list[dict] = []
+
+    for rec in high_stakes:
+        action = rec["action"]
+        from_agent = rec["from_agent"]
+
+        # Is the market regime contradicting this recommendation?
+        regime_contradicts = False
+        if action in ("emergency_halt", "defensive_posture", "emergency_disable"):
+            # Halting during a crash makes sense; halting in a bull market is suspicious
+            regime_contradicts = regime_score > 0.3  # Regime is bullish, halt seems wrong
+        elif action == "tighten_risk":
+            regime_contradicts = regime_score > 0.5 and dd_velocity < -0.01  # Bull + recovering
+
+        # Is drawdown actually recovering?
+        dd_recovering = dd_velocity < -0.01
+
+        if regime_contradicts or dd_recovering:
+            context_parts = []
+            if regime_contradicts:
+                context_parts.append(
+                    f"regime is {regime_label} (score {regime_score:+.2f}) — market conditions "
+                    f"don't support halting"
+                )
+            if dd_recovering:
+                context_parts.append(
+                    f"drawdown is recovering (velocity {dd_velocity*100:+.2f}% over 3 days)"
+                )
+            context = "; ".join(context_parts)
+
+            dissents.append({
+                "from_agent": "challenger_agent",
+                "to_agent": from_agent,
+                "category": "challenge",
+                "action": "dissent",
+                "target": action,
+                "reasoning": (
+                    f"CHALLENGER DISSENT on '{action}' from {from_agent}: {context}. "
+                    f"Removing auto_approve — defer to journal agent for manual review."
+                ),
+                "data": {
+                    "original_action": action,
+                    "regime_score": round(regime_score, 3),
+                    "regime_label": regime_label,
+                    "dd_velocity": round(dd_velocity, 4),
+                    "auto_approve": False,
+                },
+            })
+            # Strip auto_approve from the original recommendation in-place
+            rec["data"]["auto_approve"] = False
+            rec["reasoning"] = (
+                rec["reasoning"]
+                + f" [CHALLENGER DISSENT: {context} — manual review required]"
+            )
+            log.info(
+                "Challenger dissented on '%s' from %s: %s",
+                action, from_agent, context,
+            )
+        else:
+            # Confirm the recommendation with supporting regime context
+            dissents.append({
+                "from_agent": "challenger_agent",
+                "to_agent": from_agent,
+                "category": "challenge",
+                "action": "confirm",
+                "target": action,
+                "reasoning": (
+                    f"CHALLENGER CONFIRMS '{action}' from {from_agent}: "
+                    f"regime={regime_label} ({regime_score:+.2f}), "
+                    f"dd_velocity={dd_velocity*100:+.2f}% — conditions support this action."
+                ),
+                "data": {
+                    "original_action": action,
+                    "regime_score": round(regime_score, 3),
+                    "dd_velocity": round(dd_velocity, 4),
+                    "auto_approve": False,  # Challenger's own rec doesn't auto-execute
+                },
+            })
+
+    return dissents
+
+
+# ---------------------------------------------------------------------------
 # Conversation log — agents talking to each other
 # ---------------------------------------------------------------------------
 
@@ -2705,6 +2888,21 @@ def run_autonomous_cycle() -> dict:
         except Exception as e:
             log.error("%s agent failed: %s", agent_name, e)
             agent_results[agent_name] = f"error: {e}"
+
+    # --- Phase 1.5: Challenger agent — peer review high-stakes recommendations ---
+    try:
+        challenger_recs = _challenger_agent_think(all_recommendations)
+        all_recommendations.extend(challenger_recs)
+        agent_results["challenger"] = len(challenger_recs)
+        if challenger_recs:
+            dissents = sum(1 for r in challenger_recs if r.get("action") == "dissent")
+            confirms = len(challenger_recs) - dissents
+            log.info(
+                "Challenger agent: %d dissents, %d confirms", dissents, confirms
+            )
+    except Exception as e:
+        log.error("Challenger agent failed: %s", e)
+        agent_results["challenger"] = f"error: {e}"
 
     # --- Log the conversation ---
     _log_agent_conversation(all_recommendations)

@@ -386,6 +386,25 @@ def init_db():
                 model TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS counterfactual_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                strength REAL NOT NULL,
+                strategy TEXT NOT NULL,
+                block_reason TEXT NOT NULL,
+                entry_price REAL,
+                exit_price REAL,
+                hypothetical_pnl_pct REAL,
+                data TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_counterfactual_timestamp
+                ON counterfactual_signals(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_counterfactual_symbol
+                ON counterfactual_signals(symbol);
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -738,10 +757,17 @@ def get_journal(limit=20):
 @_retry_on_locked
 def insert_knowledge(title, source, category, content, key_rules=""):
     with get_db() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO knowledge (title, source, category, content, key_rules, ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
             (title, source, category, content, key_rules, _now()),
         )
+        row_id = cursor.lastrowid
+    # Mirror into vector store for semantic search (non-blocking)
+    try:
+        from trading.learning.vector_store import insert_knowledge_embedding
+        insert_knowledge_embedding(row_id, title, content, category)
+    except Exception:
+        pass
 
 
 def _sanitize_fts_query(query: str) -> str:
@@ -799,6 +825,100 @@ def get_knowledge(limit=20):
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Counterfactual Signals ---
+
+import json as _json
+
+
+@_retry_on_locked
+def insert_counterfactual(
+    symbol: str,
+    action: str,
+    strength: float,
+    strategy: str,
+    block_reason: str,
+    entry_price: float | None = None,
+    data: dict | None = None,
+) -> int:
+    """Record a signal that was blocked, for later counterfactual PnL analysis."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO counterfactual_signals "
+            "(timestamp, symbol, action, strength, strategy, block_reason, entry_price, data) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _now(), symbol, action, strength, strategy, block_reason,
+                entry_price, _json.dumps(data) if data else None,
+            ),
+        )
+        return cursor.lastrowid
+
+
+@_retry_on_locked
+def fill_counterfactual_exits(current_prices: dict[str, float]) -> int:
+    """Fill exit_price and hypothetical_pnl_pct for open counterfactuals older than 4h.
+
+    Args:
+        current_prices: {symbol: current_price} mapping.
+
+    Returns number of records updated.
+    """
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+    updated = 0
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, symbol, action, entry_price FROM counterfactual_signals "
+            "WHERE exit_price IS NULL AND entry_price IS NOT NULL AND timestamp <= ?",
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            sym = row["symbol"]
+            exit_p = current_prices.get(sym)
+            if exit_p and row["entry_price"] and row["entry_price"] > 0:
+                direction = 1 if row["action"] == "buy" else -1
+                pnl_pct = direction * (exit_p - row["entry_price"]) / row["entry_price"]
+                conn.execute(
+                    "UPDATE counterfactual_signals SET exit_price=?, hypothetical_pnl_pct=? WHERE id=?",
+                    (exit_p, round(pnl_pct, 6), row["id"]),
+                )
+                updated += 1
+    return updated
+
+
+def get_counterfactual_summary(days: int = 30) -> dict:
+    """Summarise counterfactual outcomes: how often was blocking the right call?"""
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT block_reason, action, hypothetical_pnl_pct "
+            "FROM counterfactual_signals "
+            "WHERE exit_price IS NOT NULL AND timestamp >= ?",
+            (cutoff,),
+        ).fetchall()
+
+    if not rows:
+        return {"total": 0, "by_reason": {}}
+
+    by_reason: dict[str, dict] = {}
+    for r in rows:
+        key = r["block_reason"]
+        if key not in by_reason:
+            by_reason[key] = {"count": 0, "avg_pnl": 0.0, "positive": 0}
+        by_reason[key]["count"] += 1
+        pnl = r["hypothetical_pnl_pct"] or 0.0
+        by_reason[key]["avg_pnl"] += pnl
+        if pnl > 0:
+            by_reason[key]["positive"] += 1
+
+    for v in by_reason.values():
+        if v["count"]:
+            v["avg_pnl"] = round(v["avg_pnl"] / v["count"], 5)
+
+    return {"total": len(rows), "by_reason": by_reason}
 
 
 # --- Param History ---

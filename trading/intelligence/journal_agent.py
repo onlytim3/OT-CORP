@@ -432,7 +432,29 @@ def run_journal_agent() -> dict:
             log.warning("Journal Agent action failed: %s — %s", action, e)
             executed.append((action, f"error: {e}"))
 
-    # 6. Write plan log
+    # 6. Fill counterfactual exits with current prices (non-blocking)
+    try:
+        from trading.db.store import fill_counterfactual_exits
+        from trading.data.aster import get_aster_market_summary
+        summary_data = get_aster_market_summary() or {}
+        # Build price map from any available price field in market summary
+        prices: dict[str, float] = {}
+        try:
+            from trading.execution.aster_client import get_aster_mark_prices
+            for entry in (get_aster_mark_prices() or []):
+                sym = entry.get("symbol", "")
+                mp = entry.get("markPrice")
+                if sym and mp:
+                    prices[sym] = float(mp)
+        except Exception:
+            pass
+        filled = fill_counterfactual_exits(prices)
+        if filled:
+            log.info("Journal Agent: filled %d counterfactual exits", filled)
+    except Exception as e:
+        log.debug("Counterfactual fill skipped: %s", e)
+
+    # 7. Write plan log
     _write_plan_log(journal_text, needs, executed)
 
     summary = {
