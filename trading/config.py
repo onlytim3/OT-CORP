@@ -90,6 +90,23 @@ RISK = {
 ALLOW_SHORT_SELLING = os.getenv("ALLOW_SHORT_SELLING", "true").lower() == "true"
 SHORT_ALLOWED_STRATEGIES = {"cross_basis_rv", "multi_factor_rank", "pairs_trading"}
 
+# --- Asset Universe Groupings (CoinGecko IDs for ASTER_SYMBOLS lookups) ---
+CRYPTO_L1 = ["bitcoin", "ethereum", "solana", "bnb", "xrp", "avalanche-2", "toncoin", "polkadot"]
+CRYPTO_L2 = ["arbitrum", "optimism", "near"]
+CRYPTO_DEFI = ["uniswap", "aave", "injective"]
+CRYPTO_AI: list[str] = []
+CRYPTO_MEME = ["dogecoin"]
+STOCK_PERPS: list[str] = []
+COMMODITY_PERPS = ["gold"]
+INDEX_PERPS: list[str] = []
+
+# --- Commodity ETFs (ticker symbols for Alpaca/yfinance price fetching) ---
+COMMODITY_ETFS = {
+    "gold": "GLD",
+    "silver": "SLV",
+    "oil": "USO",
+}
+
 # --- Default Coins (used by data layer for multi-coin fetches) ---
 # Top assets by liquidity — strategies can use wider subsets from ASTER_SYMBOLS
 DEFAULT_COINS = [

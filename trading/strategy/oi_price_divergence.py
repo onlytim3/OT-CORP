@@ -247,7 +247,6 @@ class OIPriceDivergenceStrategy(Strategy):
         self,
         coin_id: str,
         aster_sym: str,
-        aster_sym: str,
         context_data: dict,
     ) -> Signal:
         """Evaluate OI-price divergence for a single coin."""
