@@ -54,6 +54,12 @@ export const api = {
   // Halt / recovery
   recoveryStatus: `${API_BASE_URL}/api/recovery_status`,
   resumeTrading: `${API_BASE_URL}/api/resume_trading`,
+  // Phase 2: Intelligence panels
+  thompsonScores: `${API_BASE_URL}/api/thompson-scores`,
+  counterfactualAnalysis: `${API_BASE_URL}/api/counterfactual-analysis`,
+  regimeRoutingLog: `${API_BASE_URL}/api/regime-routing-log`,
+  cycleFrequency: `${API_BASE_URL}/api/cycle-frequency`,
+  regimeBacktest: `${API_BASE_URL}/api/backtest/regime-routing`,
 };
 
 // --- Types ---

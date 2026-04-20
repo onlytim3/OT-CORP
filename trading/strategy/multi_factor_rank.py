@@ -20,7 +20,6 @@ import numpy as np
 
 from trading.config import (
     ASTER_SYMBOLS,
-    ASTER_SYMBOLS,
     CRYPTO_L1,
     CRYPTO_DEFI,
 )

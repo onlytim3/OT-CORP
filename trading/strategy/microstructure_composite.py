@@ -195,7 +195,6 @@ class MicrostructureCompositeStrategy(Strategy):
         self,
         coin_id: str,
         aster_sym: str,
-        aster_sym: str,
         funding_rates: dict,
         get_taker_volume_ratio,
         get_orderbook_imbalance,

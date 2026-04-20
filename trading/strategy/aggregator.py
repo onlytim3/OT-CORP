@@ -482,12 +482,28 @@ def _apply_regime_routing(signals: list, raw_all: list) -> list:
             ),
             data=sig.data,
         ))
+        log_action("regime", "routing_decision", symbol=sig.symbol, data={
+            "strategy": sig.strategy,
+            "action": sig.action,
+            "original_strength": round(sig.strength, 4),
+            "adjusted_strength": new_str,
+            "tag": tag,
+            "regime": composite,
+            "strat_type": strat_type,
+            "multiplier": round(combined, 3),
+        })
 
     if composite != "neutral":
         _log.info(
             f"Regime routing applied: composite={composite} "
             f"(HMM={norm_hmm}@{hmm_confidence:.0%}, briefing={norm_briefing}@{briefing_score:+.2f})"
         )
+        try:
+            from trading.db.store import set_setting
+            set_setting("current_regime", composite)
+            set_setting("current_regime_score", str(round(briefing_score, 4)))
+        except Exception:
+            pass
     return result
 
 
