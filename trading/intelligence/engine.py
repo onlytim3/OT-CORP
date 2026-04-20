@@ -154,6 +154,31 @@ def _score_crypto(data: dict) -> dict:
     except Exception:
         pass  # AsterDex data is supplementary, never block
 
+    # Reddit social sentiment (15% weight)
+    try:
+        from trading.data.social import get_social_sentiment_summary
+        social = get_social_sentiment_summary()
+        composite_social = social.get("composite", 0.0)
+        if social.get("active_coins", 0) > 0:
+            score += composite_social * 0.15
+            confidence += 0.15
+            components.append(f"Reddit sentiment={composite_social:+.2f}")
+    except Exception:
+        pass
+
+    # Deribit options flow — put/call ratio + DVOL + skew (20% weight)
+    try:
+        from trading.data.options import get_options_market_data
+        opts = get_options_market_data()
+        opts_composite = opts.get("composite_signal", 0.0)
+        btc_pcr = opts.get("btc", {}).get("put_call_ratio")
+        score += opts_composite * 0.20
+        confidence += 0.20
+        pcr_str = f"P/C={btc_pcr:.2f}" if btc_pcr is not None else "P/C=n/a"
+        components.append(f"Options {pcr_str} signal={opts_composite:+.2f}")
+    except Exception:
+        pass
+
     # Headlines
     headlines = data.get("headlines", {}).get("crypto", [])
     hl_score, top_hl = _score_headlines(headlines, _CRYPTO_BULLISH, _CRYPTO_BEARISH)

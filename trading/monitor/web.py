@@ -2358,6 +2358,193 @@ def api_reports_institutional_generate():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/thompson-scores")
+def api_thompson_scores():
+    """Strategy rankings from Thompson Sampling — scores, tiers, win rates."""
+    try:
+        import json as _json
+        from trading.db.store import get_setting, get_db
+        raw = get_setting("thompson_scores", "{}")
+        scores_map = _json.loads(raw) if raw else {}
+        updated_at = get_setting("thompson_scores_updated_at", "")
+
+        # Enrich with win/loss counts from trades table
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT strategy, pnl FROM trades WHERE status='closed' ORDER BY timestamp DESC"
+            ).fetchall()
+        by_strat: dict = {}
+        for r in rows:
+            s = r["strategy"]
+            if s not in by_strat:
+                by_strat[s] = {"wins": 0, "losses": 0}
+            if r["pnl"] is not None:
+                if r["pnl"] > 0:
+                    by_strat[s]["wins"] += 1
+                else:
+                    by_strat[s]["losses"] += 1
+
+        scored = sorted(scores_map.items(), key=lambda x: x[1], reverse=True)
+        n = len(scored)
+        top_cut = max(1, n // 4)
+        bottom_cut = n - max(1, n // 4)
+
+        result = []
+        for i, (strat, score) in enumerate(scored):
+            stats = by_strat.get(strat, {"wins": 0, "losses": 0})
+            total = stats["wins"] + stats["losses"]
+            win_rate = stats["wins"] / total if total else 0.0
+            if i < top_cut:
+                tier, mult = "top", 1.3
+            elif i >= bottom_cut:
+                tier, mult = "bottom", 0.7
+            else:
+                tier, mult = "mid", 1.0
+            result.append({
+                "strategy": strat,
+                "score": score,
+                "wins": stats["wins"],
+                "losses": stats["losses"],
+                "win_rate": round(win_rate, 3),
+                "budget_mult": mult,
+                "tier": tier,
+                "rank": i + 1,
+            })
+
+        return jsonify({"scores": result, "updated_at": updated_at})
+    except Exception as e:
+        log.error("thompson-scores error: %s", e)
+        return jsonify({"scores": [], "updated_at": "", "error": str(e)})
+
+
+@app.route("/api/counterfactual-analysis")
+def api_counterfactual_analysis():
+    """Counterfactual signal analysis — blocked signal accuracy by gate."""
+    try:
+        from trading.db.store import get_counterfactual_summary, get_db
+        summary = get_counterfactual_summary(days=30)
+
+        with get_db() as conn:
+            recent_rows = conn.execute(
+                "SELECT * FROM counterfactual_signals ORDER BY timestamp DESC LIMIT 20"
+            ).fetchall()
+
+        recent = [dict(r) for r in recent_rows]
+
+        # Accuracy per reason: % of blocks where hypothetical_pnl_pct < 0 (blocking was correct)
+        accuracy = {}
+        by_reason = summary.get("by_reason", {})
+        with get_db() as conn:
+            for reason in by_reason:
+                rows = conn.execute(
+                    "SELECT hypothetical_pnl_pct FROM counterfactual_signals "
+                    "WHERE block_reason=? AND exit_price IS NOT NULL",
+                    (reason,),
+                ).fetchall()
+                if rows:
+                    correct = sum(1 for r in rows if (r["hypothetical_pnl_pct"] or 0) < 0)
+                    accuracy[reason] = round(correct / len(rows), 3)
+
+        return jsonify({
+            "summary": summary,
+            "recent": recent,
+            "accuracy": accuracy,
+        })
+    except Exception as e:
+        log.error("counterfactual-analysis error: %s", e)
+        return jsonify({"summary": {}, "recent": [], "accuracy": {}, "error": str(e)})
+
+
+@app.route("/api/regime-routing-log")
+def api_regime_routing_log():
+    """Recent regime routing decisions — current regime and last 24h routing actions."""
+    try:
+        import json as _json
+        from trading.db.store import get_db, get_setting
+        from datetime import datetime, timezone, timedelta
+
+        current_regime = get_setting("current_regime", "neutral")
+        current_score = float(get_setting("current_regime_score", "0.0") or 0.0)
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM action_log WHERE category='regime' AND action='routing_decision' "
+                "AND timestamp >= ? ORDER BY timestamp DESC LIMIT 50",
+                (cutoff,),
+            ).fetchall()
+
+        recent_blocks = []
+        for r in rows:
+            try:
+                d = _json.loads(r["data"]) if r["data"] else {}
+            except Exception:
+                d = {}
+            recent_blocks.append({
+                "timestamp": r["timestamp"],
+                "symbol": r["symbol"],
+                "strategy": d.get("strategy", ""),
+                "action": d.get("action", ""),
+                "original_strength": d.get("original_strength"),
+                "adjusted_strength": d.get("adjusted_strength"),
+                "tag": d.get("tag", ""),
+                "regime": d.get("regime", current_regime),
+                "strat_type": d.get("strat_type", ""),
+                "multiplier": d.get("multiplier"),
+            })
+
+        return jsonify({
+            "current_regime": current_regime,
+            "current_score": round(current_score, 4),
+            "recent_blocks": recent_blocks,
+        })
+    except Exception as e:
+        log.error("regime-routing-log error: %s", e)
+        return jsonify({"current_regime": "unknown", "current_score": 0.0,
+                        "recent_blocks": [], "error": str(e)})
+
+
+@app.route("/api/backtest/regime-routing")
+def api_backtest_regime_routing():
+    """Run (or return cached) regime routing backtest comparing Sharpe with/without routing."""
+    try:
+        import json as _json
+        from trading.db.store import get_setting, set_setting
+        force = request.args.get("force", "false").lower() == "true"
+        cached_result = get_setting("regime_backtest_result", "")
+        if cached_result and not force:
+            return jsonify(_json.loads(cached_result))
+        from trading.backtest.regime_backtest import run_regime_backtest
+        days = int(request.args.get("days", 90))
+        result = run_regime_backtest(days=days)
+        try:
+            set_setting("regime_backtest_result", _json.dumps(result))
+        except Exception:
+            pass
+        return jsonify(result)
+    except Exception as e:
+        log.error("regime-routing backtest error: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cycle-frequency")
+def api_cycle_frequency():
+    """Current adaptive cycle frequency and reason."""
+    try:
+        from trading.db.store import get_setting
+        interval = float(get_setting("next_cycle_interval_hours", "4.0") or 4.0)
+        reason = get_setting("next_cycle_reason", "default")
+        last_run = get_setting("last_cycle_run", "")
+        return jsonify({
+            "interval_hours": interval,
+            "reason": reason,
+            "last_run": last_run,
+        })
+    except Exception as e:
+        log.error("cycle-frequency error: %s", e)
+        return jsonify({"interval_hours": 4.0, "reason": "unknown", "error": str(e)})
+
+
 def start_dashboard(host="127.0.0.1", port=None, debug=False):
     """Start the web dashboard server."""
     if port is None:

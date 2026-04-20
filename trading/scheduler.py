@@ -1125,6 +1125,40 @@ def run_trading_cycle():
             _notify_safe(notify_error, str(e), "cycle_crash")
         except Exception:
             pass
+    finally:
+        _update_adaptive_cycle_interval()
+
+
+def _compute_next_interval() -> float:
+    """Return next cycle interval in hours based on current regime conviction."""
+    try:
+        from trading.db.store import get_setting
+        score = abs(float(get_setting("current_regime_score", "0.0") or 0.0))
+        regime = get_setting("current_regime", "neutral") or "neutral"
+        # High conviction or strongly directional → double frequency
+        if score >= 0.6 or "strongly" in regime:
+            return 2.0
+        elif score >= 0.35:
+            return 3.0
+        return 4.0
+    except Exception:
+        return 4.0
+
+
+def _update_adaptive_cycle_interval() -> None:
+    """Persist computed next interval and reason to settings."""
+    try:
+        from trading.db.store import get_setting, set_setting
+        interval = _compute_next_interval()
+        regime = get_setting("current_regime", "neutral") or "neutral"
+        score = get_setting("current_regime_score", "0.0") or "0.0"
+        import datetime
+        set_setting("next_cycle_interval_hours", str(interval))
+        set_setting("next_cycle_reason", f"{regime} score={score}")
+        set_setting("last_cycle_run", datetime.datetime.utcnow().isoformat() + "Z")
+        log.info("Next cycle in %.1fh (regime: %s)", interval, regime)
+    except Exception as e:
+        log.debug("Adaptive interval update failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -1889,12 +1923,13 @@ def start_daemon(interval_hours=4, paper=False):
         log.debug("Startup journal/review sync failed (non-fatal): %s", e)
 
     # Schedule recurring tasks
-    schedule.every(interval_hours).hours.do(run_trading_cycle)
+    schedule.every(interval_hours).hours.do(run_trading_cycle).tag("trading")
     schedule.every(15).minutes.do(check_stop_losses)
     schedule.every(30).minutes.do(process_pending_approvals)
     schedule.every().day.at("23:55").do(run_daily_journal)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
     # Position review now runs as part of run_autonomous_cycle() — no separate schedule needed
+    _current_interval = [interval_hours]  # mutable for closure
 
     # Graceful shutdown via SIGTERM/SIGINT
     _shutdown_requested = False
@@ -1918,6 +1953,18 @@ def start_daemon(interval_hours=4, paper=False):
             try:
                 schedule.run_pending()
                 consecutive_errors = 0  # Reset on success
+
+                # Check if adaptive interval changed after last cycle
+                try:
+                    from trading.db.store import get_setting
+                    stored = float(get_setting("next_cycle_interval_hours", str(_current_interval[0])) or _current_interval[0])
+                    if abs(stored - _current_interval[0]) >= 0.5:
+                        schedule.clear("trading")
+                        schedule.every(stored).hours.do(run_trading_cycle).tag("trading")
+                        log.info("Rescheduled trading cycle to every %.1fh", stored)
+                        _current_interval[0] = stored
+                except Exception:
+                    pass
             except KeyboardInterrupt:
                 break
             except Exception as exc:

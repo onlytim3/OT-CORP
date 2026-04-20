@@ -40,6 +40,16 @@ services:
       - key: GROQ_API_KEY
         sync: false
 
+      # ── LLM (Claude Sonnet — operator chat) ──
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # ── Social Sentiment (Reddit PRAW — read-only) ──
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+
       # ── Data Sources ──
       - key: FRED_API_KEY
         sync: false

@@ -1,3 +1,6 @@
+import { ThompsonScoresPanel } from "../components/ThompsonScoresPanel";
+import { CounterfactualPanel } from "../components/CounterfactualPanel";
+import { RegimeRoutingPanel } from "../components/RegimeRoutingPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
@@ -193,6 +196,7 @@ export function Analytics() {
           <TabsTrigger value="funnel">Signal Funnel</TabsTrigger>
           <TabsTrigger value="fills">Fill Quality</TabsTrigger>
           <TabsTrigger value="correlation">Correlation</TabsTrigger>
+          <TabsTrigger value="alpha-engine">Alpha Engine</TabsTrigger>
         </TabsList>
 
         {/* P&L Performance Tab */}
@@ -884,6 +888,15 @@ export function Analytics() {
               })()}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Alpha Engine Tab — Thompson scores, counterfactual gates, regime routing */}
+        <TabsContent value="alpha-engine" className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <ThompsonScoresPanel />
+            <CounterfactualPanel />
+            <RegimeRoutingPanel />
+          </div>
         </TabsContent>
       </Tabs>
     </div>

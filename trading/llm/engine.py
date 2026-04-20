@@ -190,10 +190,31 @@ def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None
 # Core dispatch — tries Groq first, falls back to Gemini
 # ---------------------------------------------------------------------------
 
+def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None:
+    """Call Claude Sonnet via Anthropic SDK. Used for operator chat calls."""
+    key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not key:
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text
+    except Exception as e:
+        log.warning("Claude API error: %s", e)
+        return None
+
+
 def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
     """Send prompt to LLM with call-type-specific token budget.
 
-    Provider priority: Groq (free) → Gemini (fallback).
+    Provider priority for operator chat: Claude Sonnet → Groq → Gemini.
+    Provider priority for all other calls: Groq (free) → Gemini (fallback).
     Always returns a string (graceful degradation to a static message).
 
     Call types: chat, narrative, explain_trade, journal, performance,
@@ -202,6 +223,12 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
     """
     profile = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])
     max_tokens = profile["max_tokens"]
+
+    # Operator chat → Claude Sonnet (better command interpretation)
+    if call_type in ("chat", "chat_full"):
+        result = _call_claude(system, prompt, max_tokens=max_tokens)
+        if result:
+            return result
 
     # Try Groq first (free tier)
     result = _call_groq(system, prompt, max_tokens=max_tokens)
