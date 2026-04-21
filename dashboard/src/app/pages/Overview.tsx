@@ -3,9 +3,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/
 import { Badge } from "../components/ui/badge";
 import { MetricCard } from "../components/MetricCard";
 import { RecoveryBanner } from "../components/RecoveryBanner";
-import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart, Volume2, ShieldAlert } from "lucide-react";
+import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart, Volume2, ShieldAlert, Shield, Trophy, BarChart2, Bot } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
+
+interface RiskBudget {
+  risk_stage: number;
+  daily_loss_pct: number;
+  drawdown_pct: number;
+  strategies: { name: string; score: number; tier: string }[];
+}
 
 function formatQty(qty: number): string {
   if (qty === 0) return '0';
@@ -73,7 +80,7 @@ function ActivityDetailModal({ activity, onClose }: { activity: ActionItem | nul
 
   return (
     <Dialog open={!!activity} onOpenChange={() => onClose()}>
-      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             {activity?.action}
@@ -210,6 +217,7 @@ export function Overview() {
   const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
   const { data: volumes } = usePolling<VolumeAnalysis[]>(api.volume, 30000);
   const { data: marginData } = usePolling<MarginHealth[]>(api.margin, 15000);
+  const { data: riskBudget } = usePolling<RiskBudget>(api.riskBudget, 30000);
   const [selectedPosition, setSelectedPosition] = useState<StatusResponse['positions'][0] | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<ActionItem | null>(null);
   const [positionAnalyses, setPositionAnalyses] = useState<TradeAnalysis[]>([]);
@@ -228,6 +236,29 @@ export function Overview() {
     ? (account?.portfolio_value ? (positionPnl / account.portfolio_value) * 100 : 0)
     : (pnlSnapshot?.cumulative_return ? pnlSnapshot.cumulative_return * 100 : 0);
   const isMock = isUsingMockData();
+
+  // Win streak from closed trades
+  const closedTrades = trades?.filter(t => !t.is_open && t.pnl !== null) || [];
+  let winStreak = 0;
+  for (let i = 0; i < closedTrades.length; i++) {
+    const pnl = closedTrades[i].pnl ?? 0;
+    if (i === 0) { winStreak = pnl >= 0 ? 1 : -1; }
+    else if (winStreak > 0 && pnl >= 0) winStreak++;
+    else if (winStreak < 0 && pnl < 0) winStreak--;
+    else break;
+  }
+
+  // Agent acceptance rate (from actions last 7 days)
+  const recentActions = actions || [];
+  const agentActions = recentActions.filter(a => a.actor === 'autonomous_agent');
+  const agentApplied = agentActions.filter(a => a.action === 'recommendation_applied').length;
+  const agentTotal = agentActions.filter(a => ['recommendation_applied', 'recommendation_rejected'].includes(a.action)).length;
+  const agentAcceptRate = agentTotal > 0 ? Math.round((agentApplied / agentTotal) * 100) : null;
+
+  // Risk stage label + color
+  const riskStage = riskBudget?.risk_stage ?? 0;
+  const riskStageLabel = ['Normal', 'Tighten', 'Conservative', 'Halt'][riskStage] ?? 'Normal';
+  const riskStageColor = ['text-[#00d4aa]', 'text-[#ffa500]', 'text-[#ff8c00]', 'text-[#ff4466]'][riskStage] ?? 'text-[#00d4aa]';
 
   // Find matching open trade for a position (normalize symbols: TONUSD vs TON/USD)
   const findMatchingTrade = (symbol: string): Trade | undefined => {
@@ -312,6 +343,34 @@ export function Overview() {
         />
         <MetricCard title="Open Positions" value={summary?.open_positions ?? positions.length} icon={Activity} iconColor="text-[#4a9eff]" />
         <MetricCard title="Active Strategies" value={summary?.active_strategies ?? 0} icon={Layers} iconColor="text-[#c0c0c0]" />
+      </div>
+
+      {/* New operational stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <MetricCard
+          title="Win Streak"
+          value={winStreak === 0 ? '—' : `${winStreak > 0 ? '+' : ''}${winStreak}`}
+          icon={Trophy}
+          iconColor={winStreak >= 3 ? 'text-[#00d4aa]' : winStreak <= -3 ? 'text-[#ff4466]' : 'text-[#ffa500]'}
+        />
+        <MetricCard
+          title="Peak Drawdown (30d)"
+          value={riskBudget ? `${(riskBudget.drawdown_pct ?? 0).toFixed(1)}%` : '—'}
+          icon={BarChart2}
+          iconColor={(riskBudget?.drawdown_pct ?? 0) < -8 ? 'text-[#ff4466]' : 'text-[#ffa500]'}
+        />
+        <MetricCard
+          title="Risk Stage"
+          value={riskStageLabel}
+          icon={Shield}
+          iconColor={riskStageColor}
+        />
+        <MetricCard
+          title="Agent Accept Rate"
+          value={agentAcceptRate !== null ? `${agentAcceptRate}%` : '—'}
+          icon={Bot}
+          iconColor="text-[#c0c0c0]"
+        />
       </div>
 
       {/* Aggregate Leverage & Sector Exposure */}
@@ -460,7 +519,7 @@ export function Overview() {
 
       {/* Position Detail Modal */}
       <Dialog open={!!selectedPosition} onOpenChange={() => setSelectedPosition(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <Badge variant={selectedPosition?.side === 'short' || selectedPosition?.side === 'sell' ? 'destructive' : 'default'}>

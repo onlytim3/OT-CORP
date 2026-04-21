@@ -94,7 +94,7 @@ SHORT_ALLOWED_STRATEGIES = {"cross_basis_rv", "multi_factor_rank", "pairs_tradin
 CRYPTO_L1 = ["bitcoin", "ethereum", "solana", "bnb", "xrp", "avalanche-2", "toncoin", "polkadot"]
 CRYPTO_L2 = ["arbitrum", "optimism", "near"]
 CRYPTO_DEFI = ["uniswap", "aave", "injective"]
-CRYPTO_AI: list[str] = []
+CRYPTO_AI = ["near", "injective", "arbitrum"]  # AI ecosystem / AI-dapp platforms
 CRYPTO_MEME = ["dogecoin"]
 STOCK_PERPS: list[str] = []
 COMMODITY_PERPS = ["gold"]
@@ -221,6 +221,8 @@ STRATEGY_ENABLED = {
     "funding_forecast": True,
     # News & sentiment
     "news_sentiment": True,
+    # Options flow (Deribit public API — no auth needed)
+    "options_flow": True,
     # Disabled
     "dxy_dollar": False,            # Disabled: requires Alpaca ETF access
     "garch_volatility": False,       # Disabled: vol regimes don't predict direction

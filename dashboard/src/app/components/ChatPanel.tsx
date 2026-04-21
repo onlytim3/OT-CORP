@@ -74,7 +74,10 @@ function formatInline(text: string): ReactNode {
 
 export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'assistant', content: 'Hello! I can help you manage your trading system. Ask me about positions, strategies, or give me commands.' },
+    {
+      role: 'assistant',
+      content: 'Hello! I can help you manage your trading system.\n\nTry: `close BTCUSDT`, `show my P&L`, `what is my drawdown?`, or `/help` for all commands.',
+    },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -136,7 +139,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
   if (!isOpen) return null;
 
   return (
-    <div className="fixed bottom-20 sm:bottom-24 right-2 sm:right-4 w-[calc(100vw-1rem)] sm:w-96 max-h-[70vh] flex flex-col bg-black border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50">
+    <div className="fixed bottom-20 sm:bottom-24 right-2 sm:right-4 w-[calc(100vw-1rem)] sm:w-96 max-h-[92vh] sm:max-h-[70vh] flex flex-col bg-black border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#0a0a0a]">
         <div className="flex items-center gap-2">
@@ -204,7 +207,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-            placeholder="Ask about positions, strategies..."
+            placeholder="Ask anything or type /help for commands..."
             className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:outline-none focus:border-[#4a9eff]/50"
             disabled={loading}
           />

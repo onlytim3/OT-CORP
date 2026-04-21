@@ -60,6 +60,12 @@ export const api = {
   regimeRoutingLog: `${API_BASE_URL}/api/regime-routing-log`,
   cycleFrequency: `${API_BASE_URL}/api/cycle-frequency`,
   regimeBacktest: `${API_BASE_URL}/api/backtest/regime-routing`,
+  // Item 6: New operational endpoints
+  confluenceMatrix: `${API_BASE_URL}/api/confluence-matrix`,
+  cycleMetrics: `${API_BASE_URL}/api/cycle-metrics`,
+  riskBudget: `${API_BASE_URL}/api/risk-budget`,
+  priceChart: (symbol: string, interval = '1h', limit = 48) =>
+    `${API_BASE_URL}/api/price-chart/${symbol}?interval=${interval}&limit=${limit}`,
 };
 
 // --- Types ---

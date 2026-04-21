@@ -197,6 +197,25 @@ def run_trading_cycle():
     console.print(f"[bold]Trading cycle started -- {_now_str()}[/bold]")
     console.print(f"[bold cyan]{'='*60}[/]")
 
+    # --- Macro event risk check ---
+    _macro_sizing_mult = 1.0
+    try:
+        from trading.data.macro_calendar import get_upcoming_events, get_event_sizing_multiplier
+        _macro_sizing_mult = get_event_sizing_multiplier()
+        upcoming = get_upcoming_events(hours=2)
+        if upcoming:
+            event_name = upcoming[0].get("name", "macro event")
+            hours_until = upcoming[0].get("hours_until", 0)
+            log.warning("Macro event risk: %s in %.1fh — sizing mult %.1fx", event_name, hours_until, _macro_sizing_mult)
+            log_action("scheduler", "macro_event_risk", details=f"{event_name} in {hours_until:.1f}h, mult={_macro_sizing_mult}")
+            try:
+                from trading.monitor.notifications import notify_macro_event_risk
+                _notify_safe(notify_macro_event_risk, event_name, hours_until)
+            except Exception:
+                pass
+    except Exception as _me:
+        log.debug("Macro calendar check failed (non-fatal): %s", _me)
+
     try:
         account = _get_account()
         portfolio_value = account["portfolio_value"]
@@ -248,6 +267,11 @@ def run_trading_cycle():
             if applied:
                 for a in applied:
                     console.print(f"  [magenta]ADAPTED {a['strategy']}.{a['param']}: {a['old']} -> {a['new']}[/]")
+                    try:
+                        from trading.monitor.notifications import notify_adaptation_applied
+                        _notify_safe(notify_adaptation_applied, a["strategy"], a["param"], a["old"], a["new"])
+                    except Exception:
+                        pass
                 log_action("system", "adaptations_applied", details=f"{len(applied)} params updated")
         except Exception as e:
             log.warning("Adaptation application failed: %s", e)
@@ -1166,37 +1190,82 @@ def _update_adaptive_cycle_interval() -> None:
 # ---------------------------------------------------------------------------
 
 def _check_scale_in_winners(positions, portfolio_value):
-    """Scale into winning positions."""
-    from trading.config import get_leverage, RISK
+    """Scale into winning positions — ATR-aware, regime-aware, correlation-checked."""
+    from trading.config import RISK
     from trading.db.store import get_setting, set_setting, log_action
     import json
+    from datetime import datetime, timezone, timedelta
 
     max_pos_pct = RISK.get("max_position_pct", 0.15)
+
+    # Only scale in bullish or strongly bullish regimes
+    regime = get_setting("current_regime", "neutral") or "neutral"
+    if "bear" in regime:
+        return []
+
+    # Cooldown: 4h default, 2h in high-conviction regime
+    cooldown_hours = 2.0 if "strongly" in regime else 4.0
+    # Stage 1+ risk: skip scale-ins
+    try:
+        risk_stage = int(get_setting("risk_stage", "0") or "0")
+        if risk_stage >= 1:
+            return []
+    except Exception:
+        pass
+
     scaled = []
     for pos in (positions or []):
         pnl_pct = (pos.get("unrealized_pnlpc", 0) or 0)
-        if pnl_pct < 0.05:  # Need >5% unrealized gain
+        if pnl_pct < 0.08:  # Raised threshold: need >8% unrealized gain
             continue
         symbol = pos.get("symbol", "")
-        # Check if already scaled this cycle
+
+        # Cooldown check
         key = f"scale_in_{symbol}"
         last = get_setting(key)
         if last:
             try:
                 last_data = json.loads(last)
-                from datetime import datetime, timezone, timedelta
-                if datetime.fromisoformat(last_data.get("timestamp","")) > datetime.now(timezone.utc) - timedelta(hours=4):
+                last_ts = datetime.fromisoformat(last_data.get("timestamp", ""))
+                if last_ts > datetime.now(timezone.utc) - timedelta(hours=cooldown_hours):
                     continue
             except Exception:
                 pass
+
         current_pct = abs(pos.get("market_value", 0)) / portfolio_value if portfolio_value else 0
-        addon_pct = min(0.03, max_pos_pct - current_pct)  # 3% or remaining room
+
+        # ATR-aware sizing: fetch ATR if available, scale add inversely with volatility
+        base_addon_pct = 0.03
+        try:
+            from trading.data.aster import get_aster_ohlcv
+            df = get_aster_ohlcv(symbol, interval="1h", limit=14)
+            if df is not None and len(df) >= 14:
+                highs = df["high"].values[-14:]
+                lows = df["low"].values[-14:]
+                closes = df["close"].values[-14:]
+                atr_vals = [max(highs[i] - lows[i],
+                                abs(highs[i] - closes[i-1]),
+                                abs(lows[i] - closes[i-1])) for i in range(1, 14)]
+                atr_pct = (sum(atr_vals) / len(atr_vals)) / closes[-1] if closes[-1] > 0 else 0.02
+                ref_atr = 0.02  # 2% reference ATR
+                base_addon_pct = base_addon_pct * min(ref_atr / max(atr_pct, 0.005), 1.5)
+        except Exception:
+            pass
+
+        addon_pct = min(base_addon_pct, max_pos_pct - current_pct)
         if addon_pct < 0.005:
             continue
+
         addon_value = portfolio_value * addon_pct
         scaled.append({"symbol": symbol, "addon_value": addon_value, "current_pnl_pct": pnl_pct})
         set_setting(key, json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}))
-        log_action("scale_in", f"Scale into winner {symbol} (+${addon_value:.2f})", symbol=symbol)
+        log_action("scale_in", f"Scale into winner {symbol} (+${addon_value:.2f}, gain={pnl_pct*100:.1f}%)",
+                   symbol=symbol, data={"addon_pct": round(addon_pct, 4), "pnl_pct": pnl_pct})
+        try:
+            from trading.monitor.notifications import notify_scale_in
+            _notify_safe(notify_scale_in, symbol, addon_pct, pnl_pct)
+        except Exception:
+            pass
     return scaled
 
 
@@ -1294,12 +1363,26 @@ def check_stop_losses():
                     details=f"P&L: {pnl_pct*100:.1f}% ({pos_side})",
                     data={"pnl_pct": pnl_pct, "qty": pos["qty"], "pos_side": pos_side},
                 )
+                order = None
                 try:
                     order = _execute_order(symbol, exit_side, qty=pos["qty"])
                 except Exception as e:
-                    log.error("Stop-loss %s failed for %s: %s", exit_side, symbol, e)
-                    log_action("trade", f"stop_loss_{exit_side}_failed", symbol=symbol,
-                               result="error", details=f"Order execution failed: {e}")
+                    log.error("Stop-loss %s failed for %s: %s — retrying with market order", exit_side, symbol, e)
+                    try:
+                        order = _execute_order(symbol, exit_side, qty=pos["qty"])
+                        log.warning("Stop-loss retry succeeded for %s", symbol)
+                    except Exception as e2:
+                        log.error("Stop-loss retry also failed for %s: %s", symbol, e2)
+                        log_action("trade", f"stop_loss_{exit_side}_failed", symbol=symbol,
+                                   result="error", details=f"Primary+retry failed: {e2}",
+                                   data={"category": "critical"})
+                        try:
+                            from trading.monitor.notifications import notify_sl_failure
+                            _notify_safe(notify_sl_failure, symbol, pos["qty"], str(e2))
+                        except Exception:
+                            pass
+                        continue
+                if order is None:
                     continue
 
                 if order.get("status") in ("filled", "accepted", "new", "pending_new"):
@@ -1379,6 +1462,11 @@ def check_stop_losses():
                                    result="error", details=f"Order execution failed: {e}")
                 elif alert["severity"] == "warning":
                     log_action("system", "passive_loss_warning", symbol=symbol, details=alert["reason"])
+                    try:
+                        from trading.monitor.notifications import notify_passive_loss
+                        _notify_safe(notify_passive_loss, symbol, alert.get("pnl_pct", 0) * 100)
+                    except Exception:
+                        pass
         except Exception as e:
             log.debug("Passive loss detection error: %s", e, exc_info=True)
 
@@ -1455,6 +1543,11 @@ def check_stop_losses():
                     except Exception as cmt_err:
                         log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
                     log_action("trade", f"volume_exit_{exit_side}", symbol=symbol, result=order["status"])
+                    try:
+                        from trading.monitor.notifications import notify_volume_exit
+                        _notify_safe(notify_volume_exit, symbol, pnl_pct * 100)
+                    except Exception:
+                        pass
                     tracker.remove(symbol)
                     already_sold.add(symbol)
                 else:
