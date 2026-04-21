@@ -1,17 +1,23 @@
-"""LLM engine for OT-CORP trading system.
+"""LLM engine for OT-CORP trading system — two-tier cost routing.
 
-Primary: Groq (free tier, Llama 4 Scout) via OpenAI-compatible API.
-Fallback: Gemini 2.5 Flash via google-genai SDK (if GROQ_API_KEY not set).
+Claude Reasoning Tier (ANTHROPIC_API_KEY): chat, chat_full, agent_synthesis,
+    weekly_synthesis, journal, explain_trade, performance — ~$12-18/month.
 
-All LLM calls route through a unified interface with call-type-specific
-token budgets. Downstream code (chat.py, strategies, journal) is unaffected.
+Groq Free Tier (GROQ_API_KEY): all other automated calls — $0/month.
+
+Gemini Flash (GEMINI_API_KEY): emergency fallback for either tier.
+
+Fallback chains:
+    Reasoning tier:  Claude → Groq → Gemini
+    Groq/free tier:  Groq → Gemini → Claude
 
 Usage:
     from trading.llm.engine import ask_llm, explain_trade, generate_journal
 
-Environment variables (checked in order):
-    GROQ_API_KEY   — Groq free tier (preferred, $0/mo)
-    GEMINI_API_KEY — Google Gemini (fallback)
+Environment variables:
+    ANTHROPIC_API_KEY — Claude Sonnet (reasoning tier, ~$12-18/mo)
+    GROQ_API_KEY      — Groq free tier ($0/mo, 14,400 req/day)
+    GEMINI_API_KEY    — Gemini Flash fallback ($0/mo)
 """
 
 from __future__ import annotations
@@ -28,28 +34,44 @@ log = logging.getLogger(__name__)
 # Model configuration
 # ---------------------------------------------------------------------------
 
-# Groq models (primary — free tier)
+# Groq models (free tier)
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # Gemini models (fallback)
 GEMINI_MODEL_FLASH = "gemini-2.5-flash"
 
-# Per-call-type token budgets (model-agnostic)
+# Claude model (reasoning tier)
+CLAUDE_MODEL = "claude-sonnet-4-6"
+
+# Calls routed to Claude first (high-stakes reasoning, ~$12-18/mo total)
+CLAUDE_TIER: frozenset[str] = frozenset({
+    "chat", "chat_full",
+    "agent_synthesis", "weekly_synthesis",
+    "journal", "explain_trade", "performance",
+})
+
+# Calls routed to Groq first (summarization/formatting, $0/mo)
+GROQ_TIER: frozenset[str] = frozenset({
+    "signal_summary", "annotate", "narrative",
+    "pre_trade", "post_trade", "news_analysis", "risk_event",
+})
+
+# Per-call-type token budgets — tightened on high-frequency automated calls
 CALL_PROFILES: dict[str, dict] = {
     "chat":             {"max_tokens": 4096},
     "chat_full":        {"max_tokens": 6144},
-    "narrative":        {"max_tokens": 1024},
-    "explain_trade":    {"max_tokens": 2048},
-    "journal":          {"max_tokens": 3072},
-    "performance":      {"max_tokens": 2048},
-    "risk_event":       {"max_tokens": 1024},
-    "signal_summary":   {"max_tokens": 512},
-    "annotate":         {"max_tokens": 256},
-    "pre_trade":        {"max_tokens": 1024},
-    "post_trade":       {"max_tokens": 1536},
-    "agent_synthesis":  {"max_tokens": 2048},
-    "weekly_synthesis": {"max_tokens": 3072},
-    "news_analysis":    {"max_tokens": 2560},
+    "narrative":        {"max_tokens": 512},    # 1024 → 512
+    "explain_trade":    {"max_tokens": 1024},   # 2048 → 1024
+    "journal":          {"max_tokens": 1536},   # 3072 → 1536
+    "performance":      {"max_tokens": 1024},   # 2048 → 1024
+    "risk_event":       {"max_tokens": 512},    # 1024 → 512
+    "signal_summary":   {"max_tokens": 256},    # 512 → 256
+    "annotate":         {"max_tokens": 128},    # 256 → 128
+    "pre_trade":        {"max_tokens": 512},    # 1024 → 512
+    "post_trade":       {"max_tokens": 768},    # 1536 → 768
+    "agent_synthesis":  {"max_tokens": 1500},   # 2048 → 1500
+    "weekly_synthesis": {"max_tokens": 2048},   # 3072 → 2048
+    "news_analysis":    {"max_tokens": 1024},   # 2560 → 1024
 }
 
 
@@ -187,19 +209,50 @@ def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None
 
 
 # ---------------------------------------------------------------------------
-# Core dispatch — tries Groq first, falls back to Gemini
+# Provider: Claude (reasoning tier)
 # ---------------------------------------------------------------------------
 
-def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None:
-    """Call Claude Sonnet via Anthropic SDK. Used for operator chat calls."""
-    key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not key:
+_claude_client = None
+_claude_init_attempted = False
+
+
+def _get_claude_client():
+    """Lazy-init the Anthropic client singleton."""
+    global _claude_client, _claude_init_attempted
+    if _claude_client is not None:
+        return _claude_client
+    try:
+        import trading.config  # noqa: F401
+    except Exception:
+        pass
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        if not _claude_init_attempted:
+            _claude_init_attempted = True
+            log.info("ANTHROPIC_API_KEY not set — reasoning tier will use Groq")
         return None
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=key)
+        _claude_client = anthropic.Anthropic(api_key=api_key)
+        log.info("Claude client initialized (model: %s)", CLAUDE_MODEL)
+        return _claude_client
+    except ImportError:
+        log.warning("anthropic package not installed — pip install anthropic")
+        return None
+    except Exception as e:
+        log.warning("Failed to initialize Claude client: %s", e)
+        return None
+
+
+def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None:
+    """Call Claude Sonnet via Anthropic SDK. Returns response text or None."""
+    client = _get_claude_client()
+    if client is None:
+        return None
+    _rate_limit()
+    try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=CLAUDE_MODEL,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": prompt}],
@@ -211,36 +264,50 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
 
 
 def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
-    """Send prompt to LLM with call-type-specific token budget.
+    """Send prompt to LLM with call-type-specific token budget and tier routing.
 
-    Provider priority for operator chat: Claude Sonnet → Groq → Gemini.
-    Provider priority for all other calls: Groq (free) → Gemini (fallback).
+    Reasoning tier (Claude → Groq → Gemini):
+        chat, chat_full, agent_synthesis, weekly_synthesis,
+        journal, explain_trade, performance
+
+    Free tier (Groq → Gemini → Claude emergency):
+        signal_summary, annotate, narrative, pre_trade, post_trade,
+        news_analysis, risk_event
+
     Always returns a string (graceful degradation to a static message).
-
-    Call types: chat, narrative, explain_trade, journal, performance,
-    risk_event, signal_summary, annotate, pre_trade, post_trade,
-    agent_synthesis, weekly_synthesis, news_analysis.
     """
-    profile = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])
-    max_tokens = profile["max_tokens"]
+    max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
-    # Operator chat → Claude Sonnet (better command interpretation)
-    if call_type in ("chat", "chat_full"):
+    if call_type in CLAUDE_TIER:
+        # Reasoning tier: Claude first, free providers as fallback
         result = _call_claude(system, prompt, max_tokens=max_tokens)
         if result:
+            log.debug("ask_llm [%s] → claude", call_type)
+            return result
+        result = _call_groq(system, prompt, max_tokens=max_tokens)
+        if result:
+            log.debug("ask_llm [%s] → groq (claude unavailable)", call_type)
+            return result
+        result = _call_gemini(system, prompt, max_tokens=max_tokens)
+        if result:
+            log.debug("ask_llm [%s] → gemini (claude+groq unavailable)", call_type)
+            return result
+    else:
+        # Free tier: Groq first, Claude only as emergency fallback
+        result = _call_groq(system, prompt, max_tokens=max_tokens)
+        if result:
+            log.debug("ask_llm [%s] → groq", call_type)
+            return result
+        result = _call_gemini(system, prompt, max_tokens=max_tokens)
+        if result:
+            log.debug("ask_llm [%s] → gemini (groq unavailable)", call_type)
+            return result
+        result = _call_claude(system, prompt, max_tokens=max_tokens)
+        if result:
+            log.debug("ask_llm [%s] → claude (groq+gemini unavailable)", call_type)
             return result
 
-    # Try Groq first (free tier)
-    result = _call_groq(system, prompt, max_tokens=max_tokens)
-    if result:
-        return result
-
-    # Fallback to Gemini
-    result = _call_gemini(system, prompt, max_tokens=max_tokens)
-    if result:
-        return result
-
-    return "(LLM unavailable — set GROQ_API_KEY or GEMINI_API_KEY in .env)"
+    return "(LLM unavailable — add ANTHROPIC_API_KEY and GROQ_API_KEY to Render)"
 
 
 # ---------------------------------------------------------------------------
@@ -638,11 +705,21 @@ Be direct. Cite specific headlines. Don't hedge excessively."""
 # ---------------------------------------------------------------------------
 
 def check_llm_availability() -> dict:
-    """Check if any LLM provider is configured and reachable."""
+    """Check which LLM providers are configured and reachable."""
+    try:
+        import trading.config  # noqa: F401
+    except Exception:
+        pass
+
     status = {
-        "groq": {"configured": bool(os.getenv("GROQ_API_KEY")), "reachable": False},
-        "gemini": {"configured": bool(os.getenv("GEMINI_API_KEY")), "reachable": False},
+        "claude": {"configured": bool(os.getenv("ANTHROPIC_API_KEY")), "reachable": False},
+        "groq":   {"configured": bool(os.getenv("GROQ_API_KEY")),      "reachable": False},
+        "gemini": {"configured": bool(os.getenv("GEMINI_API_KEY")),     "reachable": False},
     }
+
+    if status["claude"]["configured"]:
+        result = _call_claude("Say OK", "ping", max_tokens=10)
+        status["claude"]["reachable"] = result is not None
 
     if status["groq"]["configured"]:
         result = _call_groq("Say OK", "ping", max_tokens=10)
@@ -652,10 +729,15 @@ def check_llm_availability() -> dict:
         result = _call_gemini("Say OK", "ping", max_tokens=10)
         status["gemini"]["reachable"] = result is not None
 
-    status["any_available"] = status["groq"]["reachable"] or status["gemini"]["reachable"]
+    reachable = {k for k, v in status.items() if v["reachable"]}
+    status["any_available"] = bool(reachable)
     status["active_provider"] = (
-        "groq" if status["groq"]["reachable"]
-        else "gemini" if status["gemini"]["reachable"]
-        else "none"
+        "+".join(sorted(reachable)) if reachable else "none"
+    )
+    status["reasoning_tier"] = "claude" if status["claude"]["reachable"] else (
+        "groq" if status["groq"]["reachable"] else "none"
+    )
+    status["free_tier"] = "groq" if status["groq"]["reachable"] else (
+        "gemini" if status["gemini"]["reachable"] else "none"
     )
     return status
