@@ -2,8 +2,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { TrendingUp, TrendingDown, DollarSign, Volume2, RefreshCw, ArrowUpDown, ShieldAlert } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { api, usePolling, fetchAPI, type StatusResponse, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
+
+interface OhlcvCandle { time: number; open: number; high: number; low: number; close: number; volume: number; }
 import { Chart } from "../components/Chart";
 
 function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
@@ -77,7 +79,7 @@ function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trad
 
   return (
     <Dialog open={!!trade} onOpenChange={() => onClose()}>
-      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             <Badge variant={trade?.side === 'buy' ? 'default' : 'destructive'}>{trade?.side?.toUpperCase()}</Badge>
@@ -247,6 +249,7 @@ export function Trading() {
   const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
   const { data: volumes } = usePolling<VolumeAnalysis[]>(api.volume, 30000);
   const { data: marginData } = usePolling<MarginHealth[]>(api.margin, 15000);
+  const { data: chartData } = usePolling<OhlcvCandle[]>(api.priceChart('BTCUSDT', '1h', 48), 60000);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
   const positions = status?.positions || [];
@@ -264,24 +267,9 @@ export function Trading() {
           <CardTitle className="text-lg font-bold text-[#e8e8e8]">Market Chart (BTC/USD)</CardTitle>
         </CardHeader>
         <CardContent className="h-[400px] p-0 relative">
-          <Chart 
+          <Chart
             type="candlestick"
-            data={useMemo(() => {
-              // Generate some procedural mock candlestick data for demo purposes
-              const data = [];
-              let time = Math.floor(Date.now() / 1000) - 86400 * 30; // 30 days ago
-              let price = 90000;
-              for (let i = 0; i < 100; i++) {
-                const open = price;
-                const close = price + (Math.random() - 0.45) * 1000;
-                const high = Math.max(open, close) + Math.random() * 500;
-                const low = Math.min(open, close) - Math.random() * 500;
-                data.push({ time, open, high, low, close });
-                price = close;
-                time += 3600 * 4; // 4 hour bars
-              }
-              return data as any;
-            }, [])}
+            data={(chartData && chartData.length > 0 ? chartData : []) as any}
             height={400}
           />
         </CardContent>

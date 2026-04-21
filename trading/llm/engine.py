@@ -295,10 +295,44 @@ System architecture:
 
 def explain_trade(trade: dict, context: dict | None = None) -> str:
     """Explain why a trade was made, in natural language."""
-    prompt = f"Explain this trade decision:\n\n{json.dumps(trade, indent=2, default=str)}"
-    if context:
-        prompt += f"\n\nAdditional context:\n{json.dumps(context, indent=2, default=str)}"
-    prompt += "\n\nExplain: What triggered this trade? What was the reasoning? Was it a good decision given the data?"
+    live_ctx = _build_live_context()
+    trade_data = json.dumps(trade, indent=2, default=str)
+    ctx_block = f"\nAdditional context:\n{json.dumps(context, indent=2, default=str)}" if context else ""
+
+    # Extract key metrics for richer prompt
+    strategy = trade.get("strategy", "unknown")
+    symbol = trade.get("symbol", "unknown")
+    side = trade.get("side", "unknown")
+    pnl = trade.get("pnl")
+    pnl_str = f"P&L: {pnl:+.4f}" if pnl is not None else "P&L: open"
+    data_field = trade.get("data") or {}
+    if isinstance(data_field, str):
+        try:
+            data_field = json.loads(data_field)
+        except Exception:
+            data_field = {}
+    strength = data_field.get("signal_strength") or data_field.get("strength")
+    regime_at_entry = data_field.get("regime", "unknown")
+
+    prompt = f"""Explain this trade decision in detail.
+
+Trade: {side.upper()} {symbol} via {strategy}
+{pnl_str}
+Signal strength at entry: {strength if strength is not None else "unknown"}
+Regime at entry: {regime_at_entry}
+
+Full trade record:
+{trade_data}
+{ctx_block}
+
+Live system state at review:
+{live_ctx}
+
+Explain:
+1. What triggered this trade and why the strategy fired
+2. Whether the signal strength and regime context supported the decision
+3. The outcome assessment (if closed) — was the sizing and timing appropriate?
+4. One specific lesson or observation from this trade"""
     return ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="explain_trade")
 
 
@@ -370,14 +404,70 @@ def annotate_action(action: dict) -> str:
     return ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="annotate")
 
 
+def _build_live_context() -> str:
+    """Assemble live system state into a context block for LLM prompts."""
+    try:
+        from trading.db.store import get_setting, get_db
+        regime = get_setting("current_regime", "neutral") or "neutral"
+        regime_score = get_setting("current_regime_score", "0.0") or "0.0"
+        interval = get_setting("next_cycle_interval_hours", "4.0") or "4.0"
+        risk_stage = get_setting("risk_stage", "0") or "0"
+        cycle_reason = get_setting("next_cycle_reason", "") or ""
+
+        # Pull portfolio snapshot
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT portfolio_value, daily_pnl, peak_value FROM daily_pnl ORDER BY date DESC LIMIT 1"
+            ).fetchone()
+            open_count = conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE status='open'"
+            ).fetchone()[0]
+            recent_wins = conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE status='closed' AND pnl > 0 ORDER BY timestamp DESC LIMIT 20"
+            ).fetchone()[0]
+            recent_total = conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE status='closed' ORDER BY timestamp DESC LIMIT 20"
+            ).fetchone()[0]
+
+        portfolio_val = row["portfolio_value"] if row else None
+        daily_pnl = row["daily_pnl"] if row else None
+        peak = row["peak_value"] if row else None
+        drawdown = round((portfolio_val - peak) / peak * 100, 2) if (portfolio_val and peak and peak > 0) else 0.0
+        win_rate = round(recent_wins / recent_total * 100, 1) if recent_total else 0.0
+
+        risk_labels = {"0": "Normal", "1": "Tighten", "2": "Conservative", "3": "Halt"}
+
+        lines = [
+            f"Regime: {regime} (score {float(regime_score):+.3f})",
+            f"Risk stage: {risk_labels.get(risk_stage, risk_stage)}",
+            f"Cycle frequency: every {interval}h ({cycle_reason})",
+            f"Open positions: {open_count}",
+        ]
+        if portfolio_val:
+            lines.append(f"Portfolio value: ${portfolio_val:,.2f}")
+        if daily_pnl is not None:
+            lines.append(f"Today's P&L: ${daily_pnl:+,.2f}")
+        if drawdown:
+            lines.append(f"Drawdown from peak: {drawdown:+.2f}%")
+        if recent_total:
+            lines.append(f"Recent win rate (last {recent_total}): {win_rate}%")
+        return "\n".join(lines)
+    except Exception:
+        return "(live context unavailable)"
+
+
 def chat_with_context(message: str, context: dict) -> str:
     """Answer an operator question with full trading system context."""
+    live_ctx = _build_live_context()
     prompt = f"""The operator asks: "{message}"
 
-Current system state:
+Live system state:
+{live_ctx}
+
+Additional context:
 {json.dumps(context, indent=2, default=str)}
 
-Answer the operator's question using the system data above. Be specific and cite actual numbers from the data."""
+Answer the operator's question using the data above. Be specific and cite actual numbers."""
 
     return ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="chat")
 

@@ -499,9 +499,16 @@ def _apply_regime_routing(signals: list, raw_all: list) -> list:
             f"(HMM={norm_hmm}@{hmm_confidence:.0%}, briefing={norm_briefing}@{briefing_score:+.2f})"
         )
         try:
-            from trading.db.store import set_setting
+            from trading.db.store import set_setting, get_setting
+            old_regime = get_setting("current_regime") or "neutral"
             set_setting("current_regime", composite)
             set_setting("current_regime_score", str(round(briefing_score, 4)))
+            if old_regime != composite:
+                try:
+                    from trading.monitor.notifications import notify_regime_shift
+                    notify_regime_shift(old_regime, composite, briefing_score)
+                except Exception:
+                    pass
         except Exception:
             pass
     return result

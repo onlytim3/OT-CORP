@@ -1564,6 +1564,25 @@ def api_chat():
     if not message:
         return jsonify({"error": "No message provided"}), 400
 
+    # Built-in /help command
+    if message.strip().lower() in ("/help", "help", "commands"):
+        help_text = (
+            "**Available commands:**\n"
+            "• `close BTCUSDT` — market close a position\n"
+            "• `show my P&L this week` — portfolio summary\n"
+            "• `what is my current drawdown?` — risk snapshot\n"
+            "• `set profile to conservative` — switch risk profile\n"
+            "• `buy ETHUSDT 5%` — open a 5% position\n"
+            "• `explain my last trade` — AI trade breakdown\n"
+            "• `disable kalman_trend` — turn off a strategy\n"
+            "• `enable kalman_trend` — re-enable a strategy\n"
+            "• `show open positions` — list current holdings\n"
+            "• `what is the current regime?` — market regime summary\n"
+            "• `show risk stage` — current risk/drawdown stage\n"
+            "• `/help` — show this command list"
+        )
+        return jsonify({"answer": help_text})
+
     try:
         # Try operator console first (actions + enhanced reads)
         result = handle_operator_message(message)
@@ -2543,6 +2562,188 @@ def api_cycle_frequency():
     except Exception as e:
         log.error("cycle-frequency error: %s", e)
         return jsonify({"interval_hours": 4.0, "reason": "unknown", "error": str(e)})
+
+
+@app.route("/api/confluence-matrix")
+def api_confluence_matrix():
+    """Per-symbol strategy agreement from the last cycle."""
+    try:
+        db = get_db()
+        # Get signals from the last 6 hours (one cycle window)
+        cutoff = datetime.now(timezone.utc).timestamp() - 6 * 3600
+        rows = db.execute(
+            "SELECT symbol, strategy, action, strength FROM signals WHERE timestamp > ? ORDER BY timestamp DESC",
+            (cutoff,),
+        ).fetchall()
+        matrix: dict = {}
+        for row in rows:
+            sym = row["symbol"]
+            if sym not in matrix:
+                matrix[sym] = {"buy": [], "sell": [], "hold": []}
+            action = row["action"] or "hold"
+            if action in matrix[sym]:
+                if row["strategy"] not in matrix[sym][action]:
+                    matrix[sym][action].append(row["strategy"])
+        result = {}
+        for sym, data in matrix.items():
+            buy_count = len(data["buy"])
+            sell_count = len(data["sell"])
+            net = "bullish" if buy_count > sell_count else "bearish" if sell_count > buy_count else "neutral"
+            all_strengths = []
+            try:
+                strength_rows = db.execute(
+                    "SELECT strength FROM signals WHERE symbol=? AND timestamp>?",
+                    (sym, cutoff),
+                ).fetchall()
+                all_strengths = [r["strength"] for r in strength_rows if r["strength"]]
+            except Exception:
+                pass
+            avg_strength = round(sum(all_strengths) / len(all_strengths), 3) if all_strengths else 0.0
+            result[sym] = {
+                "buy": data["buy"],
+                "sell": data["sell"],
+                "net": net,
+                "strength": avg_strength,
+            }
+        return jsonify(result)
+    except Exception as e:
+        log.error("confluence-matrix error: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cycle-metrics")
+def api_cycle_metrics():
+    """Signal funnel metrics for the last completed cycle."""
+    try:
+        db = get_db()
+        cutoff = datetime.now(timezone.utc).timestamp() - 6 * 3600
+        # Count signals collected
+        signals_collected = db.execute(
+            "SELECT COUNT(*) FROM signals WHERE timestamp > ?", (cutoff,)
+        ).fetchone()[0]
+        # Count actions from action_log
+        actions = db.execute(
+            "SELECT action, COUNT(*) as cnt FROM action_log WHERE timestamp > ? GROUP BY action",
+            (cutoff,),
+        ).fetchall()
+        action_counts: dict = {r["action"]: r["cnt"] for r in actions}
+        executed = action_counts.get("trade_executed", 0) + action_counts.get("buy", 0) + action_counts.get("sell", 0)
+        blocked_confluence = action_counts.get("confluence_gate_block", 0)
+        blocked_regime = action_counts.get("regime_routing_block", 0)
+        blocked_risk = action_counts.get("risk_block", 0)
+
+        # Cycle duration from last two cycle_start entries
+        cycle_rows = db.execute(
+            "SELECT timestamp FROM action_log WHERE action='cycle_start' ORDER BY timestamp DESC LIMIT 2"
+        ).fetchall()
+        cycle_duration_s = None
+        if len(cycle_rows) == 2:
+            cycle_duration_s = round(cycle_rows[0]["timestamp"] - cycle_rows[1]["timestamp"])
+
+        last_cycle_ts = cycle_rows[0]["timestamp"] if cycle_rows else None
+        last_cycle_iso = datetime.fromtimestamp(last_cycle_ts, tz=timezone.utc).isoformat() if last_cycle_ts else None
+
+        return jsonify({
+            "signals_collected": signals_collected,
+            "blocked_confluence": blocked_confluence,
+            "blocked_regime": blocked_regime,
+            "blocked_risk": blocked_risk,
+            "executed": executed,
+            "cycle_duration_s": cycle_duration_s,
+            "last_cycle": last_cycle_iso,
+        })
+    except Exception as e:
+        log.error("cycle-metrics error: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/risk-budget")
+def api_risk_budget():
+    """Risk budget: per-strategy Thompson tiers + current risk stage + drawdown."""
+    try:
+        from trading.db.store import get_setting
+        import json as _json
+        risk_stage = int(get_setting("risk_stage", "0") or 0)
+        # Daily P&L
+        daily_pnl_rows = get_daily_pnl(limit=2)
+        daily_loss_pct = 0.0
+        drawdown_pct = 0.0
+        if daily_pnl_rows:
+            today = daily_pnl_rows[0]
+            daily_loss_pct = round(today.get("daily_pnl_pct", 0.0), 3)
+            # Peak drawdown from 30 days
+            pnl_30 = get_daily_pnl(limit=30)
+            if pnl_30:
+                peak = max(r.get("portfolio_value", 0) for r in pnl_30)
+                current_val = pnl_30[0].get("portfolio_value", peak)
+                drawdown_pct = round((current_val - peak) / peak * 100, 3) if peak > 0 else 0.0
+
+        # Thompson scores
+        raw_scores = get_setting("thompson_scores")
+        thompson: dict = {}
+        if raw_scores:
+            try:
+                thompson = _json.loads(raw_scores)
+            except Exception:
+                pass
+
+        strategies = []
+        db = get_db()
+        open_pos_rows = db.execute(
+            "SELECT strategy, COUNT(*) as cnt FROM trades WHERE status='open' GROUP BY strategy"
+        ).fetchall()
+        open_pos: dict = {r["strategy"]: r["cnt"] for r in open_pos_rows}
+
+        for name, score in (thompson.items() if isinstance(thompson, dict) else []):
+            mult = 1.3 if score >= 0.65 else 0.7 if score <= 0.35 else 1.0
+            tier = "top" if score >= 0.65 else "bottom" if score <= 0.35 else "mid"
+            strategies.append({
+                "name": name,
+                "thompson_mult": round(mult, 2),
+                "open_positions": open_pos.get(name, 0),
+                "max_allowed": 3,
+                "tier": tier,
+                "score": round(score, 3),
+            })
+        strategies.sort(key=lambda x: x["score"], reverse=True)
+
+        return jsonify({
+            "strategies": strategies,
+            "risk_stage": risk_stage,
+            "daily_loss_pct": daily_loss_pct,
+            "drawdown_pct": drawdown_pct,
+        })
+    except Exception as e:
+        log.error("risk-budget error: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/price-chart/<symbol>")
+def api_price_chart(symbol):
+    """Real OHLCV candlestick data from AsterDex."""
+    try:
+        from trading.data.aster import get_aster_ohlcv, alpaca_to_aster
+        interval = request.args.get("interval", "1h")
+        limit = int(request.args.get("limit", 48))
+        aster_sym = alpaca_to_aster(symbol) or symbol
+        df = get_aster_ohlcv(aster_sym, interval=interval, limit=limit)
+        if df is None or (hasattr(df, 'empty') and df.empty):
+            return jsonify([])
+        result = []
+        for ts, row in df.iterrows():
+            t = int(ts.timestamp()) if hasattr(ts, 'timestamp') else int(ts) // 1000
+            result.append({
+                "time": t,
+                "open": float(row.get("open", 0)),
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "close": float(row.get("close", 0)),
+                "volume": float(row.get("volume", 0)),
+            })
+        return jsonify(result)
+    except Exception as e:
+        log.error("price-chart error for %s: %s", symbol, e)
+        return jsonify({"error": str(e)}), 500
 
 
 def start_dashboard(host="127.0.0.1", port=None, debug=False):

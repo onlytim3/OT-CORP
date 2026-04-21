@@ -13,7 +13,7 @@ from trading.config import RISK, CRYPTO_SYMBOLS
 from trading.risk.profit_manager import TAKE_PROFIT_PCT, TRAILING_STOP_ACTIVATE
 from trading.risk.volume_gate import compute_volume_ratio, compute_volume_trend, check_spread, check_market_impact
 from trading.data.aster import alpaca_to_aster
-from trading.db.store import get_positions, get_daily_pnl, get_trades
+from trading.db.store import get_positions, get_daily_pnl, get_trades, get_setting, set_setting
 from trading.strategy.base import Signal
 
 log = logging.getLogger(__name__)
@@ -361,7 +361,15 @@ class RiskManager:
 
     def _check_position_size(self, signal: Signal, order_value: float,
                              positions: list[dict]) -> RiskCheck:
-        max_value = self.portfolio_value * self.rules["max_position_pct"]
+        max_pct = self.rules["max_position_pct"]
+        # Stage 1 risk: reduce max position by 20%
+        try:
+            stage = int(get_setting("risk_stage", "0") or "0")
+            if stage >= 1:
+                max_pct *= 0.80
+        except Exception:
+            pass
+        max_value = self.portfolio_value * max_pct
         leverage = LEVERAGE_FACTORS.get(signal.symbol, 1.0)
         existing = sum(
             p["qty"] * (p["current_price"] or p["avg_cost"])
@@ -511,13 +519,28 @@ class RiskManager:
         peak = max(r["portfolio_value"] for r in pnl_records)
         current = pnl_records[0]["portfolio_value"]
         drawdown = (peak - current) / peak if peak > 0 else 0
+
+        # --- Graduated risk response ---
+        stage_2_threshold = self.rules.get("drawdown_stage2_pct", 0.08)   # 8%
+        stage_1_threshold = self.rules.get("drawdown_stage1_pct", 0.05)   # 5%
+
         if drawdown > self.rules["max_drawdown_pct"]:
+            set_setting("risk_stage", "3")
             return RiskCheck(
                 allowed=False,
                 reason=f"Drawdown {drawdown*100:.1f}% exceeds max {self.rules['max_drawdown_pct']*100:.0f}% — ALL trading halted",
                 signal=Signal("risk", "", "hold", 0, ""),
             )
-        return RiskCheck(allowed=True, reason="Drawdown OK", signal=Signal("risk", "", "hold", 0, ""))
+        elif drawdown > stage_2_threshold:
+            # Stage 2: conservative mode behaviour (existing circuit breaker handles full logic)
+            set_setting("risk_stage", "2")
+        elif drawdown > stage_1_threshold:
+            # Stage 1: tighten confluence, reduce max position by 20%
+            set_setting("risk_stage", "1")
+        else:
+            set_setting("risk_stage", "0")
+
+        return RiskCheck(allowed=True, reason=f"Drawdown {drawdown*100:.1f}% OK (stage {get_setting('risk_stage','0')})", signal=Signal("risk", "", "hold", 0, ""))
 
     def _check_cash_reserve(self, order_value: float,
                             positions: list[dict]) -> RiskCheck:

@@ -134,6 +134,15 @@ def activate_recovery_mode(reason: str = "Drawdown halt cleared"):
         result="active",
     )
     logger.warning(f"RECOVERY MODE ACTIVATED: {reason}")
+    try:
+        from trading.monitor.notifications import notify_circuit_breaker
+        # Extract drawdown pct from reason string if present
+        import re
+        dd_match = re.search(r"(\d+\.?\d*)%", reason)
+        dd_pct = float(dd_match.group(1)) if dd_match else 0.0
+        notify_circuit_breaker(reason, dd_pct)
+    except Exception:
+        pass
 
 
 def deactivate_recovery_mode():

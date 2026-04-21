@@ -317,6 +317,169 @@ def notify_cycle_summary(signals: int, executed: int, blocked: int) -> None:
             pass
 
 
+def notify_circuit_breaker(reason: str, drawdown_pct: float) -> None:
+    """Send alert when circuit breaker activates."""
+    try:
+        title = "⚡ Circuit Breaker Activated"
+        message = (
+            f"Trading halted — circuit breaker triggered.\n"
+            f"Reason: {reason}\n"
+            f"Drawdown: {drawdown_pct:+.2f}%\n"
+            f"System entering conservative recovery mode."
+        )
+        fields = [
+            {"name": "Reason", "value": reason, "inline": False},
+            {"name": "Drawdown", "value": f"{drawdown_pct:+.2f}%", "inline": True},
+            {"name": "Status", "value": "Conservative Mode", "inline": True},
+        ]
+        _log_to_console(title, message, "error")
+        sent = _send_discord(title, message, "error", fields=fields)
+        if not sent:
+            _send_telegram(title, message, "error")
+    except Exception:
+        pass
+
+
+def notify_regime_shift(old_regime: str, new_regime: str, score: float) -> None:
+    """Send alert when market regime changes."""
+    try:
+        direction = "↑" if score > 0 else "↓"
+        title = f"Regime Shift: {old_regime} → {new_regime}"
+        message = (
+            f"Market regime changed.\n"
+            f"Previous: {old_regime}\n"
+            f"Current: {new_regime} (score {score:+.3f})\n"
+            f"Routing multipliers and cycle frequency will adjust."
+        )
+        level = "info" if "bullish" in new_regime else "warning"
+        _log_to_console(title, message, level)
+        sent = _send_discord(title, message, level)
+        if not sent:
+            _send_telegram(title, message, level)
+    except Exception:
+        pass
+
+
+def notify_passive_loss(symbol: str, pnl_pct: float) -> None:
+    """Send alert when a position slips past stop-loss threshold passively."""
+    try:
+        title = f"Passive Loss Detected: {symbol}"
+        message = (
+            f"Position {symbol} crossed loss threshold without stop-loss trigger.\n"
+            f"Current P&L: {pnl_pct:+.2f}%\n"
+            f"Immediate review recommended."
+        )
+        _log_to_console(title, message, "warning")
+        sent = _send_discord(title, message, "warning")
+        if not sent:
+            _send_telegram(title, message, "warning")
+    except Exception:
+        pass
+
+
+def notify_volume_exit(symbol: str, pnl_pct: float) -> None:
+    """Send alert when a position is closed due to volume dry-up."""
+    try:
+        title = f"Volume Exit: {symbol}"
+        message = (
+            f"Position {symbol} closed — market volume dried up.\n"
+            f"P&L at exit: {pnl_pct:+.2f}%\n"
+            f"Liquidity risk avoided."
+        )
+        _log_to_console(title, message, "info")
+        sent = _send_discord(title, message, "info")
+        if not sent:
+            _send_telegram(title, message, "info")
+    except Exception:
+        pass
+
+
+def notify_adaptation_applied(strategy: str, param: str, old_val: str, new_val: str) -> None:
+    """Send alert when an autonomous agent changes a strategy parameter."""
+    try:
+        title = f"Adaptation Applied: {strategy}"
+        message = (
+            f"Strategy parameter updated autonomously.\n"
+            f"Strategy: {strategy}\n"
+            f"Parameter: {param}\n"
+            f"Change: {old_val} → {new_val}"
+        )
+        _log_to_console(title, message, "info")
+        sent = _send_discord(title, message, "info")
+        if not sent:
+            _send_telegram(title, message, "info")
+    except Exception:
+        pass
+
+
+def notify_scale_in(symbol: str, add_pct: float, total_pnl_pct: float) -> None:
+    """Send alert when a winning position is scaled into."""
+    try:
+        title = f"Scaled Into Winner: {symbol}"
+        message = (
+            f"Added {add_pct*100:.1f}% to {symbol}.\n"
+            f"Current unrealized gain: {total_pnl_pct*100:+.1f}%\n"
+            f"Position momentum confirmed."
+        )
+        _log_to_console(title, message, "trade")
+        sent = _send_discord(title, message, "trade", color_override=0x2ECC71)
+        if not sent:
+            _send_telegram(title, message, "trade")
+    except Exception:
+        pass
+
+
+def notify_risk_block(symbol: str, reason: str, strategy: str) -> None:
+    """Send alert when risk manager blocks a trade with specific reason."""
+    try:
+        title = f"Trade Blocked: {symbol}"
+        message = (
+            f"Risk manager blocked a {strategy} signal on {symbol}.\n"
+            f"Reason: {reason}"
+        )
+        _log_to_console(title, message, "warning")
+        sent = _send_discord(title, message, "warning")
+        if not sent:
+            _send_telegram(title, message, "warning")
+    except Exception:
+        pass
+
+
+def notify_sl_failure(symbol: str, qty: float, error: str) -> None:
+    """Send CRITICAL alert when a stop-loss order fails and retry also failed."""
+    try:
+        title = f"🚨 CRITICAL: Stop-Loss Failed — {symbol}"
+        message = (
+            f"Stop-loss execution FAILED for {symbol}.\n"
+            f"Qty: {qty:.6f}\n"
+            f"Error: {error}\n\n"
+            f"MANUAL INTERVENTION MAY BE REQUIRED."
+        )
+        _log_to_console(title, message, "error")
+        # Send to both channels simultaneously (critical escalation)
+        _send_discord(title, message, "error")
+        _send_telegram(title, message, "error")
+    except Exception:
+        pass
+
+
+def notify_macro_event_risk(event_name: str, hours_until: float) -> None:
+    """Send alert when a major macro event is approaching."""
+    try:
+        title = f"Macro Event Risk: {event_name}"
+        message = (
+            f"High-impact macro event in {hours_until:.1f} hours.\n"
+            f"Event: {event_name}\n"
+            f"Action: Position sizing reduced, new entries restricted near event."
+        )
+        _log_to_console(title, message, "warning")
+        sent = _send_discord(title, message, "warning")
+        if not sent:
+            _send_telegram(title, message, "warning")
+    except Exception:
+        pass
+
+
 def notify_deployment_failure(missing: list[str], failed: dict[str, str]) -> None:
     """Send critical deployment failure alert to ALL channels (escalation level 1).
 
