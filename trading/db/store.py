@@ -495,6 +495,22 @@ def set_setting(key: str, value: str):
         )
 
 
+def get_intelligence_briefing() -> dict:
+    """Return latest intelligence briefing summary from persisted settings.
+
+    Reads regime score and label written by the scheduler after each cycle.
+    Avoids calling generate_briefing() (which makes network calls) inside agents.
+    """
+    try:
+        score = float(get_setting("current_regime_score", "0.0") or "0.0")
+    except (ValueError, TypeError):
+        score = 0.0
+    return {
+        "regime_score": score,
+        "regime": get_setting("current_regime", "neutral") or "neutral",
+    }
+
+
 # --- Trade Operations ---
 
 @_retry_on_locked
