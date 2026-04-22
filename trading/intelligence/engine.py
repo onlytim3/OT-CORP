@@ -13,8 +13,10 @@ Categories:
 
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from trading.data.news import fetch_all_category_data
 
@@ -105,33 +107,37 @@ def _score_crypto(data: dict) -> dict:
     """Score the crypto market category.
 
     Inputs: Fear & Greed, CoinGecko global metrics, crypto headlines.
+
+    Weights (sum to 1.0 when all sources present):
+      F&G=0.30, CoinGecko=0.20, AsterDex funding=0.10,
+      AsterDex flow=0.05, Social=0.10, Options=0.15, Headlines=0.10
     """
     score = 0.0
     components = []
     confidence = 0.0
 
-    # Fear & Greed (strongest signal for crypto sentiment)
+    # Fear & Greed (strongest signal for crypto sentiment) — 30% weight
     fg = data.get("fear_greed")
     if fg:
         fg_value = fg.get("value", 50)
         # Map 0-100 to -1.0 to +1.0, centered at 50
         fg_score = (fg_value - 50) / 50.0
-        score += fg_score * 0.4  # 40% weight
-        confidence += 0.4
+        score += fg_score * 0.30
+        confidence += 0.30
         components.append(f"F&G={fg_value} ({fg.get('classification', '?')})")
 
-    # CoinGecko global metrics
+    # CoinGecko global metrics — 20% weight
     cg = data.get("crypto_global")
     if cg:
         mc_change = cg.get("market_cap_change_24h_pct", 0)
-        # Map +-10% change to +-0.3 score
+        # Map +-10% change to +-1.0 score
         cg_score = max(min(mc_change / 10.0, 1.0), -1.0)
-        score += cg_score * 0.3  # 30% weight
-        confidence += 0.3
+        score += cg_score * 0.20
+        confidence += 0.20
         btc_dom = cg.get("btc_dominance", 0)
         components.append(f"MCap 24h {mc_change:+.1f}%, BTC dom {btc_dom:.1f}%")
 
-    # AsterDex derivatives data (funding rates + order flow)
+    # AsterDex derivatives data (funding rates + order flow) — 15% weight total
     try:
         from trading.data.aster import get_aster_market_summary
         aster = get_aster_market_summary()
@@ -139,52 +145,52 @@ def _score_crypto(data: dict) -> dict:
             # Funding sentiment: negative funding = overleveraged shorts = bullish
             funding_sent = aster.get("funding_sentiment", 0)
             if funding_sent != 0:
-                funding_score = -max(min(funding_sent * 100, 1.0), -1.0) * 0.15
+                funding_score = -max(min(funding_sent * 100, 1.0), -1.0) * 0.10
                 score += funding_score
-                confidence += 0.1
+                confidence += 0.10
                 components.append(f"AsterDex funding={funding_sent*100:+.3f}%")
 
-            # Volume flow: net taker buy/sell pressure
+            # Volume flow: net taker buy/sell pressure — 5% weight
             vol_flow = aster.get("volume_flow", 0)
             if vol_flow != 0:
-                flow_score = max(min(vol_flow, 1.0), -1.0) * 0.1
+                flow_score = max(min(vol_flow, 1.0), -1.0) * 0.05
                 score += flow_score
                 confidence += 0.05
                 components.append(f"Taker flow={vol_flow:+.2f}")
     except Exception:
         pass  # AsterDex data is supplementary, never block
 
-    # Reddit social sentiment (15% weight)
+    # Reddit social sentiment — 10% weight
     try:
         from trading.data.social import get_social_sentiment_summary
         social = get_social_sentiment_summary()
         composite_social = social.get("composite", 0.0)
         if social.get("active_coins", 0) > 0:
-            score += composite_social * 0.15
-            confidence += 0.15
+            score += composite_social * 0.10
+            confidence += 0.10
             components.append(f"Reddit sentiment={composite_social:+.2f}")
     except Exception:
         pass
 
-    # Deribit options flow — put/call ratio + DVOL + skew (20% weight)
+    # Deribit options flow — put/call ratio + DVOL + skew — 15% weight
     try:
         from trading.data.options import get_options_market_data
         opts = get_options_market_data()
         opts_composite = opts.get("composite_signal", 0.0)
         btc_pcr = opts.get("btc", {}).get("put_call_ratio")
-        score += opts_composite * 0.20
-        confidence += 0.20
+        score += opts_composite * 0.15
+        confidence += 0.15
         pcr_str = f"P/C={btc_pcr:.2f}" if btc_pcr is not None else "P/C=n/a"
         components.append(f"Options {pcr_str} signal={opts_composite:+.2f}")
     except Exception:
         pass
 
-    # Headlines
+    # Headlines — 10% weight
     headlines = data.get("headlines", {}).get("crypto", [])
     hl_score, top_hl = _score_headlines(headlines, _CRYPTO_BULLISH, _CRYPTO_BEARISH)
     if headlines:
-        score += hl_score * 0.3  # 30% weight
-        confidence += 0.3
+        score += hl_score * 0.10
+        confidence += 0.10
 
     score = round(max(min(score, 1.0), -1.0), 3)
     confidence = round(min(confidence, 1.0), 2)
@@ -203,35 +209,38 @@ def _score_commodities(data: dict) -> dict:
     """Score the commodities/precious metals category.
 
     Inputs: commodity headlines, dollar strength (inverse relationship).
+
+    Weights (sum to 1.0 when all sources present):
+      Headlines=0.50, DXY=0.30, CPI=0.20
     """
     score = 0.0
     components = []
     confidence = 0.0
 
-    # Headlines
+    # Headlines — 50% weight
     headlines = data.get("headlines", {}).get("commodities", [])
     hl_score, top_hl = _score_headlines(headlines, _COMMODITY_BULLISH, _COMMODITY_BEARISH)
     if headlines:
-        score += hl_score * 0.5
-        confidence += 0.4
+        score += hl_score * 0.50
+        confidence += 0.50
 
-    # Dollar index (inverse: strong dollar = bearish commodities)
+    # Dollar index (inverse: strong dollar = bearish commodities) — 30% weight
     macro = data.get("macro", {})
     dxy = macro.get("dxy_index")
     if dxy and dxy.get("change") is not None:
         dxy_change = dxy["change"]
         dxy_score = -max(min(dxy_change / 2.0, 1.0), -1.0)
-        score += dxy_score * 0.3
-        confidence += 0.3
+        score += dxy_score * 0.30
+        confidence += 0.30
         components.append(f"DXY={dxy['value']:.1f} (chg {dxy_change:+.2f})")
 
-    # Inflation data (rising CPI = bullish for gold)
+    # Inflation data (rising CPI = bullish for gold) — 20% weight
     cpi = macro.get("cpi")
     if cpi and cpi.get("change") is not None:
         cpi_change = cpi["change"]
         cpi_score = max(min(cpi_change / 0.5, 1.0), -1.0)
-        score += cpi_score * 0.2
-        confidence += 0.2
+        score += cpi_score * 0.20
+        confidence += 0.20
         components.append(f"CPI={cpi['value']:.1f} ({cpi.get('period_name', '')} {cpi.get('year', '')})")
 
     score = round(max(min(score, 1.0), -1.0), 3)
@@ -251,6 +260,9 @@ def _score_currency(data: dict) -> dict:
     """Score the currency/dollar category.
 
     Inputs: FRED data (fed funds rate, DXY, yield curve).
+
+    Weights (sum to 1.0 when all sources present):
+      DXY=0.50, Fed Funds=0.20, Yield curve=0.30
     """
     score = 0.0
     components = []
@@ -258,32 +270,34 @@ def _score_currency(data: dict) -> dict:
 
     macro = data.get("macro", {})
 
-    # Dollar index trend
+    # Dollar index trend — 50% weight
     dxy = macro.get("dxy_index")
     if dxy and dxy.get("change") is not None:
         dxy_change = dxy["change"]
         dxy_score = max(min(dxy_change / 2.0, 1.0), -1.0)
-        score += dxy_score * 0.4
-        confidence += 0.4
+        score += dxy_score * 0.50
+        confidence += 0.50
         components.append(f"DXY={dxy['value']:.1f} (chg {dxy_change:+.2f})")
 
-    # Fed funds rate
+    # Fed funds rate — 20% weight (informational, higher rate = stronger dollar)
     ffr = macro.get("fed_funds_rate")
     if ffr:
         target = f"{ffr.get('target_low', 0):.2f}-{ffr.get('target_high', 0):.2f}%"
         components.append(f"Fed Funds={ffr['value']:.2f}% (target {target})")
-        confidence += 0.2
+        confidence += 0.20
 
-    # Yield curve (10Y-2Y spread from Treasury)
+    # Yield curve (10Y-2Y spread from Treasury) — 30% weight
     yields = macro.get("yield_curve")
     if yields:
         spread_val = yields["spread"]
+        # Inverted curve signals tightening / dollar strength concern
+        yc_score = max(min(spread_val / 1.0, 1.0), -1.0) * 0.30
+        score += yc_score
         if spread_val < 0:
             components.append(f"Yield curve INVERTED ({spread_val:+.3f})")
-            score -= 0.1
         else:
             components.append(f"Yield curve normal ({spread_val:+.3f})")
-        confidence += 0.2
+        confidence += 0.30
 
     score = round(max(min(score, 1.0), -1.0), 3)
     confidence = round(min(confidence, 1.0), 2)
@@ -302,38 +316,43 @@ def _score_macro(data: dict) -> dict:
     """Score the macro/cross-asset regime.
 
     Inputs: macro headlines, FRED data, economic calendar.
+
+    Weights (sum to 1.0 when all sources present):
+      Headlines=0.40, Unemployment=0.35, Yield curve=0.25
     """
     score = 0.0
     components = []
     confidence = 0.0
 
-    # Headlines
+    # Headlines — 40% weight
     headlines = data.get("headlines", {}).get("macro", [])
     hl_score, top_hl = _score_headlines(headlines, _MACRO_RISK_ON, _MACRO_RISK_OFF)
     if headlines:
-        score += hl_score * 0.4
-        confidence += 0.3
+        score += hl_score * 0.40
+        confidence += 0.40
 
-    # Unemployment trend
+    # Unemployment trend — 35% weight
     macro = data.get("macro", {})
     unemp = macro.get("unemployment")
     if unemp and unemp.get("change") is not None:
         unemp_score = -max(min(unemp["change"] / 0.5, 1.0), -1.0)
-        score += unemp_score * 0.3
-        confidence += 0.3
+        score += unemp_score * 0.35
+        confidence += 0.35
         components.append(f"Unemployment={unemp['value']:.1f}% (chg {unemp['change']:+.1f})")
 
-    # Yield curve as macro signal
+    # Yield curve as macro signal — 25% weight
     yields = macro.get("yield_curve")
     if yields:
         spread_val = yields["spread"]
+        yc_score = max(min(spread_val / 1.0, 1.0), -1.0) * 0.25
+        score += yc_score
         if spread_val < -0.2:
-            score -= 0.2
             components.append(f"Yield curve deeply inverted ({spread_val:+.3f}) — recession risk")
         elif spread_val > 0.5:
-            score += 0.1
             components.append(f"Yield curve normal ({spread_val:+.3f}) — expansion")
-        confidence += 0.2
+        else:
+            components.append(f"Yield curve ({spread_val:+.3f})")
+        confidence += 0.25
 
     # Event risk from calendar
     calendar = data.get("calendar", [])
@@ -374,6 +393,115 @@ def _score_label(score: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Freshness tracking
+# ---------------------------------------------------------------------------
+
+def _compute_headline_freshness(headlines_by_category: dict, window_minutes: int = 60) -> dict[str, float]:
+    """Compute freshness score for each news category.
+
+    Freshness is the fraction of headlines published within *window_minutes*
+    of the current UTC time.  Returns a mapping of category → 0.0-1.0.
+
+    Args:
+        headlines_by_category: dict keyed by category name, values are lists
+            of headline dicts that may contain a ``published_at`` ISO string.
+        window_minutes: age threshold in minutes (default 60).
+
+    Returns:
+        Dict mapping category name → freshness fraction (0.0 when no
+        headlines carry parseable timestamps).
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=window_minutes)
+    result: dict[str, float] = {}
+
+    for category, headlines in headlines_by_category.items():
+        if not headlines:
+            result[category] = 0.0
+            continue
+
+        fresh = 0
+        dated = 0
+        for h in headlines:
+            raw_ts = h.get("published_at") or h.get("publishedAt") or h.get("timestamp")
+            if not raw_ts:
+                continue
+            dated += 1
+            try:
+                # Accept ISO strings with or without timezone suffix
+                ts_str = str(raw_ts).rstrip("Z")
+                if "+" not in ts_str and ts_str.count("-") < 3:
+                    ts_str += "+00:00"
+                pub = datetime.fromisoformat(ts_str)
+                if pub.tzinfo is None:
+                    pub = pub.replace(tzinfo=timezone.utc)
+                if pub >= cutoff:
+                    fresh += 1
+            except (ValueError, TypeError):
+                pass
+
+        result[category] = round(fresh / dated, 3) if dated > 0 else 0.0
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# News burst detection
+# ---------------------------------------------------------------------------
+
+def detect_news_bursts(headlines_by_category: dict, window_minutes: int = 30,
+                       burst_threshold: int = 5) -> list[dict]:
+    """Detect unusual concentrations of news (bursts) per category.
+
+    A burst is declared when the number of headlines published within
+    *window_minutes* of now exceeds *burst_threshold*.
+
+    Args:
+        headlines_by_category: dict keyed by category, values are lists of
+            headline dicts that may contain a ``published_at`` ISO string.
+        window_minutes: rolling window for counting recent headlines.
+        burst_threshold: minimum recent-headline count to declare a burst.
+
+    Returns:
+        List of burst descriptors::
+
+            [{"category": str, "recent_count": int, "window_minutes": int}, ...]
+
+        Empty list when no bursts are detected.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=window_minutes)
+    bursts: list[dict] = []
+
+    for category, headlines in headlines_by_category.items():
+        recent = 0
+        for h in headlines:
+            raw_ts = h.get("published_at") or h.get("publishedAt") or h.get("timestamp")
+            if not raw_ts:
+                continue
+            try:
+                ts_str = str(raw_ts).rstrip("Z")
+                if "+" not in ts_str and ts_str.count("-") < 3:
+                    ts_str += "+00:00"
+                pub = datetime.fromisoformat(ts_str)
+                if pub.tzinfo is None:
+                    pub = pub.replace(tzinfo=timezone.utc)
+                if pub >= cutoff:
+                    recent += 1
+            except (ValueError, TypeError):
+                pass
+
+        if recent >= burst_threshold:
+            bursts.append({
+                "category": category,
+                "recent_count": recent,
+                "window_minutes": window_minutes,
+            })
+
+    return bursts
+
+
+# ---------------------------------------------------------------------------
 # Main briefing
 # ---------------------------------------------------------------------------
 
@@ -387,6 +515,8 @@ class MarketBriefing:
     overall_score: float = 0.0
     news_interpretation: str = ""       # LLM analysis of headlines
     asset_impacts: dict = field(default_factory=dict)  # {coin_id: score}
+    headline_freshness: dict[str, float] = field(default_factory=dict)  # category → 0-1
+    news_bursts: list[dict] = field(default_factory=list)  # detected burst events
 
     def category_score(self, category: str) -> float:
         """Get score for a specific category, defaulting to 0.0."""
@@ -416,6 +546,10 @@ class MarketBriefing:
             d["news_interpretation"] = self.news_interpretation[:5000]
         if self.asset_impacts:
             d["asset_impacts"] = self.asset_impacts
+        if self.headline_freshness:
+            d["headline_freshness"] = self.headline_freshness
+        if self.news_bursts:
+            d["news_bursts"] = self.news_bursts
         return d
 
 
@@ -453,19 +587,30 @@ def generate_briefing() -> MarketBriefing:
     # Collect event risk across categories
     event_risk = macro.get("event_risk", [])
 
-    # Overall regime: weighted average
-    # Macro gets highest weight as it affects everything
-    weights = {"crypto": 0.25, "commodities": 0.20, "currency": 0.20, "macro": 0.35}
-    overall = sum(
+    # Overall regime: two-tier weighted average.
+    # Macro (slow-moving FRED/calendar data) contributes 25% of the final score.
+    # Real-time categories (crypto, commodities, currency) share the remaining 75%
+    # with weights proportional to their market relevance (sum to 0.75).
+    _MACRO_WEIGHT = 0.25
+    _RT_WEIGHTS = {"crypto": 0.375, "commodities": 0.1875, "currency": 0.1875}
+    # _RT_WEIGHTS sum: 0.375+0.1875+0.1875 = 0.75 ✓  total with macro: 1.0 ✓
+    rt_score = sum(
         categories[cat]["score"] * w
-        for cat, w in weights.items()
+        for cat, w in _RT_WEIGHTS.items()
     )
-    overall = round(overall, 3)
+    overall = round(rt_score + categories["macro"]["score"] * _MACRO_WEIGHT, 3)
     regime = _score_label(overall)
 
     # Event risk dampens confidence in any direction
     if event_risk:
         regime = f"{regime} (event risk)"
+
+    # Freshness and burst detection across all headline categories
+    headlines_by_category: dict[str, list] = raw.get("headlines", {})
+    freshness = _compute_headline_freshness(headlines_by_category)
+    bursts = detect_news_bursts(headlines_by_category)
+    if bursts:
+        log.info("News bursts detected: %s", bursts)
 
     briefing = MarketBriefing(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -473,6 +618,8 @@ def generate_briefing() -> MarketBriefing:
         event_risk=event_risk,
         overall_regime=regime,
         overall_score=overall,
+        headline_freshness=freshness,
+        news_bursts=bursts,
     )
 
     # LLM news interpretation — non-fatal, enriches briefing with semantic analysis
