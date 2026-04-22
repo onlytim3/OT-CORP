@@ -56,22 +56,22 @@ GROQ_TIER: frozenset[str] = frozenset({
     "pre_trade", "post_trade", "news_analysis", "risk_event",
 })
 
-# Per-call-type token budgets — tightened on high-frequency automated calls
+# Per-call-type token budgets
 CALL_PROFILES: dict[str, dict] = {
     "chat":             {"max_tokens": 4096},
-    "chat_full":        {"max_tokens": 6144},
-    "narrative":        {"max_tokens": 512},    # 1024 → 512
-    "explain_trade":    {"max_tokens": 1024},   # 2048 → 1024
-    "journal":          {"max_tokens": 1536},   # 3072 → 1536
-    "performance":      {"max_tokens": 1024},   # 2048 → 1024
-    "risk_event":       {"max_tokens": 512},    # 1024 → 512
-    "signal_summary":   {"max_tokens": 256},    # 512 → 256
-    "annotate":         {"max_tokens": 128},    # 256 → 128
-    "pre_trade":        {"max_tokens": 512},    # 1024 → 512
-    "post_trade":       {"max_tokens": 768},    # 1536 → 768
-    "agent_synthesis":  {"max_tokens": 1500},   # 2048 → 1500
-    "weekly_synthesis": {"max_tokens": 2048},   # 3072 → 2048
-    "news_analysis":    {"max_tokens": 1024},   # 2560 → 1024
+    "chat_full":        {"max_tokens": 8192},   # full operator chat — give Claude space to reason
+    "narrative":        {"max_tokens": 1024},   # action card narratives
+    "explain_trade":    {"max_tokens": 2048},   # trade explanations
+    "journal":          {"max_tokens": 4096},   # daily journal — needs full space
+    "performance":      {"max_tokens": 2048},   # performance analysis
+    "risk_event":       {"max_tokens": 1024},   # risk event narration
+    "signal_summary":   {"max_tokens": 512},    # signal batch summary
+    "annotate":         {"max_tokens": 256},    # one-liner annotations
+    "pre_trade":        {"max_tokens": 1024},   # entry reasoning
+    "post_trade":       {"max_tokens": 1536},   # post-trade review
+    "agent_synthesis":  {"max_tokens": 2048},   # autonomous agent reasoning
+    "weekly_synthesis": {"max_tokens": 4096},   # weekly review — comprehensive
+    "news_analysis":    {"max_tokens": 2048},   # news impact analysis
 }
 
 
