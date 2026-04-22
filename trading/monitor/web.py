@@ -1,8 +1,11 @@
 """Flask web dashboard — autonomous monitoring interface."""
 
+import hmac
 import json
 import logging
 import os
+import secrets
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,9 +25,42 @@ from trading.db.store import (
     symbol_variants,
 )
 from trading.execution.router import get_account, get_positions_from_aster
-from trading.monitor.auth import get_auth_middleware
+from trading.monitor.auth import get_auth_middleware, _session_store
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Login rate limiting — in-process, keyed by remote IP
+# ---------------------------------------------------------------------------
+_login_attempts: dict[str, list[float]] = {}
+_login_lock = threading.Lock()
+_MAX_LOGIN_ATTEMPTS = 5
+_LOGIN_WINDOW = 900.0   # 15 minutes
+
+# ---------------------------------------------------------------------------
+# Startup check — loud warning if DASHBOARD_PIN is not set
+# ---------------------------------------------------------------------------
+if not os.getenv("DASHBOARD_PIN"):
+    log.critical(
+        "DASHBOARD_PIN is not set. Dashboard is inaccessible until configured. "
+        "Set it in Render Dashboard → Environment."
+    )
+
+# Detect production (Render sets RENDER=true) — used for Secure cookie flag
+_COOKIE_SECURE = bool(os.getenv("RENDER"))
+
+
+def _check_login_rate_limit(ip: str) -> bool:
+    """Return True if the request is allowed, False if rate-limited."""
+    now = time.monotonic()
+    with _login_lock:
+        recent = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW]
+        _login_attempts[ip] = recent
+        if len(recent) >= _MAX_LOGIN_ATTEMPTS:
+            return False
+        _login_attempts[ip].append(now)
+        return True
+
 
 app = Flask(
     __name__,
@@ -66,16 +102,59 @@ def serve_react(path=""):
 @app.route("/api/auth/login", methods=["POST"])
 def auth_login():
     from trading.config import DASHBOARD_PIN
+    if not DASHBOARD_PIN:
+        return jsonify({"error": "System locked — DASHBOARD_PIN not configured"}), 503
+
+    ip = request.remote_addr or "unknown"
+    if not _check_login_rate_limit(ip):
+        log.warning("Login rate limit exceeded for IP %s", ip)
+        return jsonify({"error": "Too many attempts. Try again in 15 minutes."}), 429
+
     data = request.json or {}
-    pin = data.get("pin")
-    
-    if not DASHBOARD_PIN or str(pin) == str(DASHBOARD_PIN):
-        # Set cookie dynamically here
-        resp = jsonify({"success": True})
-        resp.set_cookie("dashboard_pin", str(pin), httponly=True, samesite="Lax", max_age=86400*30)
-        return resp
-        
-    return jsonify({"error": "Invalid PIN"}), 401
+    pin = str(data.get("pin", ""))
+
+    if not hmac.compare_digest(pin, str(DASHBOARD_PIN)):
+        return jsonify({"error": "Invalid PIN"}), 401
+
+    token = secrets.token_urlsafe(32)
+    _session_store[token] = DASHBOARD_PIN
+    resp = jsonify({"success": True, "token": token})
+    resp.set_cookie(
+        "session_token", token,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite="Strict",
+        max_age=86400 * 7,
+    )
+    return resp
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    token = request.cookies.get("session_token", "")
+    _session_store.pop(token, None)
+    resp = jsonify({"success": True})
+    resp.delete_cookie("session_token")
+    return resp
+
+
+@app.after_request
+def add_security_headers(resp):
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-XSS-Protection"] = "1; mode=block"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "geolocation=(), microphone=()"
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self';"
+    )
+    if _COOKIE_SECURE:
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return resp
 
 
 @app.route("/login")

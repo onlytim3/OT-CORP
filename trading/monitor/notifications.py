@@ -7,10 +7,20 @@ Completely self-contained — never raises exceptions to callers.
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Security helpers
+# ---------------------------------------------------------------------------
+
+def _redact_url(url: str) -> str:
+    """Replace secret tokens in webhook URLs before logging."""
+    return re.sub(r"(https?://[^/]+/)([A-Za-z0-9/_\-]{20,})", r"\1[REDACTED]", url)
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -98,9 +108,9 @@ def _send_discord(
         resp = requests.post(url, json=payload, timeout=5)
         if resp.status_code in (200, 204):
             return True
-        logger.debug("Discord returned %s: %s", resp.status_code, resp.text[:200])
+        logger.debug("Discord webhook %s returned %s: %s", _redact_url(url), resp.status_code, resp.text[:200])
     except Exception:
-        logger.debug("Discord send failed", exc_info=True)
+        logger.debug("Discord send failed (webhook: %s)", _redact_url(url), exc_info=True)
 
     return False
 
@@ -146,7 +156,7 @@ def _send_telegram(
             return True
         logger.debug("Telegram returned %s: %s", resp.status_code, resp.text[:200])
     except Exception:
-        logger.debug("Telegram send failed", exc_info=True)
+        logger.debug("Telegram send failed (url: %s)", _redact_url(api_url), exc_info=True)
 
     return False
 

@@ -1,53 +1,64 @@
 """Security layer for the dashboard UI and API."""
 
+import hmac
 import logging
+
 from flask import request, jsonify, redirect
 
 from trading.config import DASHBOARD_PIN
 
 log = logging.getLogger(__name__)
 
-def check_dashboard_auth():
-    """Verify if the request has the correct PIN.
-    
+# Opaque session token store: token → validated PIN value.
+# Populated by auth_login() in web.py; checked here.
+# Process-local (single gunicorn worker) — adequate for this deployment.
+_session_store: dict[str, str] = {}
+
+
+def check_dashboard_auth() -> bool:
+    """Verify if the request has a valid session token.
+
     Checks:
-    1. HTTP Authorization Bearer token (for API calls)
-    2. HTTP Cookie 'dashboard_pin' (for UI)
-    
-    If DASHBOARD_PIN is not set in the environment, returns True (unlocked).
+    1. HTTP Cookie 'session_token' (for browser SPA)
+    2. HTTP Authorization Bearer token (for API callers)
+
+    Fail-closed: if DASHBOARD_PIN is not set, always returns False.
     """
     if not DASHBOARD_PIN:
-        log.warning("DASHBOARD_PIN is not set in the environment. Dashboard is UNLOCKED.")
-        return True
-        
-    pin_cookie = request.cookies.get("dashboard_pin")
-    if pin_cookie == DASHBOARD_PIN:
-        return True
-        
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header == f"Bearer {DASHBOARD_PIN}":
-        return True
-        
+        return False
+
+    # Cookie path (browser SPA — SameSite=Strict prevents CSRF)
+    cookie_token = request.cookies.get("session_token")
+    if cookie_token:
+        stored = _session_store.get(cookie_token)
+        if stored and hmac.compare_digest(stored, DASHBOARD_PIN):
+            return True
+
+    # Bearer token path (API callers / programmatic access)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        bearer = auth_header[7:]
+        stored = _session_store.get(bearer)
+        if stored and hmac.compare_digest(stored, DASHBOARD_PIN):
+            return True
+
     return False
 
 
 def get_auth_middleware(app):
     """Register BEFORE_REQUEST middleware on the Flask app."""
-    
+
     @app.before_request
     def require_auth():
-        # Do not block health checks or the login page itself
+        # Health checks and the login endpoints are always open
         if request.path.startswith("/api/health"):
             return None
-        if request.path in ("/login", "/api/auth/login"):
+        if request.path in ("/login", "/api/auth/login", "/api/auth/logout"):
             return None
-            
+
         if not check_dashboard_auth():
-            # If API call and not authorized, return 401
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Unauthorized. Invalid or missing PIN."}), 401
-                
-            # For all UI requests (/, /app, etc.), redirect to login
             return redirect("/login")
-            
+
         return None

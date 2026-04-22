@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import unicodedata
 from datetime import datetime, timezone
@@ -675,6 +676,29 @@ Use markdown formatting. Be analytical and specific."""
     return ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="weekly_synthesis")
 
 
+# Patterns that look like prompt-injection attempts embedded in news headlines.
+# If any pattern matches, the headline is dropped before being sent to Claude.
+_INJECTION_PATTERNS = [
+    r"ignore (previous|above|prior|all) instructions",
+    r"system\s*prompt",
+    r"you are now",
+    r"act as (a|an|the)\b",
+    r"\bdisregard\b",
+    r"new (role|persona|task|instruction)",
+    r"forget (everything|previous|prior)",
+    r"<\s*(script|iframe|svg)",        # HTML injection attempts
+]
+_INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
+
+
+def _sanitize_headline(title: str) -> str | None:
+    """Return None if title looks like a prompt-injection attempt; else cap length."""
+    if _INJECTION_RE.search(title):
+        log.warning("news: dropped suspicious headline (possible injection): %.80s", title)
+        return None
+    return title[:300]
+
+
 def analyze_news_impact(headlines: list[dict], positions: list[dict],
                         regime: str, traded_assets: list[str]) -> dict:
     """Interpret market news and return structured impact assessment.
@@ -682,16 +706,20 @@ def analyze_news_impact(headlines: list[dict], positions: list[dict],
     Returns dict with keys: key_events, asset_impacts, signals, risk_alerts, model_used.
     Falls back to empty structure on parse failure — never raises.
     """
-    hl_summary = [
-        {
-            "title": h.get("title", ""),
+    hl_summary = []
+    for h in headlines[:25]:
+        raw_title = h.get("title", "")
+        if not raw_title or not raw_title.strip():
+            continue
+        clean_title = _sanitize_headline(raw_title)
+        if clean_title is None:
+            continue
+        hl_summary.append({
+            "title": clean_title,
             "source": h.get("source", ""),
             "category": h.get("category", ""),
             "published": h.get("published", h.get("timestamp", "")),
-        }
-        for h in headlines[:25]
-        if h.get("title") and h.get("title").strip()
-    ]
+        })
 
     # Filter stale headlines (> 4 hours old) before sending to LLM.
     # dateutil is not in requirements so we use a lightweight heuristic:

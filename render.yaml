@@ -10,7 +10,7 @@ services:
     buildCommand: "pip install --upgrade pip setuptools wheel && pip install -r requirements.txt && cd dashboard && npm install && npm run build"
     startCommand: bash start.sh
     healthCheckPath: /api/health
-    autoDeploy: true
+    autoDeploy: false
     envVars:
       # ── Runtime ──
       - key: PYTHON_VERSION

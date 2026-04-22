@@ -9,6 +9,7 @@ this strategy don't make two identical Claude calls in the same cycle.
 """
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -24,7 +25,12 @@ log = logging.getLogger(__name__)
 
 # Per-asset cooldown — don't re-signal same asset within 1 hour
 _last_signal_time: dict[str, float] = {}
+_signal_time_lock = threading.Lock()
 _COOLDOWN_SECONDS = 3600
+
+# Hard cap: max signals emitted from a single news batch (guards against
+# LLM over-enthusiasm or prompt-injection attempting mass trades)
+_MAX_SIGNALS_PER_CYCLE = 3
 
 # Analysis result cache — shared with briefing cycle to avoid duplicate LLM calls
 _analysis_cache: dict = {}
@@ -208,11 +214,16 @@ class NewsSentimentStrategy(Strategy):
         sorted_signals = sorted(raw_signals, key=lambda s: s.get("strength", 0), reverse=True)
 
         for raw in sorted_signals:
+            if len(signals) >= _MAX_SIGNALS_PER_CYCLE:
+                log.info("news_sentiment: max signal cap (%d) reached — dropping remainder", _MAX_SIGNALS_PER_CYCLE)
+                break
+
             action = str(raw.get("action", "")).lower().strip()
             if action not in ("buy", "sell"):
                 continue
 
             strength = float(raw.get("strength", 0.0))
+            strength = max(0.0, min(1.0, strength))  # clamp to valid range
             if strength < 0.5:
                 continue
 
@@ -224,13 +235,13 @@ class NewsSentimentStrategy(Strategy):
 
             symbol = self._asset_map[coin_id]
 
-            # Per-asset cooldown
-            last_time = _last_signal_time.get(symbol, 0)
-            if now - last_time < _COOLDOWN_SECONDS:
-                log.debug("news_sentiment: %s on cooldown — skipping", symbol)
-                continue
-
-            _last_signal_time[symbol] = now
+            # Per-asset cooldown — thread-safe
+            with _signal_time_lock:
+                last_time = _last_signal_time.get(symbol, 0)
+                if now - last_time < _COOLDOWN_SECONDS:
+                    log.debug("news_sentiment: %s on cooldown — skipping", symbol)
+                    continue
+                _last_signal_time[symbol] = now
 
             # Enrich attribution data
             impact_data = asset_impacts.get(asset_raw, asset_impacts.get(coin_id, {}))
