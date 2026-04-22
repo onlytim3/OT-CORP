@@ -345,6 +345,13 @@ export async function fetchAPI<T>(url: string, options?: RequestInit): Promise<T
       ...options,
       headers: { 'Content-Type': 'application/json', ...options?.headers },
     });
+    if (response.status === 401) {
+      // Session expired or auth not configured — send user to login page
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+      return getMockDataForUrl<T>(url);
+    }
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: response.statusText }));
       throw new Error(error.error || `HTTP ${response.status}`);

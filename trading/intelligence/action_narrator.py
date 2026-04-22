@@ -141,7 +141,7 @@ def _generate_and_cache(action: dict) -> dict:
 
 def _llm_generate(action: dict) -> dict | None:
     """Generate narrative using LLM."""
-    from trading.llm.engine import ask_llm
+    from trading.llm.engine import ask_llm, _ascii_safe
 
     category = action.get("category", "unknown")
     data = action.get("data", {})
@@ -150,17 +150,22 @@ def _llm_generate(action: dict) -> dict | None:
             data = json.loads(data)
         except Exception:
             data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    # Strip non-ASCII from action fields — prevents UnicodeEncodeError on Claude path
+    _s = lambda v: _ascii_safe(str(v)) if v is not None else "N/A"
 
     prompt = f"""Analyze this trading system action and provide a human-readable narrative.
 
 Action Details:
-- Category: {category}
-- Action: {action.get('action', 'N/A')}
-- Symbol: {action.get('symbol', 'N/A')}
-- Details: {action.get('details', 'N/A')}
-- Result: {action.get('result', 'N/A')}
-- Timestamp: {action.get('timestamp', 'N/A')}
-- Raw Data: {json.dumps(data, default=str)[:1000]}
+- Category: {_s(category)}
+- Action: {_s(action.get('action'))}
+- Symbol: {_s(action.get('symbol'))}
+- Details: {_s(action.get('details'))}
+- Result: {_s(action.get('result'))}
+- Timestamp: {_s(action.get('timestamp'))}
+- Raw Data: {_ascii_safe(json.dumps(data, default=str)[:1000])}
 
 Respond in this exact JSON format:
 {{
@@ -235,6 +240,8 @@ def _template_narrative(action: dict) -> str:
             data = json.loads(data)
         except Exception:
             data = {}
+    if not isinstance(data, dict):
+        data = {}
 
     # --- Smart narratives for known action types ---
 
