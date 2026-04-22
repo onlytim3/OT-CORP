@@ -53,8 +53,8 @@ def _ascii_safe(text: str) -> str:
 # Groq models (free tier)
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-# Gemini models (fallback)
-GEMINI_MODEL_FLASH = "gemini-2.5-flash"
+# Gemini models (fallback) — 2.0-flash has 1,500 req/day free; 2.5-flash is only 20/day
+GEMINI_MODEL_FLASH = "gemini-2.0-flash"
 
 # Claude model (reasoning tier)
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -169,7 +169,12 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
         )
         return response.choices[0].message.content
     except Exception as e:
-        log.warning("Groq API error: %s", e)
+        err = str(e)
+        if "429" in err or "rate_limit" in err.lower() or "quota" in err.lower():
+            log.warning("Groq rate limited — backing off 5s before fallback")
+            time.sleep(5)
+        else:
+            log.warning("Groq API error: %s", e)
         return None
 
 
@@ -221,7 +226,11 @@ def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None
         )
         return response.text
     except Exception as e:
-        log.warning("Gemini API error: %s", e)
+        err = str(e)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
+            log.warning("Gemini quota exhausted — switching to next provider")
+        else:
+            log.warning("Gemini API error: %s", e)
         return None
 
 
