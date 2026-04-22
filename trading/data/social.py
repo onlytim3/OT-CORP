@@ -16,6 +16,14 @@ from trading.data.cache import cached
 
 log = logging.getLogger(__name__)
 
+try:
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _VaderAnalyzer
+    _vader = _VaderAnalyzer()
+    _VADER_AVAILABLE = True
+except ImportError:
+    _vader = None
+    _VADER_AVAILABLE = False
+
 SUBREDDITS = ["CryptoCurrency", "Bitcoin", "ethereum", "solana", "altcoin"]
 
 BULLISH_KW = [
@@ -63,11 +71,45 @@ def _get_reddit():
         return None
 
 
+_NEGATION_WORDS = {"not", "no", "never", "neither", "nor", "cannot", "can't", "won't", "don't", "doesn't", "didn't"}
+
+
 def _score_text(text: str) -> tuple[int, int]:
-    """Return (bull_count, bear_count) for text."""
-    lower = text.lower()
-    bulls = sum(1 for kw in BULLISH_KW if kw in lower)
-    bears = sum(1 for kw in BEARISH_KW if kw in lower)
+    """Return (bull_count, bear_count) for text.
+
+    When VADER is available, converts the compound sentiment score directly into
+    weighted bull/bear counts so the rest of the pipeline is unchanged.  Falls
+    back to a negation-aware keyword scan when VADER is not installed.
+    """
+    if _VADER_AVAILABLE and _vader is not None:
+        vs = _vader.polarity_scores(text)
+        compound = vs["compound"]            # -1.0 … +1.0
+        magnitude = round(abs(compound) * 10)  # scale to keyword-equivalent counts
+        if compound >= 0.05:
+            return magnitude, 0
+        elif compound <= -0.05:
+            return 0, magnitude
+        else:
+            return 0, 0
+
+    # --- negation-aware keyword fallback ---
+    tokens = text.lower().split()
+    bulls = bears = 0
+    for i, token in enumerate(tokens):
+        # check for a negation word in a 3-token window before this token
+        negated = any(tokens[max(0, i - 3):i][j] in _NEGATION_WORDS
+                      for j in range(min(3, i)))
+        clean = token.strip(".,!?;:'\"")
+        if clean in BULLISH_KW:
+            if negated:
+                bears += 1          # "not bullish" → bearish signal
+            else:
+                bulls += 1
+        elif clean in BEARISH_KW:
+            if negated:
+                bulls += 1          # "not crashing" → bullish signal
+            else:
+                bears += 1
     return bulls, bears
 
 

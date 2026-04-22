@@ -317,6 +317,14 @@ def run_trading_cycle():
                 console.print(f"  [bold red]EVENT RISK: {', '.join(briefing.event_risk)}[/bold red]")
             log_action("intelligence", "briefing", details=briefing.summary(),
                        data=briefing.to_dict())
+            # Pre-populate news_sentiment cache so it reuses this Claude call
+            try:
+                news_analysis = getattr(briefing, "news_analysis", None)
+                if news_analysis and isinstance(news_analysis, dict):
+                    from trading.strategy.news_sentiment import warm_analysis_cache
+                    warm_analysis_cache(news_analysis)
+            except Exception:
+                pass
         except Exception as e:
             log.warning("Intelligence briefing failed (non-fatal): %s", e)
             console.print(f"[yellow]Intelligence briefing skipped: {e}[/yellow]")
@@ -1669,7 +1677,7 @@ def run_weekly_review():
 def process_pending_approvals():
     """Process any pending agent recommendations with full autonomy.
 
-    Runs every 30 minutes. Picks up any recommendations that were
+    Runs every 5 minutes. Picks up any recommendations that were
     stored as 'pending' (from before full autonomy was enabled, or
     from edge cases) and auto-applies them.
     """
@@ -2018,7 +2026,7 @@ def start_daemon(interval_hours=4, paper=False):
     # Schedule recurring tasks
     schedule.every(interval_hours).hours.do(run_trading_cycle).tag("trading")
     schedule.every(15).minutes.do(check_stop_losses)
-    schedule.every(30).minutes.do(process_pending_approvals)
+    schedule.every(5).minutes.do(process_pending_approvals)
     schedule.every().day.at("23:55").do(run_daily_journal)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
     # Position review now runs as part of run_autonomous_cycle() — no separate schedule needed

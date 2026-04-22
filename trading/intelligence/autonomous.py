@@ -632,19 +632,49 @@ def _risk_agent_think() -> list[dict]:
                 _halt_ctx.append(f"single-day loss of {worst_day*100:.1f}%")
             _ctx_str = "; ".join(_halt_ctx) if _halt_ctx else "persistent drawdown above threshold"
 
+            _halt_reasoning = (
+                f"CRITICAL: Portfolio drawdown {drawdown*100:.1f}% "
+                f"(current: ${current_value:.0f}, peak: ${peak_value:.0f}). "
+                f"Context: {_ctx_str}. "
+                f"Regime: {regime_label} (score {regime_score:.2f}). "
+                f"Halting all strategies until operator review."
+            )
+
+            # --- SYNCHRONOUS EMERGENCY HALT — do not wait for approval queue ---
+            log.critical(
+                "EMERGENCY: Drawdown %.1f%% exceeds halt threshold %.1f%% — halting trading immediately",
+                drawdown * 100, effective_halt_threshold * 100,
+            )
+            try:
+                set_setting("trading_halted", "true")
+                set_setting(
+                    "halt_reason",
+                    f"Emergency halt: drawdown {drawdown:.1%} exceeded {effective_halt_threshold:.1%} threshold. {_ctx_str}",
+                )
+                set_setting("halt_timestamp", datetime.now(timezone.utc).isoformat())
+                # Disable all strategies immediately in runtime config
+                for _strat in list(STRATEGY_ENABLED.keys()):
+                    STRATEGY_ENABLED[_strat] = False
+                    try:
+                        set_setting(f"strategy_override_{_strat}", "disabled")
+                    except Exception:
+                        pass
+                log.critical(
+                    "EMERGENCY HALT APPLIED SYNCHRONOUSLY: all %d strategies disabled, halt flag set",
+                    len(STRATEGY_ENABLED),
+                )
+            except Exception as _halt_err:
+                log.error("Failed to apply emergency halt synchronously: %s", _halt_err)
+
+            # Also insert to recommendation log for audit trail (asynchronous path
+            # is bypassed but we still want a human-visible record)
             recommendations.append({
                 "from_agent": RISK_AGENT,
                 "to_agent": EXECUTOR_AGENT,
                 "category": "change_regime",
                 "action": "emergency_halt",
                 "target": "all_strategies",
-                "reasoning": (
-                    f"CRITICAL: Portfolio drawdown {drawdown*100:.1f}% "
-                    f"(current: ${current_value:.0f}, peak: ${peak_value:.0f}). "
-                    f"Context: {_ctx_str}. "
-                    f"Regime: {regime_label} (score {regime_score:.2f}). "
-                    f"Halting all strategies until operator review."
-                ),
+                "reasoning": _halt_reasoning + " [APPLIED SYNCHRONOUSLY — did not wait for approval queue]",
                 "data": {
                     "drawdown_pct": round(drawdown, 4),
                     "current_value": round(current_value, 2),
@@ -652,7 +682,14 @@ def _risk_agent_think() -> list[dict]:
                     "consecutive_losses": consecutive_losses,
                     "dd_velocity": round(dd_velocity, 4),
                     "regime_score": round(regime_score, 3),
+                    "synchronous_halt": True,  # Marks that halt was already applied
                     "auto_approve": True,
+                    "metric_snapshot": {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "portfolio_value": round(current_value, 2),
+                        "win_rate": None,
+                        "drawdown": round(drawdown, 4),
+                    },
                 },
             })
 
@@ -2149,6 +2186,27 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
             result = f"Execution failed: {e}"
             log.error("Auto-execution failed for %s: %s", action, e)
 
+        # Enrich data with a metric snapshot for quality tracking — captures
+        # portfolio state at recommendation time so outcomes can be evaluated later.
+        if "metric_snapshot" not in data:
+            try:
+                _snap_daily = get_daily_pnl(limit=2)
+                _snap_pv = _snap_daily[0]["portfolio_value"] if _snap_daily else None
+                _snap_peak = max(r["portfolio_value"] for r in _snap_daily) if _snap_daily else None
+                _snap_dd = (
+                    (_snap_peak - _snap_pv) / _snap_peak
+                    if _snap_peak and _snap_peak > 0
+                    else None
+                )
+                data["metric_snapshot"] = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "portfolio_value": round(_snap_pv, 2) if _snap_pv is not None else None,
+                    "win_rate": None,  # populated by caller agents that track per-strategy win rate
+                    "drawdown": round(_snap_dd, 4) if _snap_dd is not None else None,
+                }
+            except Exception:
+                pass  # Non-fatal — snapshot is best-effort
+
         # Record the recommendation and its outcome
         rec_id = insert_recommendation(
             from_agent=rec["from_agent"],
@@ -2757,13 +2815,18 @@ def _news_agent_think() -> list[dict]:
         traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(ASTER_SYMBOLS.keys())))
         analysis = analyze_news_impact(headlines, positions, regime, traded_assets[:30])
 
-        if not analysis or "LLM unavailable" in analysis:
+        if not isinstance(analysis, dict) or analysis.get("model_used") != "llm":
             return recommendations
 
-        # Log the analysis
+        # Build a short details string from the structured dict
+        key_events = analysis.get("key_events", []) or []
+        risk_alerts = analysis.get("risk_alerts", []) or []
+        event_headlines = [e.get("headline", "") for e in key_events if isinstance(e, dict)]
+        details_str = " | ".join(h for h in event_headlines[:3] if h)[:300] or "news analyzed"
+
         log_action(
             "intelligence", "news_analysis",
-            details=analysis[:300],
+            details=details_str,
             data={
                 "full_analysis": analysis,
                 "headline_count": len(headlines),
@@ -2772,16 +2835,17 @@ def _news_agent_think() -> list[dict]:
             },
         )
 
-        # Check for risk alerts in the analysis
-        analysis_lower = analysis.lower()
-        if any(word in analysis_lower for word in ["risk alert", "reduce exposure", "emergency", "crash", "liquidat"]):
+        # Risk alerts come as structured entries in the JSON response
+        if risk_alerts:
+            alert_texts = [a.get("alert", "") for a in risk_alerts if isinstance(a, dict)]
+            alert_summary = " | ".join(t for t in alert_texts if t)[:200]
             recommendations.append({
                 "from_agent": NEWS_AGENT,
                 "to_agent": "risk",
                 "category": "risk_alert",
                 "action": "review_exposure",
                 "target": "portfolio",
-                "reasoning": f"News analysis flagged risk: {analysis[:200]}",
+                "reasoning": f"News analysis flagged risk: {alert_summary}",
                 "data": {"auto_approve": False, "source": "news_analysis"},
             })
 

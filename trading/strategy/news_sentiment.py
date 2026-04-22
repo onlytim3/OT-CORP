@@ -1,12 +1,14 @@
 """News Sentiment Strategy — LLM-interpreted headlines driving trading signals.
 
-Fetches headlines from RSS, GDELT, and crypto news APIs, then uses Gemini
-to interpret impact on specific assets and generate buy/sell signals.
+Fetches headlines from RSS, GDELT, and crypto news APIs. Calls
+analyze_news_impact() which returns a structured JSON dict (via Claude
+reasoning tier). Signals are parsed directly from the JSON — no regex.
+
+Deduplication: results are cached for 55 minutes so the briefing cycle and
+this strategy don't make two identical Claude calls in the same cycle.
 """
 
-import json
 import logging
-import re
 import time
 from datetime import datetime, timezone
 
@@ -20,16 +22,21 @@ from trading.strategy.registry import register
 
 log = logging.getLogger(__name__)
 
-# Cooldown tracking — don't re-signal same asset within window
+# Per-asset cooldown — don't re-signal same asset within 1 hour
 _last_signal_time: dict[str, float] = {}
-_COOLDOWN_SECONDS = 3600  # 1 hour
+_COOLDOWN_SECONDS = 3600
+
+# Analysis result cache — shared with briefing cycle to avoid duplicate LLM calls
+_analysis_cache: dict = {}
+_analysis_cache_time: float = 0.0
+_ANALYSIS_CACHE_TTL = 3300  # 55 minutes
 
 
 def _get_all_tradeable_symbols() -> dict[str, str]:
     """Build map of coin_id → trading symbol for all tradeable assets."""
     symbols = {}
     for coin_id in (CRYPTO_L1 + CRYPTO_L2 + CRYPTO_DEFI + CRYPTO_AI + CRYPTO_MEME):
-        sym = ASTER_SYMBOLS.get(coin_id) or ASTER_SYMBOLS.get(coin_id)
+        sym = ASTER_SYMBOLS.get(coin_id)
         if sym:
             symbols[coin_id] = sym
     for asset_id in (STOCK_PERPS + COMMODITY_PERPS + INDEX_PERPS):
@@ -39,124 +46,72 @@ def _get_all_tradeable_symbols() -> dict[str, str]:
     return symbols
 
 
-def _parse_llm_signals(analysis: str, asset_map: dict[str, str]) -> list[dict]:
-    """Parse LLM analysis text for trading signals.
+def _resolve_asset(raw: str, asset_map: dict[str, str]) -> str | None:
+    """Resolve an asset name/symbol from LLM output to a coin_id in asset_map.
 
-    Looks for patterns like:
-      BUY bitcoin — reason (strength: 0.8)
-      SELL ethereum — reason (strength: 0.6)
+    Tries exact match, then case-insensitive, then substring. Returns coin_id or None.
     """
-    signals = []
-    if not analysis:
-        return signals
+    if not raw:
+        return None
+    raw_lower = raw.lower().strip()
 
-    # Match: BUY/SELL [asset] — [reason] (strength: [0.X])
-    pattern = r"(?:^|\n)\s*[-•*]?\s*(BUY|SELL)\s+(\S+).*?(?:strength:\s*([0-9.]+))?"
-    for match in re.finditer(pattern, analysis, re.IGNORECASE):
-        action = match.group(1).lower()
-        asset_raw = match.group(2).lower().strip("*_[]().,")
-        strength_str = match.group(3)
-        strength = float(strength_str) if strength_str else 0.6
-
-        # Map asset name to coin_id
-        matched_id = None
-        for coin_id in asset_map:
-            if asset_raw in coin_id or coin_id in asset_raw:
-                matched_id = coin_id
-                break
-            # Try matching by symbol (BTC, ETH, etc.)
-            sym = asset_map[coin_id]
-            sym_short = sym.replace("/USD", "").replace("USDT", "").lower()
-            if asset_raw == sym_short or asset_raw == coin_id.replace("-", ""):
-                matched_id = coin_id
-                break
-
-        if matched_id and matched_id in asset_map:
-            signals.append({
-                "coin_id": matched_id,
-                "symbol": asset_map[matched_id],
-                "action": action,
-                "strength": min(max(strength, 0.0), 1.0),
-                "context": match.group(0).strip(),
-            })
-
-    return signals
-
-
-def _parse_asset_impacts(analysis: str, asset_map: dict[str, str]) -> dict[str, float]:
-    """Parse LLM analysis for per-asset impact scores.
-
-    Handles multiple formats Gemini may use:
-      - Bitcoin: +0.7 (reason)
-      - **Ethereum**: -0.3 — explanation
-      - Impact score: 0.5
-      - Bitcoin (+0.7): explanation
-      - | Bitcoin | +0.7 | reason |
-    """
-    impacts = {}
-    if not analysis:
-        return impacts
-
-    # Build reverse lookup: lowercase name/symbol → coin_id
+    # Build reverse lookup on first call
     name_to_id: dict[str, str] = {}
-    for coin_id, symbol in asset_map.items():
+    for coin_id, sym in asset_map.items():
         name_to_id[coin_id.lower()] = coin_id
-        name_to_id[symbol.lower()] = coin_id
-        # Handle common variants
-        clean = coin_id.lower().replace("usdt", "").replace("usd", "").replace("-", "").replace("/", "")
+        name_to_id[sym.lower()] = coin_id
+        # BTC/USD → btcusd, btc
+        clean = sym.lower().replace("/usd", "").replace("usdt", "").replace("/", "")
         if clean:
             name_to_id[clean] = coin_id
+        # bitcoin-cash → bitcoincash
+        name_to_id[coin_id.lower().replace("-", "")] = coin_id
 
-    # Single-line patterns
-    patterns = [
-        # - Bitcoin: +0.7 or - **Bitcoin**: +0.7
-        r"[-•*]\s*\*{0,2}(\w[\w\s/-]*?)\*{0,2}\s*[:—–-]\s*([+-]?\d\.\d+)",
-        # Bitcoin (+0.7) or Bitcoin: Impact score: +0.7
-        r"\b(\w[\w\s/-]*?)\s*\(([+-]?\d\.\d+)\)",
-        # | Bitcoin | +0.7 | (table format)
-        r"\|\s*(\w[\w\s/-]*?)\s*\|\s*([+-]?\d\.\d+)\s*\|",
-    ]
+    # Exact match first
+    if raw_lower in name_to_id:
+        return name_to_id[raw_lower]
 
-    # Multi-line pattern: Gemini often outputs:
-    #   *   **Natural Gas**
-    #       *   Impact score: +0.7
-    multiline_pattern = r"\*{2}([\w\s/-]+?)\*{2}\s*\n\s*\*?\s*[Ii]mpact\s+score:\s*([+-]?\d\.\d+)"
-    for match in re.finditer(multiline_pattern, analysis):
-        asset_raw = match.group(1).lower().strip()
-        try:
-            score = float(match.group(2))
-        except ValueError:
-            continue
-        score = max(-1.0, min(1.0, score))
-        matched_id = name_to_id.get(asset_raw)
-        if not matched_id:
-            for name, cid in name_to_id.items():
-                if asset_raw in name or name in asset_raw:
-                    matched_id = cid
-                    break
-        if matched_id and matched_id not in impacts:
-            impacts[matched_id] = score
+    # Substring match (prefer longer keys to avoid "bit" → "bitcoin-cash" vs "bitcoin")
+    candidates = [(k, v) for k, v in name_to_id.items()
+                  if raw_lower in k or k in raw_lower]
+    if candidates:
+        candidates.sort(key=lambda x: len(x[0]), reverse=True)
+        return candidates[0][1]
 
-    for pattern in patterns:
-        for match in re.finditer(pattern, analysis):
-            asset_raw = match.group(1).lower().strip().strip("*")
-            try:
-                score = float(match.group(2))
-            except ValueError:
-                continue
-            score = max(-1.0, min(1.0, score))  # Clamp to [-1, 1]
+    return None
 
-            # Try direct match first, then substring match
-            matched_id = name_to_id.get(asset_raw)
-            if not matched_id:
-                for name, cid in name_to_id.items():
-                    if asset_raw in name or name in asset_raw:
-                        matched_id = cid
-                        break
-            if matched_id and matched_id not in impacts:
-                impacts[matched_id] = score
 
-    return impacts
+def _get_cached_or_fresh_analysis(
+    headlines: list[dict],
+    positions: list[dict],
+    regime: str,
+    assets: list[str],
+) -> dict:
+    """Return cached analysis if fresh, otherwise call Claude."""
+    global _analysis_cache, _analysis_cache_time
+    now = time.monotonic()
+    if _analysis_cache and (now - _analysis_cache_time) < _ANALYSIS_CACHE_TTL:
+        age_min = (now - _analysis_cache_time) / 60
+        log.debug("news_sentiment: using cached analysis (%.0fm old)", age_min)
+        return _analysis_cache
+    from trading.llm.engine import analyze_news_impact
+    result = analyze_news_impact(headlines, positions, regime, assets)
+    _analysis_cache = result
+    _analysis_cache_time = now
+    return result
+
+
+def warm_analysis_cache(analysis: dict) -> None:
+    """Called by the briefing cycle to pre-populate the cache.
+
+    When the scheduler runs generate_briefing() it can call this so the
+    news_sentiment strategy reuses the same Claude result without a second call.
+    """
+    global _analysis_cache, _analysis_cache_time
+    if isinstance(analysis, dict) and analysis.get("model_used") == "llm":
+        _analysis_cache = analysis
+        _analysis_cache_time = time.monotonic()
+        log.debug("news_sentiment: analysis cache warmed from briefing cycle")
 
 
 @register
@@ -164,135 +119,155 @@ class NewsSentimentStrategy(Strategy):
     """Generate trading signals from LLM-interpreted news headlines.
 
     Pipeline:
-    1. Fetch headlines from RSS (6 categories), GDELT, crypto API, Finnhub
-    2. Send to Gemini for semantic analysis of market impact
-    3. Parse LLM response for per-asset signals
-    4. Return Signal objects for the aggregator
+    1. Fetch headlines (RSS, GDELT, crypto API, Finnhub)
+    2. Call analyze_news_impact() via Claude (or use briefing cache)
+    3. Parse structured JSON signals — no regex
+    4. Return Signal objects with full attribution data
     """
 
     name = "news_sentiment"
 
     def __init__(self):
-        self._last_context = {}
-        self._last_analysis = ""
+        self._last_context: dict = {}
         self._asset_map = _get_all_tradeable_symbols()
 
     def generate_signals(self) -> list[Signal]:
-        signals = []
-
-        # Step 1: Fetch all headlines
+        # Step 1: Fetch headlines
         try:
             from trading.data.news import fetch_all_headlines
             headlines = fetch_all_headlines(max_per_source=8)
         except Exception as e:
-            log.warning("News sentiment: headline fetch failed: %s", e)
-            return [Signal(
-                strategy=self.name, symbol="BTC/USD", action="hold",
-                strength=0.0, reason="Headlines unavailable",
-            )]
+            log.warning("news_sentiment: headline fetch failed: %s", e)
+            return [Signal(strategy=self.name, symbol="BTC/USD", action="hold",
+                           strength=0.0, reason="Headlines unavailable")]
 
         if len(headlines) < 3:
-            return [Signal(
-                strategy=self.name, symbol="BTC/USD", action="hold",
-                strength=0.0, reason=f"Only {len(headlines)} headlines — insufficient",
-            )]
+            return [Signal(strategy=self.name, symbol="BTC/USD", action="hold",
+                           strength=0.0,
+                           reason=f"Only {len(headlines)} headlines — insufficient for analysis")]
 
-        # Step 2: Get current positions and regime for context
+        # Step 2: Current positions and regime
         try:
             from trading.execution.router import get_positions_from_aster
-            positions = get_positions_from_aster()[:15]
+            positions = get_positions_from_aster()[:20]
         except Exception:
             positions = []
 
+        regime = "unknown"
         try:
             from trading.db.store import get_action_log
-            recent_briefings = get_action_log(limit=3, category="intelligence")
-            regime = "unknown"
-            for b in recent_briefings:
+            import json as _json
+            for b in get_action_log(limit=3, category="intelligence"):
                 data = b.get("data", {})
                 if isinstance(data, str):
                     try:
-                        data = json.loads(data)
+                        data = _json.loads(data)
                     except Exception:
                         data = {}
                 if isinstance(data, dict) and data.get("overall_regime"):
                     regime = data["overall_regime"]
                     break
         except Exception:
-            regime = "unknown"
+            pass
 
-        # Step 3: LLM analysis
+        # Step 3: Get structured analysis (cached or fresh Claude call)
         try:
-            from trading.llm.engine import analyze_news_impact
-            analysis = analyze_news_impact(
+            analysis = _get_cached_or_fresh_analysis(
                 headlines, positions, regime,
-                list(self._asset_map.keys())[:30],
+                list(self._asset_map.keys())[:40],
             )
-            self._last_analysis = analysis
         except Exception as e:
-            log.warning("News sentiment: LLM analysis failed: %s", e)
-            return [Signal(
-                strategy=self.name, symbol="BTC/USD", action="hold",
-                strength=0.0, reason=f"LLM analysis failed: {e}",
-            )]
+            log.warning("news_sentiment: analysis failed: %s", e)
+            return [Signal(strategy=self.name, symbol="BTC/USD", action="hold",
+                           strength=0.0, reason=f"Analysis error: {e}")]
 
-        if not analysis or "LLM unavailable" in analysis:
-            return [Signal(
-                strategy=self.name, symbol="BTC/USD", action="hold",
-                strength=0.0, reason="LLM unavailable for news analysis",
-            )]
-
-        # Step 4: Parse signals from LLM response
-        parsed_signals = _parse_llm_signals(analysis, self._asset_map)
-        asset_impacts = _parse_asset_impacts(analysis, self._asset_map)
+        # Step 4: Parse signals directly from JSON structure
+        raw_signals = analysis.get("signals", [])
+        asset_impacts = analysis.get("asset_impacts", {})
+        key_events = analysis.get("key_events", [])
+        risk_alerts = analysis.get("risk_alerts", [])
 
         self._last_context = {
             "headline_count": len(headlines),
-            "sources": len(set(h.get("source", "") for h in headlines)),
+            "headlines_used": analysis.get("headline_count_used", 0),
+            "stale_excluded": analysis.get("stale_excluded", 0),
+            "sources": len({h.get("source", "") for h in headlines}),
             "regime": regime,
-            "asset_impacts": asset_impacts,
-            "signal_count": len(parsed_signals),
+            "asset_impacts": {k: v.get("score", v) if isinstance(v, dict) else v
+                              for k, v in asset_impacts.items()},
+            "signal_count": len(raw_signals),
+            "key_events": [e.get("headline", "") for e in key_events[:3]],
+            "risk_alerts": [a.get("alert", "") for a in risk_alerts],
+            "model_used": analysis.get("model_used", "unknown"),
         }
 
         now = time.monotonic()
-        signal_count = 0
-        max_signals = 5
+        signals: list[Signal] = []
 
-        for ps in parsed_signals:
-            if signal_count >= max_signals:
-                break
+        # Sort by strength descending — emit highest-conviction signals first
+        sorted_signals = sorted(raw_signals, key=lambda s: s.get("strength", 0), reverse=True)
 
-            # Cooldown check
-            last_time = _last_signal_time.get(ps["symbol"], 0)
+        for raw in sorted_signals:
+            action = str(raw.get("action", "")).lower().strip()
+            if action not in ("buy", "sell"):
+                continue
+
+            strength = float(raw.get("strength", 0.0))
+            if strength < 0.5:
+                continue
+
+            asset_raw = str(raw.get("asset", ""))
+            coin_id = _resolve_asset(asset_raw, self._asset_map)
+            if not coin_id or coin_id not in self._asset_map:
+                log.debug("news_sentiment: unresolved asset '%s' — skipping", asset_raw)
+                continue
+
+            symbol = self._asset_map[coin_id]
+
+            # Per-asset cooldown
+            last_time = _last_signal_time.get(symbol, 0)
             if now - last_time < _COOLDOWN_SECONDS:
+                log.debug("news_sentiment: %s on cooldown — skipping", symbol)
                 continue
 
-            # Only emit signals with sufficient strength
-            if ps["strength"] < 0.4:
-                continue
+            _last_signal_time[symbol] = now
 
-            _last_signal_time[ps["symbol"]] = now
-            signal_count += 1
+            # Enrich attribution data
+            impact_data = asset_impacts.get(asset_raw, asset_impacts.get(coin_id, {}))
+            impact_score = (impact_data.get("score", strength) if isinstance(impact_data, dict)
+                            else float(impact_data) if impact_data else strength)
+            impact_reason = (impact_data.get("reason", "") if isinstance(impact_data, dict) else "")
+            impact_headline_count = (impact_data.get("headline_count", 1)
+                                     if isinstance(impact_data, dict) else 1)
 
             signals.append(Signal(
                 strategy=self.name,
-                symbol=ps["symbol"],
-                action=ps["action"],
-                strength=ps["strength"],
-                reason=f"News sentiment {ps['action']} — {ps['context'][:120]}",
+                symbol=symbol,
+                action=action,
+                strength=strength,
+                reason=f"News {action.upper()} {asset_raw}: {raw.get('reason', '')[:120]}",
                 data={
-                    "coin": ps["coin_id"],
-                    "sentiment_strength": ps["strength"],
+                    "coin": coin_id,
+                    "sentiment_strength": strength,
+                    "impact_score": impact_score,
+                    "impact_reason": impact_reason,
                     "headline_count": len(headlines),
+                    "supporting_headlines": impact_headline_count,
+                    "time_horizon": raw.get("time_horizon", "day"),
+                    "key_events": [e.get("headline", "") for e in key_events[:2]],
+                    "risk_alerts": [a.get("alert", "") for a in risk_alerts
+                                    if a.get("asset", "").lower() in (coin_id.lower(), "portfolio")],
+                    "regime": regime,
+                    "model_used": analysis.get("model_used", "unknown"),
                 },
             ))
 
-        # If no actionable signals, emit hold for BTC
         if not signals:
+            event_summary = (f" Key: {key_events[0]['headline'][:60]}" if key_events else "")
             signals.append(Signal(
                 strategy=self.name, symbol="BTC/USD", action="hold",
                 strength=0.0,
-                reason=f"No high-conviction news signals from {len(headlines)} headlines",
+                reason=f"No high-conviction signals from {len(headlines)} headlines.{event_summary}",
             ))
 
         return signals

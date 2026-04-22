@@ -1,9 +1,11 @@
 """LLM engine for OT-CORP trading system — two-tier cost routing.
 
 Claude Reasoning Tier (ANTHROPIC_API_KEY): chat, chat_full, agent_synthesis,
-    weekly_synthesis, journal, explain_trade, performance — ~$12-18/month.
+    weekly_synthesis, journal, explain_trade, performance,
+    news_analysis, risk_event — ~$12-18/month.
 
-Groq Free Tier (GROQ_API_KEY): all other automated calls — $0/month.
+Groq Free Tier (GROQ_API_KEY): signal_summary, annotate, narrative,
+    pre_trade, post_trade — $0/month.
 
 Gemini Flash (GEMINI_API_KEY): emergency fallback for either tier.
 
@@ -26,9 +28,23 @@ import json
 import logging
 import os
 import time
+import unicodedata
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
+
+
+def _ascii_safe(text: str) -> str:
+    """Normalize unicode to closest ASCII, drop what can't be mapped.
+
+    Prevents UnicodeEncodeError when httpx encodes request bodies as ASCII
+    (common on Linux servers with a non-UTF-8 locale). Accented Latin chars
+    are transliterated (é→e); Cyrillic/CJK/Arabic are silently dropped.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+
 
 # ---------------------------------------------------------------------------
 # Model configuration
@@ -37,8 +53,8 @@ log = logging.getLogger(__name__)
 # Groq models (free tier)
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-# Gemini models (fallback)
-GEMINI_MODEL_FLASH = "gemini-2.5-flash"
+# Gemini models (fallback) — 2.0-flash has 1,500 req/day free; 2.5-flash is only 20/day
+GEMINI_MODEL_FLASH = "gemini-2.0-flash"
 
 # Claude model (reasoning tier)
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -48,30 +64,31 @@ CLAUDE_TIER: frozenset[str] = frozenset({
     "chat", "chat_full",
     "agent_synthesis", "weekly_synthesis",
     "journal", "explain_trade", "performance",
+    "news_analysis", "risk_event",
 })
 
 # Calls routed to Groq first (summarization/formatting, $0/mo)
 GROQ_TIER: frozenset[str] = frozenset({
     "signal_summary", "annotate", "narrative",
-    "pre_trade", "post_trade", "news_analysis", "risk_event",
+    "pre_trade", "post_trade",
 })
 
-# Per-call-type token budgets — tightened on high-frequency automated calls
+# Per-call-type token budgets
 CALL_PROFILES: dict[str, dict] = {
     "chat":             {"max_tokens": 4096},
-    "chat_full":        {"max_tokens": 6144},
-    "narrative":        {"max_tokens": 512},    # 1024 → 512
-    "explain_trade":    {"max_tokens": 1024},   # 2048 → 1024
-    "journal":          {"max_tokens": 1536},   # 3072 → 1536
-    "performance":      {"max_tokens": 1024},   # 2048 → 1024
-    "risk_event":       {"max_tokens": 512},    # 1024 → 512
-    "signal_summary":   {"max_tokens": 256},    # 512 → 256
-    "annotate":         {"max_tokens": 128},    # 256 → 128
-    "pre_trade":        {"max_tokens": 512},    # 1024 → 512
-    "post_trade":       {"max_tokens": 768},    # 1536 → 768
-    "agent_synthesis":  {"max_tokens": 1500},   # 2048 → 1500
-    "weekly_synthesis": {"max_tokens": 2048},   # 3072 → 2048
-    "news_analysis":    {"max_tokens": 1024},   # 2560 → 1024
+    "chat_full":        {"max_tokens": 8192},   # full operator chat — give Claude space to reason
+    "narrative":        {"max_tokens": 1024},   # action card narratives
+    "explain_trade":    {"max_tokens": 2048},   # trade explanations
+    "journal":          {"max_tokens": 4096},   # daily journal — needs full space
+    "performance":      {"max_tokens": 2048},   # performance analysis
+    "risk_event":       {"max_tokens": 1536},   # risk event narration
+    "signal_summary":   {"max_tokens": 512},    # signal batch summary
+    "annotate":         {"max_tokens": 256},    # one-liner annotations
+    "pre_trade":        {"max_tokens": 1024},   # entry reasoning
+    "post_trade":       {"max_tokens": 1536},   # post-trade review
+    "agent_synthesis":  {"max_tokens": 2048},   # autonomous agent reasoning
+    "weekly_synthesis": {"max_tokens": 4096},   # weekly review — comprehensive
+    "news_analysis":    {"max_tokens": 3072},   # news impact analysis — JSON output + reasoning
 }
 
 
@@ -152,7 +169,12 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
         )
         return response.choices[0].message.content
     except Exception as e:
-        log.warning("Groq API error: %s", e)
+        err = str(e)
+        if "429" in err or "rate_limit" in err.lower() or "quota" in err.lower():
+            log.warning("Groq rate limited — backing off 5s before fallback")
+            time.sleep(5)
+        else:
+            log.warning("Groq API error: %s", e)
         return None
 
 
@@ -204,7 +226,11 @@ def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None
         )
         return response.text
     except Exception as e:
-        log.warning("Gemini API error: %s", e)
+        err = str(e)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
+            log.warning("Gemini quota exhausted — switching to next provider")
+        else:
+            log.warning("Gemini API error: %s", e)
         return None
 
 
@@ -254,8 +280,8 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
         msg = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
+            system=_ascii_safe(system),
+            messages=[{"role": "user", "content": _ascii_safe(prompt)}],
         )
         return msg.content[0].text
     except Exception as e:
@@ -263,7 +289,7 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
         return None
 
 
-def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
+def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int | None = None) -> str:
     """Send prompt to LLM with call-type-specific token budget and tier routing.
 
     Reasoning tier (Claude → Groq → Gemini):
@@ -276,7 +302,8 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
 
     Always returns a string (graceful degradation to a static message).
     """
-    max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
+    if max_tokens is None:
+        max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
     if call_type in CLAUDE_TIER:
         # Reasoning tier: Claude first, free providers as fallback
@@ -649,55 +676,143 @@ Use markdown formatting. Be analytical and specific."""
 
 
 def analyze_news_impact(headlines: list[dict], positions: list[dict],
-                        regime: str, traded_assets: list[str]) -> str:
-    """Interpret market news and assess impact on specific assets.
+                        regime: str, traded_assets: list[str]) -> dict:
+    """Interpret market news and return structured impact assessment.
 
-    Returns structured analysis with per-asset sentiment,
-    key events, actionable signals, and risk alerts.
+    Returns dict with keys: key_events, asset_impacts, signals, risk_alerts, model_used.
+    Falls back to empty structure on parse failure — never raises.
     """
-    # Trim headlines to titles + source for token efficiency
-    hl_summary = [{"title": h.get("title", ""), "source": h.get("source", ""),
-                    "category": h.get("category", "")}
-                   for h in headlines[:20]]
+    hl_summary = [
+        {
+            "title": h.get("title", ""),
+            "source": h.get("source", ""),
+            "category": h.get("category", ""),
+            "published": h.get("published", h.get("timestamp", "")),
+        }
+        for h in headlines[:25]
+        if h.get("title") and h.get("title").strip()
+    ]
 
-    position_symbols = [p.get("symbol", p.get("coin", "")) for p in positions[:15]]
+    # Filter stale headlines (> 4 hours old) before sending to LLM.
+    # dateutil is not in requirements so we use a lightweight heuristic:
+    # if the published string doesn't contain a known recent year, skip timing check.
+    RECENT_YEARS = {"2024", "2025", "2026"}
+    fresh_headlines: list[dict] = []
+    stale_count = 0
+    for h in hl_summary:
+        pub = h.get("published", "")
+        if not pub:
+            fresh_headlines.append(h)  # No timestamp — include with caution
+            continue
+        # Only attempt time filtering if the published value looks like a full
+        # ISO-8601 timestamp (contains 'T' or ':') so we don't misclassify
+        # date-only strings or relative labels.
+        if ("T" in pub or (":" in pub and any(yr in pub for yr in RECENT_YEARS))):
+            try:
+                from datetime import timedelta
+                # Parse ISO-8601 subset: "2025-04-22T10:30:00Z" or "+00:00"
+                ts = pub.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+                if dt >= cutoff:
+                    fresh_headlines.append(h)
+                else:
+                    stale_count += 1
+            except Exception:
+                fresh_headlines.append(h)
+        else:
+            fresh_headlines.append(h)
 
-    prompt = f"""You are a senior market analyst. Analyze these recent news headlines
-and determine their impact on the assets we actively trade.
+    if not fresh_headlines:
+        fresh_headlines = hl_summary  # All stale? Use anyway with a flag
 
-**Headlines:**
-{json.dumps(hl_summary, indent=1)}
+    position_symbols = [p.get("symbol", p.get("coin", "")) for p in positions[:20]]
 
-**Our open positions:** {json.dumps(position_symbols)}
-**Current market regime:** {regime}
-**All assets we trade:** {json.dumps(traded_assets[:30])}
+    system = """You are a quantitative analyst at a crypto hedge fund.
+Your job: assess the directional impact of news headlines on specific assets.
 
-Provide your analysis in this exact format:
+Impact score scale (probability of 2%+ move in this direction within 24h):
+  +1.0  certain catalyst (ETF approval, major exchange listing, government adoption)
+  +0.7  likely positive (favorable regulation, major partnership, protocol upgrade)
+  +0.3  weak positive (minor positive sentiment, analyst upgrade)
+   0.0  neutral or conflicting signals — do NOT include in output
+  -0.3  weak negative (minor concerns, skeptical commentary)
+  -0.7  likely negative (regulation crackdown, exchange issues, protocol exploit)
+  -1.0  existential threat (insolvency, major hack, total ban)
 
-## Key Events
-List the 3 most market-moving headlines and explain WHY they matter.
+Rules:
+- Only include assets where a headline DIRECTLY mentions them or their protocol/chain
+- DO NOT include assets based on general "crypto market" sentiment alone
+- A signal requires strength >= 0.5 to be actionable
+- Output ONLY valid JSON — no markdown, no prose, no explanation outside the JSON"""
 
-## Asset Impacts
-For each asset affected by this news, provide:
-- Asset name
-- Impact score: -1.0 (very bearish) to +1.0 (very bullish)
-- One-sentence explanation
+    base_prompt = f"""Analyze these news headlines and return a JSON assessment.
 
-Only list assets where news has a CLEAR directional impact (skip neutral).
+Current market regime: {regime}
+Our open positions: {json.dumps(position_symbols)}
+All assets we trade: {json.dumps(traded_assets[:40])}
+Stale headlines excluded: {stale_count}
 
-## Trading Signals
-Based on this news, recommend specific actions:
-- BUY [asset] — [reason] (strength: 0.0-1.0)
-- SELL [asset] — [reason] (strength: 0.0-1.0)
-Only include high-conviction signals (strength >= 0.5).
+Headlines (newest first):
+{json.dumps(fresh_headlines, indent=1)}
 
-## Risk Alerts
-Flag any headlines suggesting we should reduce exposure or be cautious.
-Include specific assets or the portfolio as a whole.
+Return EXACTLY this JSON structure (no other text):
+{{
+  "key_events": [
+    {{"headline": "exact headline text", "impact": "why this matters in 1 sentence", "urgency": "high|medium|low"}}
+  ],
+  "asset_impacts": {{
+    "SYMBOL": {{"score": 0.7, "reason": "1 sentence reason", "headline_count": 2}}
+  }},
+  "signals": [
+    {{"action": "buy|sell", "asset": "SYMBOL", "strength": 0.7, "reason": "1 sentence", "time_horizon": "hours|day|week"}}
+  ],
+  "risk_alerts": [
+    {{"asset": "SYMBOL or portfolio", "alert": "1 sentence risk", "severity": "high|medium|low"}}
+  ],
+  "headline_count_used": {len(fresh_headlines)},
+  "stale_excluded": {stale_count}
+}}
 
-Be direct. Cite specific headlines. Don't hedge excessively."""
+Only include signals with strength >= 0.5. Only include key_events that are market-moving (3 max). asset_impacts only for directly-mentioned assets."""
 
-    return ask_llm(TRADING_SYSTEM_PROMPT, prompt, call_type="news_analysis")
+    prompt = base_prompt
+
+    # Try up to 2 times to get valid JSON
+    for attempt in range(2):
+        try:
+            raw = ask_llm(system, prompt, call_type="news_analysis")
+            if not raw or "LLM unavailable" in raw:
+                break
+            # Strip any markdown fences if LLM adds them despite instructions
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("```")[1]
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:]
+            cleaned = cleaned.strip()
+            result = json.loads(cleaned)
+            result["model_used"] = "llm"
+            return result
+        except (json.JSONDecodeError, Exception) as e:
+            log.warning("News analysis JSON parse failed (attempt %d): %s", attempt + 1, e)
+            if attempt == 0:
+                # Add explicit retry instruction to prompt
+                prompt = base_prompt + "\n\nIMPORTANT: Your previous response was not valid JSON. Return ONLY the JSON object, starting with { and ending with }."
+
+    # Fallback structure
+    log.warning("analyze_news_impact: returning empty fallback after parse failures")
+    return {
+        "key_events": [],
+        "asset_impacts": {},
+        "signals": [],
+        "risk_alerts": [],
+        "headline_count_used": len(fresh_headlines),
+        "stale_excluded": stale_count,
+        "model_used": "fallback",
+    }
 
 
 # ---------------------------------------------------------------------------
