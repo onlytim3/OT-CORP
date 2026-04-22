@@ -1980,6 +1980,24 @@ def start_daemon(interval_hours=4, paper=False):
     # Run startup validation backtest (if enabled)
     _run_startup_validation()
 
+    # Upgrade template-cached action narratives to LLM in background.
+    # During prior downtime (cycle crash + LLM ASCII bug), every action card
+    # fell back to plain templates.  This replaces the 60 most recent ones
+    # with AI narratives without blocking the first trading cycle.
+    try:
+        import threading as _threading
+        def _upgrade_narratives():
+            try:
+                from trading.intelligence.action_narrator import generate_missing_narratives
+                upgraded = generate_missing_narratives(limit=60)
+                if upgraded:
+                    log.info("Startup: upgraded %d template narratives to AI", upgraded)
+            except Exception as _ne:
+                log.debug("Startup narrative upgrade failed (non-fatal): %s", _ne)
+        _threading.Thread(target=_upgrade_narratives, daemon=True, name="narrative-upgrade").start()
+    except Exception:
+        pass
+
     # Run immediately on start
     run_trading_cycle()
 

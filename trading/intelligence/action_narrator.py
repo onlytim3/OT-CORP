@@ -380,14 +380,15 @@ def _strategy_run_narrative(data: dict, details: str) -> str:
 
 
 def generate_missing_narratives(limit: int = 20) -> int:
-    """Generate narratives for recent actions that don't have one yet."""
+    """Generate narratives for recent actions that don't have one yet,
+    AND replace template-fallback narratives with LLM-generated ones."""
     from trading.db.store import get_db
 
     with get_db() as conn:
         rows = conn.execute(
             "SELECT al.* FROM action_log al "
             "LEFT JOIN action_narratives an ON al.id = an.action_id "
-            "WHERE an.action_id IS NULL "
+            "WHERE an.action_id IS NULL OR an.model = 'template' "
             "ORDER BY al.timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -396,7 +397,9 @@ def generate_missing_narratives(limit: int = 20) -> int:
     for row in rows:
         action = dict(row)
         try:
-            get_or_generate_narrative(action)
+            # Call _generate_and_cache directly — bypasses the cache check in
+            # get_or_generate_narrative() so template entries get overwritten.
+            _generate_and_cache(action)
             count += 1
         except Exception as e:
             log.warning(
@@ -406,7 +409,7 @@ def generate_missing_narratives(limit: int = 20) -> int:
             )
 
     if count:
-        log.info("Generated %d narratives for recent actions", count)
+        log.info("Generated/upgraded %d narratives (including template replacements)", count)
     return count
 
 
