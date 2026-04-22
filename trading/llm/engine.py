@@ -335,6 +335,16 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int |
             log.debug("ask_llm [%s] → claude (groq+gemini unavailable)", call_type)
             return result
 
+    configured = {
+        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "groq": bool(os.getenv("GROQ_API_KEY")),
+        "gemini": bool(os.getenv("GEMINI_API_KEY")),
+    }
+    missing = [k for k, v in configured.items() if not v]
+    log.error(
+        "ask_llm [%s]: all providers failed. Missing keys: %s. Configured: %s",
+        call_type, missing or "none", configured,
+    )
     return "(LLM unavailable — add ANTHROPIC_API_KEY and GROQ_API_KEY to Render)"
 
 
