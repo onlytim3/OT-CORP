@@ -1288,7 +1288,7 @@ def api_intelligence():
                     if bdata.get("asset_impacts") and "asset_impacts" not in result:
                         result["asset_impacts"] = bdata["asset_impacts"]
                     if bdata.get("news_interpretation") and "news_interpretation" not in result:
-                        result["news_interpretation"] = bdata["news_interpretation"][:5000]
+                        result["news_interpretation"] = str(bdata["news_interpretation"])[:5000]
         except Exception:
             pass
 

@@ -2815,13 +2815,18 @@ def _news_agent_think() -> list[dict]:
         traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(ASTER_SYMBOLS.keys())))
         analysis = analyze_news_impact(headlines, positions, regime, traded_assets[:30])
 
-        if not analysis or "LLM unavailable" in analysis:
+        if not isinstance(analysis, dict) or analysis.get("model_used") != "llm":
             return recommendations
 
-        # Log the analysis
+        # Build a short details string from the structured dict
+        key_events = analysis.get("key_events", []) or []
+        risk_alerts = analysis.get("risk_alerts", []) or []
+        event_headlines = [e.get("headline", "") for e in key_events if isinstance(e, dict)]
+        details_str = " | ".join(h for h in event_headlines[:3] if h)[:300] or "news analyzed"
+
         log_action(
             "intelligence", "news_analysis",
-            details=analysis[:300],
+            details=details_str,
             data={
                 "full_analysis": analysis,
                 "headline_count": len(headlines),
@@ -2830,16 +2835,17 @@ def _news_agent_think() -> list[dict]:
             },
         )
 
-        # Check for risk alerts in the analysis
-        analysis_lower = analysis.lower()
-        if any(word in analysis_lower for word in ["risk alert", "reduce exposure", "emergency", "crash", "liquidat"]):
+        # Risk alerts come as structured entries in the JSON response
+        if risk_alerts:
+            alert_texts = [a.get("alert", "") for a in risk_alerts if isinstance(a, dict)]
+            alert_summary = " | ".join(t for t in alert_texts if t)[:200]
             recommendations.append({
                 "from_agent": NEWS_AGENT,
                 "to_agent": "risk",
                 "category": "risk_alert",
                 "action": "review_exposure",
                 "target": "portfolio",
-                "reasoning": f"News analysis flagged risk: {analysis[:200]}",
+                "reasoning": f"News analysis flagged risk: {alert_summary}",
                 "data": {"auto_approve": False, "source": "news_analysis"},
             })
 

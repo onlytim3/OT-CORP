@@ -513,7 +513,8 @@ class MarketBriefing:
     event_risk: list[str] = field(default_factory=list)
     overall_regime: str = "neutral"
     overall_score: float = 0.0
-    news_interpretation: str = ""       # LLM analysis of headlines
+    news_interpretation: str = ""       # Human-readable LLM summary of headlines
+    news_analysis: dict = field(default_factory=dict)  # Full structured dict from analyze_news_impact()
     asset_impacts: dict = field(default_factory=dict)  # {coin_id: score}
     headline_freshness: dict[str, float] = field(default_factory=dict)  # category → 0-1
     news_bursts: list[dict] = field(default_factory=list)  # detected burst events
@@ -543,7 +544,9 @@ class MarketBriefing:
             "overall_score": self.overall_score,
         }
         if self.news_interpretation:
-            d["news_interpretation"] = self.news_interpretation[:5000]
+            d["news_interpretation"] = str(self.news_interpretation)[:5000]
+        if self.news_analysis:
+            d["news_analysis"] = self.news_analysis
         if self.asset_impacts:
             d["asset_impacts"] = self.asset_impacts
         if self.headline_freshness:
@@ -634,17 +637,27 @@ def generate_briefing() -> MarketBriefing:
             interpretation = analyze_news_impact(
                 all_headlines, [], regime, traded_assets[:30],
             )
-            if interpretation and "LLM unavailable" not in interpretation:
-                briefing.news_interpretation = interpretation
-                # Parse per-asset impacts from interpretation
-                from trading.strategy.news_sentiment import _parse_asset_impacts
-                asset_map = {}
-                for k, v in CRYPTO_SYMBOLS.items():
-                    asset_map[k] = v
-                for k, v in ASTER_SYMBOLS.items():
-                    asset_map[k] = v
-                briefing.asset_impacts = _parse_asset_impacts(interpretation, asset_map)
-                log.info("News interpretation: %d asset impacts parsed", len(briefing.asset_impacts))
+            if isinstance(interpretation, dict) and interpretation.get("model_used") == "llm":
+                briefing.news_analysis = interpretation
+                # Pull structured asset_impacts directly — no regex parsing needed
+                raw_impacts = interpretation.get("asset_impacts", {}) or {}
+                briefing.asset_impacts = {
+                    k: (v.get("score", 0.0) if isinstance(v, dict) else float(v))
+                    for k, v in raw_impacts.items()
+                }
+                # Build a human-readable summary for logs and dashboard text display
+                key_events = interpretation.get("key_events", []) or []
+                risk_alerts = interpretation.get("risk_alerts", []) or []
+                summary_parts = []
+                for e in key_events[:3]:
+                    if isinstance(e, dict) and e.get("headline"):
+                        summary_parts.append(f"- {e['headline']}")
+                for a in risk_alerts[:2]:
+                    if isinstance(a, dict) and a.get("alert"):
+                        summary_parts.append(f"RISK: {a['alert']}")
+                briefing.news_interpretation = "\n".join(summary_parts)
+                log.info("News interpretation: %d asset impacts, %d events, %d risk alerts",
+                         len(briefing.asset_impacts), len(key_events), len(risk_alerts))
     except Exception as e:
         log.debug("LLM news interpretation failed (non-fatal): %s", e)
 
