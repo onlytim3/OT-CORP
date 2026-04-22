@@ -28,9 +28,23 @@ import json
 import logging
 import os
 import time
+import unicodedata
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
+
+
+def _ascii_safe(text: str) -> str:
+    """Normalize unicode to closest ASCII, drop what can't be mapped.
+
+    Prevents UnicodeEncodeError when httpx encodes request bodies as ASCII
+    (common on Linux servers with a non-UTF-8 locale). Accented Latin chars
+    are transliterated (é→e); Cyrillic/CJK/Arabic are silently dropped.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+
 
 # ---------------------------------------------------------------------------
 # Model configuration
@@ -257,8 +271,8 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
         msg = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
+            system=_ascii_safe(system),
+            messages=[{"role": "user", "content": _ascii_safe(prompt)}],
         )
         return msg.content[0].text
     except Exception as e:
