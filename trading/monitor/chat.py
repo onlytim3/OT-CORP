@@ -64,6 +64,22 @@ def _handle_greeting(msg: str) -> str | None:
                  "good morning", "good evening", "good afternoon", "howdy", "greetings"]
     thanks = ["thank", "thanks", "thx", "cheers", "appreciate"]
     goodbyes = ["bye", "goodbye", "see ya", "later", "good night", "gn"]
+    identity = ["who are you", "what are you", "what is this", "introduce yourself",
+                "tell me about yourself", "what do you do", "what can you do",
+                "about you", "what is ot-corp", "what is otcorp"]
+
+    if any(msg == i or msg.startswith(i) for i in identity):
+        return (
+            "I'm the **OT-CORP Trading Assistant** — your operator interface to the autonomous trading system.\n\n"
+            "I can answer questions about:\n"
+            "- **Portfolio & Positions** — balances, open trades, P&L\n"
+            "- **Strategies** — what's running, performance, parameters\n"
+            "- **Signals & Intelligence** — market sentiment, news, regime\n"
+            "- **Risk** — exposure, drawdown, stops\n"
+            "- **Agents** — autonomous recommendations and self-improvement\n"
+            "- **History** — trades, journal, backtests, reviews\n\n"
+            "Type **help** for a full command list, or just ask me anything about your trading system."
+        )
 
     if any(msg.startswith(g) or msg == g for g in greetings):
         # Gather a quick status snapshot
@@ -215,8 +231,11 @@ def _gather_intent_data(msg: str, original: str) -> str:
     if _match(msg, ["help", "what can you", "commands", "how to"]):
         return _help_answer()
 
-    # No specific intent matched — knowledge search
-    knowledge = search_knowledge(original, limit=3)
+    # No specific intent matched — knowledge search (skip internal system_learning records)
+    knowledge = [
+        k for k in search_knowledge(original, limit=3)
+        if k.get("category") != "system_learning"
+    ]
     if knowledge:
         answer = "Knowledge base results:\n"
         for k in knowledge:
