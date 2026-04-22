@@ -263,7 +263,7 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
         return None
 
 
-def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
+def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int | None = None) -> str:
     """Send prompt to LLM with call-type-specific token budget and tier routing.
 
     Reasoning tier (Claude → Groq → Gemini):
@@ -276,7 +276,8 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat") -> str:
 
     Always returns a string (graceful degradation to a static message).
     """
-    max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
+    if max_tokens is None:
+        max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
     if call_type in CLAUDE_TIER:
         # Reasoning tier: Claude first, free providers as fallback
