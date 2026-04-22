@@ -15,6 +15,12 @@ services:
       # ── Runtime ──
       - key: PYTHON_VERSION
         value: "3.11.11"
+      - key: PYTHONIOENCODING
+        value: "utf-8"
+      - key: LANG
+        value: "en_US.UTF-8"
+      - key: LC_ALL
+        value: "en_US.UTF-8"
       - key: TRADING_MODE
         value: paper
       - key: PORT

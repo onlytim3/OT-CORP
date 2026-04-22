@@ -50,8 +50,8 @@ def get_auth_middleware(app):
 
     @app.before_request
     def require_auth():
-        # Health checks and the login endpoints are always open
-        if request.path.startswith("/api/health"):
+        # Health check and version are always open (used for deployment verification)
+        if request.path.startswith("/api/health") or request.path == "/api/version":
             return None
         if request.path in ("/login", "/api/auth/login", "/api/auth/logout"):
             return None

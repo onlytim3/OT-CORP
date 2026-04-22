@@ -2069,6 +2069,27 @@ def api_profile():
     return jsonify({"profile": new_profile, "previous": old_profile})
 
 
+@app.route("/api/version")
+def api_version():
+    """Return deployed git commit and build info — auth-free for deployment verification."""
+    import subprocess
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True,
+            cwd=str(Path(__file__).parent.parent.parent),
+        ).strip()
+    except Exception:
+        commit = "unknown"
+    return jsonify({
+        "commit": commit,
+        "python_encoding": __import__("sys").getdefaultencoding(),
+        "started_at": datetime.fromtimestamp(
+            __import__("time").monotonic() - _START_TIME + __import__("time").time(),
+            tz=timezone.utc,
+        ).isoformat(),
+    })
+
+
 @app.route("/api/health")
 def api_health():
     """Health check endpoint for monitoring and alerting."""
