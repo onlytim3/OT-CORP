@@ -1669,7 +1669,7 @@ def run_weekly_review():
 def process_pending_approvals():
     """Process any pending agent recommendations with full autonomy.
 
-    Runs every 30 minutes. Picks up any recommendations that were
+    Runs every 5 minutes. Picks up any recommendations that were
     stored as 'pending' (from before full autonomy was enabled, or
     from edge cases) and auto-applies them.
     """
@@ -2018,7 +2018,7 @@ def start_daemon(interval_hours=4, paper=False):
     # Schedule recurring tasks
     schedule.every(interval_hours).hours.do(run_trading_cycle).tag("trading")
     schedule.every(15).minutes.do(check_stop_losses)
-    schedule.every(30).minutes.do(process_pending_approvals)
+    schedule.every(5).minutes.do(process_pending_approvals)
     schedule.every().day.at("23:55").do(run_daily_journal)
     schedule.every().sunday.at("00:00").do(run_weekly_review)
     # Position review now runs as part of run_autonomous_cycle() — no separate schedule needed

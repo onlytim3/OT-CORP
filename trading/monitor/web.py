@@ -1378,6 +1378,32 @@ def api_agents():
         result["agent_stats"] = sorted(
             agent_stats.values(), key=lambda x: x["total"], reverse=True,
         )
+
+        # Compute quality summary across all recommendations
+        total_recs = len(recs)
+        auto_approved_count = sum(
+            1 for r in recs
+            if isinstance(r.get("data"), dict) and r["data"].get("auto_approve")
+        )
+        pending_count = sum(1 for r in recs if r.get("status") == "pending")
+
+        by_agent_quality: dict[str, dict] = {}
+        for r in recs:
+            agent = r.get("from_agent", "unknown")
+            if agent == "executor_agent":
+                continue
+            if agent not in by_agent_quality:
+                by_agent_quality[agent] = {"total": 0, "auto_approved": 0}
+            by_agent_quality[agent]["total"] += 1
+            if isinstance(r.get("data"), dict) and r["data"].get("auto_approve"):
+                by_agent_quality[agent]["auto_approved"] += 1
+
+        result["quality_summary"] = {
+            "total_recommendations": total_recs,
+            "auto_approved": auto_approved_count,
+            "pending": pending_count,
+            "by_agent": by_agent_quality,
+        }
     except Exception:
         pass
 
