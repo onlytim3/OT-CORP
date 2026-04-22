@@ -2597,7 +2597,7 @@ def api_confluence_matrix():
         cutoff = datetime.now(timezone.utc).timestamp() - 6 * 3600
         with get_db() as db:
             rows = db.execute(
-                "SELECT symbol, strategy, action, strength FROM signals WHERE timestamp > ? ORDER BY timestamp DESC",
+                "SELECT symbol, strategy, signal, strength FROM signals WHERE timestamp > ? ORDER BY timestamp DESC",
                 (cutoff,),
             ).fetchall()
             matrix: dict = {}
@@ -2605,7 +2605,7 @@ def api_confluence_matrix():
                 sym = row["symbol"]
                 if sym not in matrix:
                     matrix[sym] = {"buy": [], "sell": [], "hold": []}
-                action = row["action"] or "hold"
+                action = row["signal"] or "hold"
                 if action in matrix[sym]:
                     if row["strategy"] not in matrix[sym][action]:
                         matrix[sym][action].append(row["strategy"])
