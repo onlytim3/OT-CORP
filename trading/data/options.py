@@ -45,10 +45,20 @@ def _compute_put_call_ratio(currency: str) -> Optional[float]:
 
 
 def _get_dvol(currency: str) -> Optional[float]:
-    """Get Deribit Volatility Index (DVOL) — the crypto VIX."""
-    result = _get("get_index_price", {"index_name": f"{currency.lower()}_dvol"})
-    if result and "index_price" in result:
-        return round(result["index_price"], 2)
+    """Get Deribit Volatility Index (DVOL) via the time-series endpoint."""
+    import time
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - 3_600_000  # last 1 hour
+    result = _get("get_volatility_index_data", {
+        "currency": currency.upper(),
+        "start_timestamp": start_ms,
+        "end_timestamp": now_ms,
+        "resolution": 3600,
+    })
+    if result and isinstance(result, dict):
+        data = result.get("data", [])
+        if data:
+            return round(data[-1][4], 2)  # [timestamp, open, high, low, close]
     return None
 
 

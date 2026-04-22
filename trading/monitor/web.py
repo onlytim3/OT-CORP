@@ -2594,43 +2594,42 @@ def api_cycle_frequency():
 def api_confluence_matrix():
     """Per-symbol strategy agreement from the last cycle."""
     try:
-        db = get_db()
-        # Get signals from the last 6 hours (one cycle window)
         cutoff = datetime.now(timezone.utc).timestamp() - 6 * 3600
-        rows = db.execute(
-            "SELECT symbol, strategy, action, strength FROM signals WHERE timestamp > ? ORDER BY timestamp DESC",
-            (cutoff,),
-        ).fetchall()
-        matrix: dict = {}
-        for row in rows:
-            sym = row["symbol"]
-            if sym not in matrix:
-                matrix[sym] = {"buy": [], "sell": [], "hold": []}
-            action = row["action"] or "hold"
-            if action in matrix[sym]:
-                if row["strategy"] not in matrix[sym][action]:
-                    matrix[sym][action].append(row["strategy"])
-        result = {}
-        for sym, data in matrix.items():
-            buy_count = len(data["buy"])
-            sell_count = len(data["sell"])
-            net = "bullish" if buy_count > sell_count else "bearish" if sell_count > buy_count else "neutral"
-            all_strengths = []
-            try:
-                strength_rows = db.execute(
-                    "SELECT strength FROM signals WHERE symbol=? AND timestamp>?",
-                    (sym, cutoff),
-                ).fetchall()
-                all_strengths = [r["strength"] for r in strength_rows if r["strength"]]
-            except Exception:
-                pass
-            avg_strength = round(sum(all_strengths) / len(all_strengths), 3) if all_strengths else 0.0
-            result[sym] = {
-                "buy": data["buy"],
-                "sell": data["sell"],
-                "net": net,
-                "strength": avg_strength,
-            }
+        with get_db() as db:
+            rows = db.execute(
+                "SELECT symbol, strategy, action, strength FROM signals WHERE timestamp > ? ORDER BY timestamp DESC",
+                (cutoff,),
+            ).fetchall()
+            matrix: dict = {}
+            for row in rows:
+                sym = row["symbol"]
+                if sym not in matrix:
+                    matrix[sym] = {"buy": [], "sell": [], "hold": []}
+                action = row["action"] or "hold"
+                if action in matrix[sym]:
+                    if row["strategy"] not in matrix[sym][action]:
+                        matrix[sym][action].append(row["strategy"])
+            result = {}
+            for sym, data in matrix.items():
+                buy_count = len(data["buy"])
+                sell_count = len(data["sell"])
+                net = "bullish" if buy_count > sell_count else "bearish" if sell_count > buy_count else "neutral"
+                all_strengths = []
+                try:
+                    strength_rows = db.execute(
+                        "SELECT strength FROM signals WHERE symbol=? AND timestamp>?",
+                        (sym, cutoff),
+                    ).fetchall()
+                    all_strengths = [r["strength"] for r in strength_rows if r["strength"]]
+                except Exception:
+                    pass
+                avg_strength = round(sum(all_strengths) / len(all_strengths), 3) if all_strengths else 0.0
+                result[sym] = {
+                    "buy": data["buy"],
+                    "sell": data["sell"],
+                    "net": net,
+                    "strength": avg_strength,
+                }
         return jsonify(result)
     except Exception as e:
         log.error("confluence-matrix error: %s", e)
@@ -2641,33 +2640,30 @@ def api_confluence_matrix():
 def api_cycle_metrics():
     """Signal funnel metrics for the last completed cycle."""
     try:
-        db = get_db()
         cutoff = datetime.now(timezone.utc).timestamp() - 6 * 3600
-        # Count signals collected
-        signals_collected = db.execute(
-            "SELECT COUNT(*) FROM signals WHERE timestamp > ?", (cutoff,)
-        ).fetchone()[0]
-        # Count actions from action_log
-        actions = db.execute(
-            "SELECT action, COUNT(*) as cnt FROM action_log WHERE timestamp > ? GROUP BY action",
-            (cutoff,),
-        ).fetchall()
-        action_counts: dict = {r["action"]: r["cnt"] for r in actions}
-        executed = action_counts.get("trade_executed", 0) + action_counts.get("buy", 0) + action_counts.get("sell", 0)
-        blocked_confluence = action_counts.get("confluence_gate_block", 0)
-        blocked_regime = action_counts.get("regime_routing_block", 0)
-        blocked_risk = action_counts.get("risk_block", 0)
+        with get_db() as db:
+            signals_collected = db.execute(
+                "SELECT COUNT(*) FROM signals WHERE timestamp > ?", (cutoff,)
+            ).fetchone()[0]
+            actions = db.execute(
+                "SELECT action, COUNT(*) as cnt FROM action_log WHERE timestamp > ? GROUP BY action",
+                (cutoff,),
+            ).fetchall()
+            action_counts: dict = {r["action"]: r["cnt"] for r in actions}
+            executed = action_counts.get("trade_executed", 0) + action_counts.get("buy", 0) + action_counts.get("sell", 0)
+            blocked_confluence = action_counts.get("confluence_gate_block", 0)
+            blocked_regime = action_counts.get("regime_routing_block", 0)
+            blocked_risk = action_counts.get("risk_block", 0)
 
-        # Cycle duration from last two cycle_start entries
-        cycle_rows = db.execute(
-            "SELECT timestamp FROM action_log WHERE action='cycle_start' ORDER BY timestamp DESC LIMIT 2"
-        ).fetchall()
-        cycle_duration_s = None
-        if len(cycle_rows) == 2:
-            cycle_duration_s = round(cycle_rows[0]["timestamp"] - cycle_rows[1]["timestamp"])
+            cycle_rows = db.execute(
+                "SELECT timestamp FROM action_log WHERE action='cycle_start' ORDER BY timestamp DESC LIMIT 2"
+            ).fetchall()
+            cycle_duration_s = None
+            if len(cycle_rows) == 2:
+                cycle_duration_s = round(cycle_rows[0]["timestamp"] - cycle_rows[1]["timestamp"])
 
-        last_cycle_ts = cycle_rows[0]["timestamp"] if cycle_rows else None
-        last_cycle_iso = datetime.fromtimestamp(last_cycle_ts, tz=timezone.utc).isoformat() if last_cycle_ts else None
+            last_cycle_ts = cycle_rows[0]["timestamp"] if cycle_rows else None
+            last_cycle_iso = datetime.fromtimestamp(last_cycle_ts, tz=timezone.utc).isoformat() if last_cycle_ts else None
 
         return jsonify({
             "signals_collected": signals_collected,
@@ -2714,10 +2710,10 @@ def api_risk_budget():
                 pass
 
         strategies = []
-        db = get_db()
-        open_pos_rows = db.execute(
-            "SELECT strategy, COUNT(*) as cnt FROM trades WHERE status='open' GROUP BY strategy"
-        ).fetchall()
+        with get_db() as db:
+            open_pos_rows = db.execute(
+                "SELECT strategy, COUNT(*) as cnt FROM trades WHERE status='open' GROUP BY strategy"
+            ).fetchall()
         open_pos: dict = {r["strategy"]: r["cnt"] for r in open_pos_rows}
 
         for name, score in (thompson.items() if isinstance(thompson, dict) else []):
