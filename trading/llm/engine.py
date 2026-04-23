@@ -1,25 +1,26 @@
-"""LLM engine for OT-CORP trading system — two-tier cost routing.
+"""LLM engine for OT-CORP trading system — Claude-primary design.
 
-Claude Reasoning Tier (ANTHROPIC_API_KEY): chat, chat_full, agent_synthesis,
-    weekly_synthesis, journal, explain_trade, performance,
-    news_analysis, risk_event — ~$12-18/month.
+Claude Reasoning Tier (ANTHROPIC_API_KEY): all user-visible outputs —
+    chat, chat_full, agent_synthesis, weekly_synthesis, journal,
+    explain_trade, performance, news_analysis, risk_event,
+    narrative, pre_trade, post_trade — ~$12-18/month.
+    If Claude is unavailable, returns a clear operator-facing message.
+    Never silently falls back to a weaker model.
 
-Groq Free Tier (GROQ_API_KEY): signal_summary, annotate, narrative,
-    pre_trade, post_trade — $0/month.
-
-Gemini Flash (GEMINI_API_KEY): emergency fallback for either tier.
+Groq Background Tier (GROQ_API_KEY): internal logging only —
+    signal_summary, annotate — $0/month.
+    Falls back to Claude if Groq is down.
 
 Fallback chains:
-    Reasoning tier:  Claude → Groq → Gemini
-    Groq/free tier:  Groq → Gemini → Claude
+    Claude tier:      Claude → operator-visible error (no silent fallback)
+    Background tier:  Groq → Claude → static error string
 
 Usage:
     from trading.llm.engine import ask_llm, explain_trade, generate_journal
 
 Environment variables:
-    ANTHROPIC_API_KEY — Claude Sonnet (reasoning tier, ~$12-18/mo)
-    GROQ_API_KEY      — Groq free tier ($0/mo, 14,400 req/day)
-    GEMINI_API_KEY    — Gemini Flash fallback ($0/mo)
+    ANTHROPIC_API_KEY — Claude Sonnet (all reasoning, ~$12-18/mo)
+    GROQ_API_KEY      — Groq free tier (background tasks only, $0/mo)
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import logging
 import os
 import re
 import time
+import traceback
 import unicodedata
 from datetime import datetime, timezone
 
@@ -36,48 +38,52 @@ log = logging.getLogger(__name__)
 
 
 def _ascii_safe(text: str) -> str:
-    """Normalize unicode to closest ASCII, drop what can't be mapped.
+    """Strip all non-ASCII characters from text — belt-and-suspenders against encoding errors.
 
-    Prevents UnicodeEncodeError when httpx encodes request bodies as ASCII
-    (common on Linux servers with a non-UTF-8 locale). Accented Latin chars
-    are transliterated (é→e); Cyrillic/CJK/Arabic are silently dropped.
+    Accented Latin chars are first NFKD-decomposed (é→e+combining accent → e after strip).
+    Cyrillic, CJK, Arabic and all other non-ASCII are dropped silently.
+    Falls back to a character-by-character filter if normalization fails (e.g. lone surrogates).
     """
     if not isinstance(text, str):
-        text = str(text)
-    return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+        try:
+            text = str(text)
+        except Exception:
+            return ""
+    try:
+        return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+    except Exception:
+        # Fallback: char-by-char filter (handles lone surrogates and other edge cases)
+        return "".join(c for c in text if ord(c) < 128)
 
 
 # ---------------------------------------------------------------------------
 # Model configuration
 # ---------------------------------------------------------------------------
 
-# Groq models (free tier)
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Groq models (background tasks only) — llama-3.3-70b-versatile is confirmed free-tier
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
-# Gemini models (fallback) — 2.0-flash has 1,500 req/day free; 2.5-flash is only 20/day
-GEMINI_MODEL_FLASH = "gemini-2.0-flash"
-
-# Claude model (reasoning tier)
+# Claude model (primary reasoning engine — all user-visible outputs)
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
-# Calls routed to Claude first (high-stakes reasoning, ~$12-18/mo total)
+# All user-visible outputs — Claude only, no silent fallback to weaker models
 CLAUDE_TIER: frozenset[str] = frozenset({
     "chat", "chat_full",
     "agent_synthesis", "weekly_synthesis",
     "journal", "explain_trade", "performance",
     "news_analysis", "risk_event",
+    "narrative", "pre_trade", "post_trade",
 })
 
-# Calls routed to Groq first (summarization/formatting, $0/mo)
+# Background/internal tasks only — Groq first, Claude fallback
 GROQ_TIER: frozenset[str] = frozenset({
-    "signal_summary", "annotate", "narrative",
-    "pre_trade", "post_trade",
+    "signal_summary", "annotate",
 })
 
 # Per-call-type token budgets
 CALL_PROFILES: dict[str, dict] = {
     "chat":             {"max_tokens": 4096},
-    "chat_full":        {"max_tokens": 8192},   # full operator chat — give Claude space to reason
+    "chat_full":        {"max_tokens": 4096},   # full operator chat
     "narrative":        {"max_tokens": 1024},   # action card narratives
     "explain_trade":    {"max_tokens": 2048},   # trade explanations
     "journal":          {"max_tokens": 4096},   # daily journal — needs full space
@@ -91,6 +97,11 @@ CALL_PROFILES: dict[str, dict] = {
     "weekly_synthesis": {"max_tokens": 4096},   # weekly review — comprehensive
     "news_analysis":    {"max_tokens": 3072},   # news impact analysis — JSON output + reasoning
 }
+
+assert CALL_PROFILES.keys() == CLAUDE_TIER | GROQ_TIER, (
+    f"CALL_PROFILES keys not covered by tiers: "
+    f"uncovered={set(CALL_PROFILES.keys()) - CLAUDE_TIER - GROQ_TIER}"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +121,50 @@ def _rate_limit():
 
 
 # ---------------------------------------------------------------------------
-# Provider: Groq (primary) — OpenAI-compatible API
+# Provider circuit breakers — skip a provider that keeps failing
 # ---------------------------------------------------------------------------
+
+_provider_failures: dict[str, int] = {}        # provider → consecutive failure count
+_provider_disabled_until: dict[str, float] = {}  # provider → monotonic time when re-enabled
+_CIRCUIT_OPEN_AFTER = 3    # failures before disabling
+_CIRCUIT_COOLDOWN = 300.0  # 5 minutes
+
+
+def _provider_ok(name: str) -> bool:
+    """Return True if provider is not circuit-broken."""
+    disabled_until = _provider_disabled_until.get(name, 0.0)
+    if time.monotonic() < disabled_until:
+        return False
+    return True
+
+
+def _record_failure(name: str) -> None:
+    _provider_failures[name] = _provider_failures.get(name, 0) + 1
+    if _provider_failures[name] >= _CIRCUIT_OPEN_AFTER:
+        _provider_disabled_until[name] = time.monotonic() + _CIRCUIT_COOLDOWN
+        log.warning("LLM circuit breaker OPEN for '%s' — disabled for %ds", name, int(_CIRCUIT_COOLDOWN))
+
+
+def _record_success(name: str) -> None:
+    _provider_failures[name] = 0
+    _provider_disabled_until.pop(name, None)
+
+
+def get_provider_health() -> dict:
+    """Return health status of each LLM provider (for diagnostics)."""
+    now = time.monotonic()
+    result = {}
+    for name in ("groq", "claude"):
+        disabled_until = _provider_disabled_until.get(name, 0.0)
+        failures = _provider_failures.get(name, 0)
+        if now < disabled_until:
+            result[name] = {"status": "circuit_open", "failures": failures,
+                            "retry_in_seconds": int(disabled_until - now)}
+        else:
+            result[name] = {"status": "ok" if failures == 0 else "degraded", "failures": failures}
+    return result
+
+
 
 _groq_client = None
 _groq_init_attempted = False
@@ -133,7 +186,7 @@ def _get_groq_client():
     if not api_key:
         if not _groq_init_attempted:
             _groq_init_attempted = True
-            log.info("GROQ_API_KEY not set — will try Gemini fallback")
+            log.info("GROQ_API_KEY not set — background tasks will fall back to Claude")
         return None
 
     try:
@@ -154,6 +207,8 @@ def _get_groq_client():
 
 def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
     """Call Groq API via OpenAI-compatible SDK. Returns response text or None."""
+    if not _provider_ok("groq"):
+        return None
     client = _get_groq_client()
     if client is None:
         return None
@@ -168,71 +223,21 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
             max_tokens=max_tokens,
             temperature=0.7,
         )
+        _record_success("groq")
         return response.choices[0].message.content
     except Exception as e:
         err = str(e)
         if "429" in err or "rate_limit" in err.lower() or "quota" in err.lower():
             log.warning("Groq rate limited — backing off 5s before fallback")
             time.sleep(5)
+        elif "403" in err or "401" in err or "forbidden" in err.lower() or "unauthorized" in err.lower():
+            log.warning("Groq auth/access error [%s]: %s — circuit breaker triggered", type(e).__name__, err[:200])
         else:
-            log.warning("Groq API error: %s", e)
+            log.warning("Groq API error [%s]: %s", type(e).__name__, err[:200])
+        _record_failure("groq")
         return None
 
 
-# ---------------------------------------------------------------------------
-# Provider: Gemini (fallback)
-# ---------------------------------------------------------------------------
-
-_genai_client = None
-_genai_init_attempted = False
-
-
-def _get_genai_client():
-    """Lazy-init the google.genai Client singleton (fallback only)."""
-    global _genai_client, _genai_init_attempted
-    if _genai_client is not None:
-        return _genai_client
-    try:
-        import trading.config  # noqa: F401
-    except Exception:
-        pass
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        if not _genai_init_attempted:
-            _genai_init_attempted = True
-            log.warning("GEMINI_API_KEY not set — LLM fallback unavailable")
-        return None
-    import warnings
-    warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-    from google import genai
-    _genai_client = genai.Client(api_key=api_key)
-    return _genai_client
-
-
-def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
-    """Call Gemini API via google.genai SDK. Fallback provider."""
-    client = _get_genai_client()
-    if client is None:
-        return None
-    _rate_limit()
-    try:
-        config: dict = {
-            "system_instruction": system,
-            "max_output_tokens": max_tokens,
-        }
-        response = client.models.generate_content(
-            model=GEMINI_MODEL_FLASH,
-            contents=prompt,
-            config=config,
-        )
-        return response.text
-    except Exception as e:
-        err = str(e)
-        if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
-            log.warning("Gemini quota exhausted — switching to next provider")
-        else:
-            log.warning("Gemini API error: %s", e)
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +261,7 @@ def _get_claude_client():
     if not api_key:
         if not _claude_init_attempted:
             _claude_init_attempted = True
-            log.info("ANTHROPIC_API_KEY not set — reasoning tier will use Groq")
+            log.warning("ANTHROPIC_API_KEY not set — Claude-tier calls will return unavailable message")
         return None
     try:
         import anthropic
@@ -273,9 +278,13 @@ def _get_claude_client():
 
 def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None:
     """Call Claude Sonnet via Anthropic SDK. Returns response text or None."""
+    if not _provider_ok("claude"):
+        return None
     client = _get_claude_client()
     if client is None:
         return None
+    # Cap max_tokens to the model's documented output limit
+    max_tokens = min(max_tokens, 8096)
     _rate_limit()
     try:
         msg = client.messages.create(
@@ -284,68 +293,66 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
             system=_ascii_safe(system),
             messages=[{"role": "user", "content": _ascii_safe(prompt)}],
         )
+        _record_success("claude")
         return msg.content[0].text
     except Exception as e:
-        log.warning("Claude API error: %s", e)
+        err = str(e)
+        tb = traceback.format_exc()
+        log.warning("Claude API error [%s]: %s\nTraceback:\n%s", type(e).__name__, err[:300], tb)
+        _record_failure("claude")
         return None
+
+
+_CLAUDE_UNAVAILABLE = (
+    "LLM unavailable — Claude is temporarily offline, please try again in a few minutes. "
+    "(Check ANTHROPIC_API_KEY if this persists.)"
+)
 
 
 def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int | None = None) -> str:
     """Send prompt to LLM with call-type-specific token budget and tier routing.
 
-    Reasoning tier (Claude → Groq → Gemini):
-        chat, chat_full, agent_synthesis, weekly_synthesis,
-        journal, explain_trade, performance
+    Claude tier (all user-visible outputs — no silent fallback):
+        If Claude is unavailable, returns a clear operator-facing message
+        rather than silently substituting a weaker model.
 
-    Free tier (Groq → Gemini → Claude emergency):
-        signal_summary, annotate, narrative, pre_trade, post_trade,
-        news_analysis, risk_event
+    Groq tier (background/internal only):
+        Groq → Claude fallback → static error string.
 
-    Always returns a string (graceful degradation to a static message).
+    Always returns a string.
     """
+    system = _ascii_safe(system)
+    prompt = _ascii_safe(prompt)
+
     if max_tokens is None:
         max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
     if call_type in CLAUDE_TIER:
-        # Reasoning tier: Claude first, free providers as fallback
         result = _call_claude(system, prompt, max_tokens=max_tokens)
         if result:
             log.debug("ask_llm [%s] → claude", call_type)
             return result
-        result = _call_groq(system, prompt, max_tokens=max_tokens)
-        if result:
-            log.debug("ask_llm [%s] → groq (claude unavailable)", call_type)
-            return result
-        result = _call_gemini(system, prompt, max_tokens=max_tokens)
-        if result:
-            log.debug("ask_llm [%s] → gemini (claude+groq unavailable)", call_type)
-            return result
-    else:
-        # Free tier: Groq first, Claude only as emergency fallback
+        log.warning("ask_llm [%s]: Claude unavailable (circuit open or API error)", call_type)
+        return _CLAUDE_UNAVAILABLE
+
+    if call_type in GROQ_TIER:
         result = _call_groq(system, prompt, max_tokens=max_tokens)
         if result:
             log.debug("ask_llm [%s] → groq", call_type)
             return result
-        result = _call_gemini(system, prompt, max_tokens=max_tokens)
-        if result:
-            log.debug("ask_llm [%s] → gemini (groq unavailable)", call_type)
-            return result
         result = _call_claude(system, prompt, max_tokens=max_tokens)
         if result:
-            log.debug("ask_llm [%s] → claude (groq+gemini unavailable)", call_type)
+            log.debug("ask_llm [%s] → claude (groq unavailable)", call_type)
             return result
+        log.error("ask_llm [%s]: all providers failed", call_type)
+        return "(LLM unavailable — add ANTHROPIC_API_KEY and GROQ_API_KEY to Render)"
 
-    configured = {
-        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "groq": bool(os.getenv("GROQ_API_KEY")),
-        "gemini": bool(os.getenv("GEMINI_API_KEY")),
-    }
-    missing = [k for k, v in configured.items() if not v]
-    log.error(
-        "ask_llm [%s]: all providers failed. Missing keys: %s. Configured: %s",
-        call_type, missing or "none", configured,
-    )
-    return "(LLM unavailable — add ANTHROPIC_API_KEY and GROQ_API_KEY to Render)"
+    # Unknown call_type — treat as Claude tier (safe default)
+    log.warning("ask_llm: unknown call_type '%s', routing to Claude", call_type)
+    result = _call_claude(system, prompt, max_tokens=max_tokens)
+    if result:
+        return result
+    return _CLAUDE_UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +713,7 @@ def _sanitize_headline(title: str) -> str | None:
     if _INJECTION_RE.search(title):
         log.warning("news: dropped suspicious headline (possible injection): %.80s", title)
         return None
-    return title[:300]
+    return _ascii_safe(title[:300])
 
 
 def analyze_news_impact(headlines: list[dict], positions: list[dict],
@@ -867,7 +874,6 @@ def check_llm_availability() -> dict:
     status = {
         "claude": {"configured": bool(os.getenv("ANTHROPIC_API_KEY")), "reachable": False},
         "groq":   {"configured": bool(os.getenv("GROQ_API_KEY")),      "reachable": False},
-        "gemini": {"configured": bool(os.getenv("GEMINI_API_KEY")),     "reachable": False},
     }
 
     if status["claude"]["configured"]:
@@ -878,19 +884,11 @@ def check_llm_availability() -> dict:
         result = _call_groq("Say OK", "ping", max_tokens=10)
         status["groq"]["reachable"] = result is not None
 
-    if status["gemini"]["configured"]:
-        result = _call_gemini("Say OK", "ping", max_tokens=10)
-        status["gemini"]["reachable"] = result is not None
-
     reachable = {k for k, v in status.items() if v["reachable"]}
     status["any_available"] = bool(reachable)
     status["active_provider"] = (
         "+".join(sorted(reachable)) if reachable else "none"
     )
-    status["reasoning_tier"] = "claude" if status["claude"]["reachable"] else (
-        "groq" if status["groq"]["reachable"] else "none"
-    )
-    status["free_tier"] = "groq" if status["groq"]["reachable"] else (
-        "gemini" if status["gemini"]["reachable"] else "none"
-    )
+    status["reasoning_tier"] = "claude" if status["claude"]["reachable"] else "none"
+    status["background_tier"] = "groq" if status["groq"]["reachable"] else "none"
     return status

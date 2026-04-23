@@ -1,18 +1,20 @@
+# Pinned on 2026-04-23. Update by running pip freeze on Render after a successful build.
+# Packages without exact pins are not present in this build environment; pin on next Render deploy.
 alpaca-py>=0.21.0
-requests>=2.31.0
+requests==2.33.1
 yfinance>=0.2.36
-pandas>=2.2.0
-numpy>=1.26.0
+pandas==3.0.2
+numpy==2.4.4
 schedule>=1.2.0
-python-dotenv>=1.0.0
+python-dotenv==1.2.2
 rich>=13.7.0
-jinja2>=3.1.0
-flask>=3.0.0
+jinja2==3.1.6
+flask==3.1.3
 gunicorn>=21.2.0
-anthropic>=0.40.0
+anthropic==0.96.0
 google-genai>=1.0.0
 openai>=1.0.0
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
 praw>=7.7.0
-vaderSentiment>=3.3.2
+vaderSentiment==3.3.2

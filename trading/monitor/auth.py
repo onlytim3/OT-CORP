@@ -45,6 +45,10 @@ def check_dashboard_auth() -> bool:
     return False
 
 
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_CSRF_EXEMPT = frozenset({"/api/auth/login", "/api/auth/logout"})
+
+
 def get_auth_middleware(app):
     """Register BEFORE_REQUEST middleware on the Flask app."""
 
@@ -60,5 +64,14 @@ def get_auth_middleware(app):
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Unauthorized. Invalid or missing PIN."}), 401
             return redirect("/login")
+
+        # CSRF guard: non-safe methods must supply X-CSRF-Token matching the csrf_token cookie.
+        # Browser same-origin policy prevents cross-origin JS from reading cookies,
+        # so a matching header proves the request is same-origin.
+        if request.method not in _SAFE_METHODS and request.path not in _CSRF_EXEMPT:
+            csrf_header = request.headers.get("X-CSRF-Token", "")
+            csrf_cookie = request.cookies.get("csrf_token", "")
+            if not (csrf_header and csrf_cookie and hmac.compare_digest(csrf_header, csrf_cookie)):
+                return jsonify({"error": "CSRF validation failed"}), 403
 
         return None

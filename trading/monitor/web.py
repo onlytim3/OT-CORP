@@ -117,15 +117,12 @@ def auth_login():
         return jsonify({"error": "Invalid PIN"}), 401
 
     token = secrets.token_urlsafe(32)
+    csrf = secrets.token_urlsafe(32)
     _session_store[token] = DASHBOARD_PIN
     resp = jsonify({"success": True, "token": token})
-    resp.set_cookie(
-        "session_token", token,
-        httponly=True,
-        secure=_COOKIE_SECURE,
-        samesite="Strict",
-        max_age=86400 * 7,
-    )
+    _cookie_args = dict(secure=_COOKIE_SECURE, samesite="Strict", max_age=86400 * 7)
+    resp.set_cookie("session_token", token, httponly=True, **_cookie_args)
+    resp.set_cookie("csrf_token", csrf, httponly=False, **_cookie_args)
     return resp
 
 
@@ -135,6 +132,7 @@ def auth_logout():
     _session_store.pop(token, None)
     resp = jsonify({"success": True})
     resp.delete_cookie("session_token")
+    resp.delete_cookie("csrf_token")
     return resp
 
 
@@ -1338,9 +1336,10 @@ def api_intelligence():
                         pass
                 data = news_data.get("data", {})
                 if isinstance(data, dict):
+                    interp = data.get("full_analysis") or news_data.get("details", "")
                     result["news_analysis"] = {
                         "timestamp": news_data.get("timestamp", ""),
-                        "interpretation": data.get("full_analysis") or news_data.get("details", ""),
+                        "interpretation": str(interp)[:5000] if interp else "",
                         "headline_count": data.get("headline_count", 0),
                         "source_count": data.get("source_count", 0),
                         "regime": data.get("regime", ""),
@@ -2067,6 +2066,22 @@ def api_profile():
     log_action("system", "profile_switch",
                details=f"Trading mentality switched from {old_profile} to {new_profile}")
     return jsonify({"profile": new_profile, "previous": old_profile})
+
+
+@app.route("/api/debug/llm")
+def api_debug_llm():
+    """LLM provider health — shows circuit-breaker state and recent errors. Auth required."""
+    from trading.llm.engine import get_provider_health
+    import os
+    health = get_provider_health()
+    configured = {
+        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "groq":   bool(os.getenv("GROQ_API_KEY")),
+        "gemini": bool(os.getenv("GEMINI_API_KEY")),
+    }
+    for name, info in health.items():
+        info["key_configured"] = configured.get(name, False)
+    return jsonify({"providers": health})
 
 
 @app.route("/api/version")

@@ -339,11 +339,24 @@ export interface RecoveryStatus {
 
 let connectionFailed = false;
 
+function getCsrfToken(): string {
+  return document.cookie
+    .split('; ')
+    .find(r => r.startsWith('csrf_token='))
+    ?.split('=')[1] ?? '';
+}
+
 export async function fetchAPI<T>(url: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? 'GET').toUpperCase();
+  const csrfHeaders: Record<string, string> =
+    method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
+      ? { 'X-CSRF-Token': getCsrfToken() }
+      : {};
+
   try {
     const response = await fetch(url, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...options?.headers },
+      headers: { 'Content-Type': 'application/json', ...csrfHeaders, ...options?.headers },
     });
     if (response.status === 401) {
       // Session expired or auth not configured — send user to login page

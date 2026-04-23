@@ -376,6 +376,15 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
 
     lower = msg.lower()
 
+    # --- Text-based confirmation ("confirm", "yes", "execute") ---
+    if lower in {"confirm", "yes", "execute", "go", "do it", "proceed", "ok", "okay"}:
+        _cleanup_expired()
+        if len(_pending_actions) == 1:
+            action_id = next(iter(_pending_actions))
+            return _execute_confirmed(action_id)
+        elif len(_pending_actions) > 1:
+            return {"answer": "Multiple actions pending. Please use the Confirm button to choose which one to execute."}
+
     # --- Intent routing (most specific first) ---
 
     # 1. Position management (close, reduce)
