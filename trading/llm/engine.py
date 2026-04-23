@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import time
+import traceback
 import unicodedata
 from datetime import datetime, timezone
 
@@ -36,15 +37,22 @@ log = logging.getLogger(__name__)
 
 
 def _ascii_safe(text: str) -> str:
-    """Normalize unicode to closest ASCII, drop what can't be mapped.
+    """Strip all non-ASCII characters from text — belt-and-suspenders against encoding errors.
 
-    Prevents UnicodeEncodeError when httpx encodes request bodies as ASCII
-    (common on Linux servers with a non-UTF-8 locale). Accented Latin chars
-    are transliterated (é→e); Cyrillic/CJK/Arabic are silently dropped.
+    Accented Latin chars are first NFKD-decomposed (é→e+combining accent → e after strip).
+    Cyrillic, CJK, Arabic and all other non-ASCII are dropped silently.
+    Falls back to a character-by-character filter if normalization fails (e.g. lone surrogates).
     """
     if not isinstance(text, str):
-        text = str(text)
-    return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+        try:
+            text = str(text)
+        except Exception:
+            return ""
+    try:
+        return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+    except Exception:
+        # Fallback: char-by-char filter (handles lone surrogates and other edge cases)
+        return "".join(c for c in text if ord(c) < 128)
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +352,8 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
         return msg.content[0].text
     except Exception as e:
         err = str(e)
-        log.warning("Claude API error [%s]: %s", type(e).__name__, err[:300])
+        tb = traceback.format_exc()
+        log.warning("Claude API error [%s]: %s\nTraceback:\n%s", type(e).__name__, err[:300], tb)
         _record_failure("claude")
         return None
 
@@ -362,6 +371,11 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int |
 
     Always returns a string (graceful degradation to a static message).
     """
+    # Sanitize inputs at entry point — belt-and-suspenders alongside _call_claude's own sanitization.
+    # This catches any non-ASCII that slipped through from callers before routing to any provider.
+    system = _ascii_safe(system)
+    prompt = _ascii_safe(prompt)
+
     if max_tokens is None:
         max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
