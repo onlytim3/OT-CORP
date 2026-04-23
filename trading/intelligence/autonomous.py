@@ -58,11 +58,11 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_THRESHOLDS = {
-    "auto_disable_win_rate": 0.25,       # Disable strategy if win rate below this
-    "auto_disable_min_trades": 20,       # Minimum trades before auto-disabling
-    "auto_disable_max_loss_pct": -0.15,  # Disable if total loss > this % of capital
-    "drawdown_tighten_threshold": 0.10,  # Tighten risk at this drawdown
-    "drawdown_halt_threshold": 0.18,     # Emergency halt at this drawdown
+    "auto_disable_win_rate": 0.20,       # Disable strategy if win rate below this (was 0.25)
+    "auto_disable_min_trades": 30,       # Minimum trades before auto-disabling (was 20 — need more data)
+    "auto_disable_max_loss_pct": -0.20,  # Disable if total loss > this % of capital (was -0.15)
+    "drawdown_tighten_threshold": 0.12,  # Tighten risk at this drawdown (was 0.10)
+    "drawdown_halt_threshold": 0.22,     # Emergency halt at this drawdown (was 0.18)
     "backtest_adopt_win_rate": 0.60,     # Auto-enable if win rate >= this
     "backtest_adopt_sharpe": 0.3,        # Minimum Sharpe to adopt
     "backtest_adopt_max_dd": 0.20,       # Max drawdown to still adopt
