@@ -417,7 +417,7 @@ export function Journal() {
       {/* Page Header */}
       <div className="mb-8">
         <div className="flex items-center gap-4 mb-2">
-          <div className="p-3 rounded-xl bg-gradient-to-br from-[#4a9eff]/15 to-[#c084fc]/15 border border-[#4a9eff]/20">
+          <div className="p-3 rounded-xl bg-gradient-to-br from-[#4a9eff]/15 to-[#4a9eff]/15 border border-[#4a9eff]/20">
             <BookOpen className="size-7 text-[#4a9eff]" />
           </div>
           <div>
@@ -425,7 +425,7 @@ export function Journal() {
             <p className="text-xs text-[#666666] tracking-[0.15em] uppercase">Insights, Lessons & Performance Records</p>
           </div>
         </div>
-        <div className="mt-4 h-px bg-gradient-to-r from-[#4a9eff]/30 via-white/[0.08] to-[#c084fc]/30" />
+        <div className="mt-4 h-px bg-gradient-to-r from-[#4a9eff]/30 via-white/[0.08] to-[#4a9eff]/30" />
       </div>
 
       {/* Tab Selector */}
@@ -547,7 +547,7 @@ export function Journal() {
           <CardContent className="p-5 sm:p-8">
             {loadingWeekly ? (
               <div className="flex items-center justify-center py-16">
-                <RefreshCw className="size-6 text-[#c084fc] animate-spin" />
+                <RefreshCw className="size-6 text-[#4a9eff] animate-spin" />
               </div>
             ) : weeklyReviews.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -559,8 +559,8 @@ export function Journal() {
               <div>
                 <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/[0.06]">
                   <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-[#c084fc]/10 border border-[#c084fc]/20">
-                      <BookMarked className="size-5 text-[#c084fc]" />
+                    <div className="p-2 rounded-lg bg-[#4a9eff]/10 border border-[#4a9eff]/20">
+                      <BookMarked className="size-5 text-[#4a9eff]" />
                     </div>
                     <div>
                       <h3 className="text-lg font-semibold text-[#e8e8e8] tracking-wide">
@@ -592,7 +592,7 @@ export function Journal() {
                   )}
                 </div>
                 {currentWeekly && (
-                  <div>{renderMarkdownContent(currentWeekly.content, "#c084fc")}</div>
+                  <div>{renderMarkdownContent(currentWeekly.content, "#4a9eff")}</div>
                 )}
               </div>
             )}
@@ -693,8 +693,8 @@ export function Journal() {
           <CardContent className="p-5 sm:p-8">
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/[0.06]">
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-[#c084fc]/10 border border-[#c084fc]/20">
-                  <Brain className="size-5 text-[#c084fc]" />
+                <div className="p-2 rounded-lg bg-[#4a9eff]/10 border border-[#4a9eff]/20">
+                  <Brain className="size-5 text-[#4a9eff]" />
                 </div>
                 <div>
                   <h3 className="text-lg font-semibold text-[#e8e8e8] tracking-wide">AI Tear Sheets</h3>
@@ -704,7 +704,7 @@ export function Journal() {
               <button
                 onClick={generateTearSheet}
                 disabled={generatingTearSheet}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#c084fc]/15 border border-[#c084fc]/30 text-[#c084fc] text-xs font-medium hover:bg-[#c084fc]/25 transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#4a9eff]/15 border border-[#4a9eff]/30 text-[#4a9eff] text-xs font-medium hover:bg-[#4a9eff]/25 transition-colors disabled:opacity-50"
               >
                 {generatingTearSheet ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
                 {generatingTearSheet ? 'Generating...' : 'Generate New Report'}
@@ -713,7 +713,7 @@ export function Journal() {
 
             {loadingTearSheets ? (
               <div className="flex flex-col items-center justify-center py-16">
-                <Loader2 className="size-6 text-[#c084fc] animate-spin mb-3" />
+                <Loader2 className="size-6 text-[#4a9eff] animate-spin mb-3" />
                 <p className="text-sm text-[#666666]">Loading reports...</p>
               </div>
             ) : tearSheets.length === 0 ? (
@@ -724,7 +724,7 @@ export function Journal() {
                 <button
                   onClick={generateTearSheet}
                   disabled={generatingTearSheet}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#c084fc]/15 border border-[#c084fc]/30 text-[#c084fc] text-sm font-medium hover:bg-[#c084fc]/25 transition-colors disabled:opacity-50"
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#4a9eff]/15 border border-[#4a9eff]/30 text-[#4a9eff] text-sm font-medium hover:bg-[#4a9eff]/25 transition-colors disabled:opacity-50"
                 >
                   {generatingTearSheet ? <Loader2 className="size-4 animate-spin" /> : <Brain className="size-4" />}
                   {generatingTearSheet ? 'Generating...' : 'Generate First Report'}
@@ -740,11 +740,11 @@ export function Journal() {
                       onClick={() => setSelectedTearSheet(i)}
                       className={`w-full text-left p-3 rounded-xl border transition-all duration-200 ${
                         selectedTearSheet === i
-                          ? 'bg-[#c084fc]/10 border-[#c084fc]/30'
+                          ? 'bg-[#4a9eff]/10 border-[#4a9eff]/30'
                           : 'bg-white/[0.02] border-white/[0.06] hover:bg-white/5'
                       }`}
                     >
-                      <p className={`text-xs font-medium ${selectedTearSheet === i ? 'text-[#c084fc]' : 'text-[#e8e8e8]'}`}>
+                      <p className={`text-xs font-medium ${selectedTearSheet === i ? 'text-[#4a9eff]' : 'text-[#e8e8e8]'}`}>
                         {new Date(sheet.timestamp).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                       </p>
                       <p className="text-[10px] text-[#666666] mt-1 line-clamp-2 leading-relaxed">
@@ -758,7 +758,7 @@ export function Journal() {
                 <div className="min-h-[400px]">
                   {tearSheets[selectedTearSheet] && (
                     <div className="prose">
-                      {renderMarkdownContent(tearSheets[selectedTearSheet].content, '#c084fc')}
+                      {renderMarkdownContent(tearSheets[selectedTearSheet].content, '#4a9eff')}
                     </div>
                   )}
                 </div>

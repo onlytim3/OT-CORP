@@ -189,13 +189,10 @@ export function Analytics() {
 
       <Tabs defaultValue="performance" className="space-y-6">
         <TabsList className="flex-wrap">
-          <TabsTrigger value="performance">P&L Performance</TabsTrigger>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="strategies">Strategies</TabsTrigger>
           <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
-          <TabsTrigger value="regime">Regime Signals</TabsTrigger>
-          <TabsTrigger value="funnel">Signal Funnel</TabsTrigger>
-          <TabsTrigger value="fills">Fill Quality</TabsTrigger>
-          <TabsTrigger value="correlation">Correlation</TabsTrigger>
+          <TabsTrigger value="execution">Execution</TabsTrigger>
           <TabsTrigger value="alpha-engine">Alpha Engine</TabsTrigger>
         </TabsList>
 
@@ -339,7 +336,7 @@ export function Analytics() {
               ) : (
                 <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                   <table className="w-full">
-                    <thead className="sticky top-0 bg-[#0a0a0a] z-10">
+                    <thead className="sticky top-0 bg-[#0f0f0f] z-10">
                       <tr className="border-b border-white/5">
                         <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
                         <th className="text-center py-3 px-4 text-sm font-medium text-[#888888]">Status</th>
@@ -508,7 +505,7 @@ export function Analytics() {
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
                   <span className="flex items-center gap-2">
-                    <span className="size-2 rounded-full bg-[#ffd700] animate-pulse" />
+                    <span className="size-2 rounded-full bg-[#00d4aa] animate-pulse" />
                     Live Headlines
                   </span>
                   <span className="text-xs text-[#888888] font-normal">{intelligence.headlines.length} headlines</span>
@@ -521,7 +518,7 @@ export function Analytics() {
                       <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 mt-0.5 ${
                         h.category === 'crypto' ? 'bg-[#4a9eff]/20 text-[#4a9eff]' :
                         h.category === 'stocks' ? 'bg-[#00d4aa]/20 text-[#00d4aa]' :
-                        h.category === 'commodities' ? 'bg-[#ffd700]/20 text-[#ffd700]' :
+                        h.category === 'commodities' ? 'bg-[#00d4aa]/20 text-[#00d4aa]' :
                         h.category === 'macro' ? 'bg-[#ff4466]/20 text-[#ff4466]' :
                         'bg-white/10 text-[#888888]'
                       }`}>{h.category || 'news'}</span>
@@ -556,18 +553,15 @@ export function Analytics() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
 
-        <TabsContent value="regime" className="space-y-6">
+          {/* Regime Signals — merged from former Regime tab */}
           <Card>
             <CardHeader><CardTitle>Regime Signals</CardTitle></CardHeader>
             <CardContent>
               {(() => {
-                // Filter out 0% HOLD noise and deduplicate by strategy+signal
                 const actionable = regimeSignals.filter(
                   (s) => !(s.signal === 'hold' && (s.strength || 0) === 0)
                 );
-                // Deduplicate: keep strongest signal per strategy+action combo
                 const seen = new Map<string, typeof regimeSignals[0]>();
                 for (const s of actionable) {
                   const key = `${s.strategy}:${s.signal}`;
@@ -616,8 +610,8 @@ export function Analytics() {
           </Card>
         </TabsContent>
 
-        {/* Signal-to-Execution Funnel Tab */}
-        <TabsContent value="funnel" className="space-y-6">
+        {/* Execution Quality Tab — Signal Funnel + Fill Quality + Correlation */}
+        <TabsContent value="execution" className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -712,7 +706,7 @@ export function Analytics() {
               ) : (
                 <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                   <table className="w-full">
-                    <thead className="sticky top-0 bg-[#0a0a0a] z-10">
+                    <thead className="sticky top-0 bg-[#0f0f0f] z-10">
                       <tr className="border-b border-white/5">
                         <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Strategy</th>
                         <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Total P&L</th>
@@ -737,10 +731,8 @@ export function Analytics() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
 
-        {/* Fill Quality Tab */}
-        <TabsContent value="fills" className="space-y-6">
+          {/* Fill Quality */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -783,7 +775,7 @@ export function Analytics() {
                   <h4 className="text-sm font-medium text-[#888888] mb-3">Recent Fills (sorted by slippage)</h4>
                   <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
                     <table className="w-full">
-                      <thead className="sticky top-0 bg-[#0a0a0a] z-10">
+                      <thead className="sticky top-0 bg-[#0f0f0f] z-10">
                         <tr className="border-b border-white/5">
                           <th className="text-left py-3 px-4 text-sm font-medium text-[#888888]">Symbol</th>
                           <th className="text-right py-3 px-4 text-sm font-medium text-[#888888]">Mid Price</th>
@@ -820,10 +812,8 @@ export function Analytics() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
 
-        {/* Correlation Heatmap Tab */}
-        <TabsContent value="correlation" className="space-y-6">
+          {/* Strategy Correlation Heatmap */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
