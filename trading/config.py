@@ -23,9 +23,9 @@ ASTER_WS_BASE = "wss://fstream.asterdex.com"
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 # --- LLM (AI Co-Pilot) ---
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")             # Groq free tier (primary, $0/mo)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")         # Gemini Flash (fallback)
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")   # Claude (unused, legacy)
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")   # Claude (primary — chat, analysis, synthesis, news)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")             # Groq (secondary — signal_summary, annotate only)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")         # Gemini (unused)
 
 # --- Trading Mode ---
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
@@ -61,29 +61,23 @@ REVIEWS_DIR = KNOWLEDGE_DIR / "reviews"
 STRATEGIES_DIR = KNOWLEDGE_DIR / "strategies"
 
 # --- Risk Parameters ---
-# NOTE: Tightened 2026-04-13 after -36.7% drawdown analysis.
-# Root cause: single-strategy signals opened 6 simultaneous altcoin shorts
-# at 5-11% each during a violent rally. Fixes applied:
-#   - max_position_pct: 0.25 → 0.08   (max 8% per trade)
-#   - max_drawdown_pct: 0.20 → 0.12   (halt earlier at 12%)
-#   - max_daily_loss_pct: 0.05 → 0.03 (halt day at 3%)
-#   - stop_loss_pct: 0.05 → 0.03      (tighter per-trade stop)
-#   - max_open_positions: 6 (NEW)     (hard cap on open trades)
-#   - max_same_strategy_positions: 3 (NEW) (prevent pile-on)
+# NOTE: Originally tightened 2026-04-13 after -36.7% drawdown analysis.
+# Relaxed 2026-04-23: rules were too conservative, blocking learning and trading activity.
+# Kept multi-strategy confluence requirement and per-strategy caps as core protection.
 RISK = {
-    "risk_per_trade_pct": 0.01,            # Risk 1% of portfolio per trade
-    "max_position_pct": 0.08,             # Max 8% of portfolio per position (was 25%)
-    "stop_loss_pct": 0.03,                # 3% stop loss (was 5%)
-    "max_daily_loss_pct": 0.03,           # 3% max daily loss (was 5%)
-    "max_drawdown_pct": 0.12,             # Halt at 12% drawdown (was 20%)
-    "min_cash_reserve_pct": 0.10,         # Keep 10% cash minimum (was 5%)
-    "max_trades_per_day": 15,             # Max 15 trades/day (was 25)
-    "max_open_positions": 6,              # [NEW] Hard cap on simultaneous open positions
-    "max_same_strategy_positions": 3,     # [NEW] No strategy can drive > 3 open trades
-    "min_volume_ratio": 0.30,             # Block entries when volume < 30% of 7d average
-    "volume_exit_ratio": 0.20,            # Exit positions when volume < 20% of 7d average
-    "max_spread_bps": 50,                 # Block entries when bid-ask spread > 50 bps
-    "max_market_impact_pct": 0.01,        # Block entries when order > 1% of recent 4h volume
+    "risk_per_trade_pct": 0.015,           # Risk 1.5% of portfolio per trade (was 1%)
+    "max_position_pct": 0.12,              # Max 12% of portfolio per position (was 8%)
+    "stop_loss_pct": 0.05,                 # 5% stop loss (was 3% — too tight for crypto)
+    "max_daily_loss_pct": 0.05,            # 5% max daily loss (was 3%)
+    "max_drawdown_pct": 0.18,              # Halt at 18% drawdown (was 12%)
+    "min_cash_reserve_pct": 0.05,          # Keep 5% cash minimum (was 10%)
+    "max_trades_per_day": 25,              # Max 25 trades/day (was 15)
+    "max_open_positions": 10,              # Max 10 simultaneous open positions (was 6)
+    "max_same_strategy_positions": 5,      # Strategy can drive up to 5 open trades (was 3)
+    "min_volume_ratio": 0.20,              # Block entries when volume < 20% of 7d average (was 30%)
+    "volume_exit_ratio": 0.15,             # Exit positions when volume < 15% of 7d average
+    "max_spread_bps": 75,                  # Block entries when bid-ask spread > 75 bps (was 50)
+    "max_market_impact_pct": 0.02,         # Block entries when order > 2% of recent 4h volume (was 1%)
 }
 
 # --- Short Selling ---
