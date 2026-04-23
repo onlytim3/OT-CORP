@@ -779,7 +779,7 @@ def _sanitize_headline(title: str) -> str | None:
     if _INJECTION_RE.search(title):
         log.warning("news: dropped suspicious headline (possible injection): %.80s", title)
         return None
-    return title[:300]
+    return _ascii_safe(title[:300])
 
 
 def analyze_news_impact(headlines: list[dict], positions: list[dict],

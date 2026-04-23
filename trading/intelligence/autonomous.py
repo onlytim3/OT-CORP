@@ -1644,6 +1644,21 @@ def _verify_previous_actions() -> list[dict]:
                 snake = _snake_case(target)
                 expected_file = STRATEGY_DIR / f"{snake}.py"
                 if not expected_file.exists():
+                    if escalation >= 1:
+                        # Already re-tried at least once — strategy builder likely failed
+                        # (needs LLM, which may be unavailable). Stop escalating;
+                        # re-applying will just create more stuck entries.
+                        log.warning(
+                            "VERIFY: implement_strategy for '%s' failed after %d re-tries — "
+                            "strategy builder requires LLM. Marking negative, not escalating.",
+                            target, escalation,
+                        )
+                        try:
+                            from trading.db.store import update_recommendation_outcome
+                            update_recommendation_outcome(rec["id"], "negative")
+                        except Exception:
+                            pass
+                        continue  # Skip — don't add to followups
                     verified = False
                     failure_reason = f"Strategy '{target}' was requested but file {expected_file} not found"
 
