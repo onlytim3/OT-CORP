@@ -431,7 +431,7 @@ export function Analytics() {
                   </div>
                   <div className="p-4 rounded-lg bg-white/5 border border-white/10">
                     <div className="text-sm text-[#c0c0c0] whitespace-pre-wrap leading-relaxed">
-                      {(intelligence.news_analysis.interpretation ?? "").split('\n').map((line: string, i: number) => {
+                      {String(intelligence.news_analysis.interpretation ?? "").split('\n').map((line: string, i: number) => {
                         if (line.startsWith('## ')) return <h3 key={i} className="text-[#e8e8e8] font-semibold mt-3 mb-1">{line.replace('## ', '')}</h3>;
                         if (line.startsWith('- BUY')) return <p key={i} className="text-[#00d4aa] font-medium">{line}</p>;
                         if (line.startsWith('- SELL')) return <p key={i} className="text-[#ff4466] font-medium">{line}</p>;
@@ -460,7 +460,7 @@ export function Analytics() {
               <CardContent>
                 <div className="p-4 rounded-lg bg-white/5 border border-white/10">
                   <div className="text-sm text-[#c0c0c0] whitespace-pre-wrap leading-relaxed">
-                    {intelligence.news_interpretation.split('\n').map((line: string, i: number) => {
+                    {String(intelligence.news_interpretation ?? "").split('\n').map((line: string, i: number) => {
                       if (line.startsWith('## ')) return <h3 key={i} className="text-[#e8e8e8] font-semibold mt-3 mb-1">{line.replace('## ', '')}</h3>;
                       if (line.startsWith('- BUY') || line.includes('bullish')) return <p key={i} className="text-[#00d4aa]">{line}</p>;
                       if (line.startsWith('- SELL') || line.includes('bearish')) return <p key={i} className="text-[#ff4466]">{line}</p>;

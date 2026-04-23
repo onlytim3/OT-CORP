@@ -1336,9 +1336,10 @@ def api_intelligence():
                         pass
                 data = news_data.get("data", {})
                 if isinstance(data, dict):
+                    interp = data.get("full_analysis") or news_data.get("details", "")
                     result["news_analysis"] = {
                         "timestamp": news_data.get("timestamp", ""),
-                        "interpretation": data.get("full_analysis") or news_data.get("details", ""),
+                        "interpretation": str(interp)[:5000] if interp else "",
                         "headline_count": data.get("headline_count", 0),
                         "source_count": data.get("source_count", 0),
                         "regime": data.get("regime", ""),
