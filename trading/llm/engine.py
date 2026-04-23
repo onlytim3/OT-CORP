@@ -51,8 +51,8 @@ def _ascii_safe(text: str) -> str:
 # Model configuration
 # ---------------------------------------------------------------------------
 
-# Groq models (free tier)
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Groq models (free tier) — llama-3.3-70b-versatile is confirmed available on free accounts
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # Gemini models (fallback) — 2.0-flash has 1,500 req/day free; 2.5-flash is only 20/day
 GEMINI_MODEL_FLASH = "gemini-2.0-flash"
