@@ -2069,6 +2069,22 @@ def api_profile():
     return jsonify({"profile": new_profile, "previous": old_profile})
 
 
+@app.route("/api/debug/llm")
+def api_debug_llm():
+    """LLM provider health — shows circuit-breaker state and recent errors. Auth required."""
+    from trading.llm.engine import get_provider_health
+    import os
+    health = get_provider_health()
+    configured = {
+        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "groq":   bool(os.getenv("GROQ_API_KEY")),
+        "gemini": bool(os.getenv("GEMINI_API_KEY")),
+    }
+    for name, info in health.items():
+        info["key_configured"] = configured.get(name, False)
+    return jsonify({"providers": health})
+
+
 @app.route("/api/version")
 def api_version():
     """Return deployed git commit and build info — auth-free for deployment verification."""

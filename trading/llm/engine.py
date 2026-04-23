@@ -77,7 +77,7 @@ GROQ_TIER: frozenset[str] = frozenset({
 # Per-call-type token budgets
 CALL_PROFILES: dict[str, dict] = {
     "chat":             {"max_tokens": 4096},
-    "chat_full":        {"max_tokens": 8192},   # full operator chat — give Claude space to reason
+    "chat_full":        {"max_tokens": 4096},   # full operator chat
     "narrative":        {"max_tokens": 1024},   # action card narratives
     "explain_trade":    {"max_tokens": 2048},   # trade explanations
     "journal":          {"max_tokens": 4096},   # daily journal — needs full space
@@ -110,8 +110,50 @@ def _rate_limit():
 
 
 # ---------------------------------------------------------------------------
-# Provider: Groq (primary) — OpenAI-compatible API
+# Provider circuit breakers — skip a provider that keeps failing
 # ---------------------------------------------------------------------------
+
+_provider_failures: dict[str, int] = {}        # provider → consecutive failure count
+_provider_disabled_until: dict[str, float] = {}  # provider → monotonic time when re-enabled
+_CIRCUIT_OPEN_AFTER = 3    # failures before disabling
+_CIRCUIT_COOLDOWN = 300.0  # 5 minutes
+
+
+def _provider_ok(name: str) -> bool:
+    """Return True if provider is not circuit-broken."""
+    disabled_until = _provider_disabled_until.get(name, 0.0)
+    if time.monotonic() < disabled_until:
+        return False
+    return True
+
+
+def _record_failure(name: str) -> None:
+    _provider_failures[name] = _provider_failures.get(name, 0) + 1
+    if _provider_failures[name] >= _CIRCUIT_OPEN_AFTER:
+        _provider_disabled_until[name] = time.monotonic() + _CIRCUIT_COOLDOWN
+        log.warning("LLM circuit breaker OPEN for '%s' — disabled for %ds", name, int(_CIRCUIT_COOLDOWN))
+
+
+def _record_success(name: str) -> None:
+    _provider_failures[name] = 0
+    _provider_disabled_until.pop(name, None)
+
+
+def get_provider_health() -> dict:
+    """Return health status of each LLM provider (for diagnostics)."""
+    now = time.monotonic()
+    result = {}
+    for name in ("groq", "gemini", "claude"):
+        disabled_until = _provider_disabled_until.get(name, 0.0)
+        failures = _provider_failures.get(name, 0)
+        if now < disabled_until:
+            result[name] = {"status": "circuit_open", "failures": failures,
+                            "retry_in_seconds": int(disabled_until - now)}
+        else:
+            result[name] = {"status": "ok" if failures == 0 else "degraded", "failures": failures}
+    return result
+
+
 
 _groq_client = None
 _groq_init_attempted = False
@@ -154,6 +196,8 @@ def _get_groq_client():
 
 def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
     """Call Groq API via OpenAI-compatible SDK. Returns response text or None."""
+    if not _provider_ok("groq"):
+        return None
     client = _get_groq_client()
     if client is None:
         return None
@@ -168,14 +212,18 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
             max_tokens=max_tokens,
             temperature=0.7,
         )
+        _record_success("groq")
         return response.choices[0].message.content
     except Exception as e:
         err = str(e)
         if "429" in err or "rate_limit" in err.lower() or "quota" in err.lower():
             log.warning("Groq rate limited — backing off 5s before fallback")
             time.sleep(5)
+        elif "403" in err or "401" in err or "forbidden" in err.lower() or "unauthorized" in err.lower():
+            log.warning("Groq auth/access error [%s]: %s — circuit breaker triggered", type(e).__name__, err[:200])
         else:
-            log.warning("Groq API error: %s", e)
+            log.warning("Groq API error [%s]: %s", type(e).__name__, err[:200])
+        _record_failure("groq")
         return None
 
 
@@ -211,6 +259,8 @@ def _get_genai_client():
 
 def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
     """Call Gemini API via google.genai SDK. Fallback provider."""
+    if not _provider_ok("gemini"):
+        return None
     client = _get_genai_client()
     if client is None:
         return None
@@ -225,13 +275,15 @@ def _call_gemini(system: str, prompt: str, max_tokens: int = 1500) -> str | None
             contents=prompt,
             config=config,
         )
+        _record_success("gemini")
         return response.text
     except Exception as e:
         err = str(e)
         if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
-            log.warning("Gemini quota exhausted — switching to next provider")
+            log.warning("Gemini quota exhausted [%s] — circuit breaker triggered", type(e).__name__)
         else:
-            log.warning("Gemini API error: %s", e)
+            log.warning("Gemini API error [%s]: %s", type(e).__name__, err[:200])
+        _record_failure("gemini")
         return None
 
 
@@ -273,9 +325,13 @@ def _get_claude_client():
 
 def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None:
     """Call Claude Sonnet via Anthropic SDK. Returns response text or None."""
+    if not _provider_ok("claude"):
+        return None
     client = _get_claude_client()
     if client is None:
         return None
+    # Cap max_tokens to the model's documented output limit
+    max_tokens = min(max_tokens, 8096)
     _rate_limit()
     try:
         msg = client.messages.create(
@@ -284,9 +340,12 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
             system=_ascii_safe(system),
             messages=[{"role": "user", "content": _ascii_safe(prompt)}],
         )
+        _record_success("claude")
         return msg.content[0].text
     except Exception as e:
-        log.warning("Claude API error: %s", e)
+        err = str(e)
+        log.warning("Claude API error [%s]: %s", type(e).__name__, err[:300])
+        _record_failure("claude")
         return None
 
 
