@@ -117,15 +117,12 @@ def auth_login():
         return jsonify({"error": "Invalid PIN"}), 401
 
     token = secrets.token_urlsafe(32)
+    csrf = secrets.token_urlsafe(32)
     _session_store[token] = DASHBOARD_PIN
     resp = jsonify({"success": True, "token": token})
-    resp.set_cookie(
-        "session_token", token,
-        httponly=True,
-        secure=_COOKIE_SECURE,
-        samesite="Strict",
-        max_age=86400 * 7,
-    )
+    _cookie_args = dict(secure=_COOKIE_SECURE, samesite="Strict", max_age=86400 * 7)
+    resp.set_cookie("session_token", token, httponly=True, **_cookie_args)
+    resp.set_cookie("csrf_token", csrf, httponly=False, **_cookie_args)
     return resp
 
 
@@ -135,6 +132,7 @@ def auth_logout():
     _session_store.pop(token, None)
     resp = jsonify({"success": True})
     resp.delete_cookie("session_token")
+    resp.delete_cookie("csrf_token")
     return resp
 
 
