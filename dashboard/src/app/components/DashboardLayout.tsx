@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router";
-import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown, Clock, BookOpen, RefreshCw } from "lucide-react";
+import { LayoutDashboard, TrendingUp, Bot, BarChart3, Activity, MessageSquare, X, Sun, Moon, AlertTriangle, Shield, Flame, Zap, ChevronDown, Clock, BookOpen, RefreshCw } from "lucide-react";
 import { cn } from "./ui/utils";
 import { useState, useRef, useEffect } from "react";
 import { ChatPanel } from "./ChatPanel";
@@ -16,8 +16,8 @@ interface TradingSession {
 }
 
 const SESSIONS: TradingSession[] = [
-  { name: 'Sydney',    short: 'SYD', color: '#c084fc', startUTC: 22, endUTC: 7 },
-  { name: 'Tokyo',     short: 'TKY', color: '#f472b6', startUTC: 0,  endUTC: 9 },
+  { name: 'Sydney',    short: 'SYD', color: '#4a9eff', startUTC: 22, endUTC: 7 },
+  { name: 'Tokyo',     short: 'TKY', color: '#888888', startUTC: 0,  endUTC: 9 },
   { name: 'London',    short: 'LDN', color: '#4a9eff', startUTC: 8,  endUTC: 17 },
   { name: 'New York',  short: 'NYC', color: '#00d4aa', startUTC: 13, endUTC: 22 },
 ];
@@ -183,12 +183,18 @@ export function DashboardLayout() {
   return (
     <div className="flex flex-col sm:flex-row h-screen bg-[#000000]">
       {/* Navigation (Left Sidebar on Desktop, Bottom bar on Mobile) */}
-      <nav className="fixed bottom-0 left-0 right-0 h-20 bg-black sm:bg-[#0a0a0a] border-t sm:border-t-0 sm:border-r border-white/[0.06] z-50 sm:static sm:h-screen sm:w-[88px] flex sm:flex-col items-center justify-around sm:justify-start px-4 sm:px-0 sm:py-6 sm:gap-6 pb-safe">
+      <nav className="fixed bottom-0 left-0 right-0 h-20 bg-black sm:bg-[#0f0f0f] border-t sm:border-t-0 sm:border-r border-white/[0.08] z-50 sm:static sm:h-screen sm:w-[200px] flex sm:flex-col items-center justify-around sm:justify-start px-4 sm:px-0 sm:py-6 sm:gap-1 pb-safe">
         {/* Sidebar Logo */}
-        <div className="hidden sm:flex items-center justify-center p-2.5 mb-2 bg-[#4a9eff] rounded-xl border border-[#4a9eff]/50 shadow-[0_0_15px_rgba(74,158,255,0.1)]">
-          <Activity className="size-6 text-black" />
+        <div className="hidden sm:flex items-center gap-3 px-4 mb-4">
+          <div className="p-2 bg-[#4a9eff] rounded-xl border border-[#4a9eff]/50 shadow-[0_0_15px_rgba(74,158,255,0.15)]">
+            <Activity className="size-5 text-black" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-[#e8e8e8] tracking-wider">OT-CORP</p>
+            <p className="text-[10px] text-[#444444] uppercase tracking-widest">Trading</p>
+          </div>
         </div>
-        
+
         {navItems.map((item) => {
           const isActive = location.pathname === item.path;
           return (
@@ -196,21 +202,21 @@ export function DashboardLayout() {
               key={item.path}
               to={item.path}
               className={cn(
-                "flex flex-col items-center justify-center gap-1.5 px-6 sm:px-2 py-2 sm:py-4 rounded-xl transition-all duration-300 relative min-w-[80px] sm:min-w-[72px] sm:w-[72px] group",
-                isActive ? "text-[#4a9eff]" : "text-[#666666] hover:text-[#888888] sm:hover:bg-white/5"
+                "flex flex-col items-center justify-center gap-1.5 px-6 py-2 rounded-xl transition-all duration-200 relative min-w-[80px] group",
+                "sm:flex-row sm:justify-start sm:gap-3 sm:px-4 sm:py-2.5 sm:w-full sm:min-w-0 sm:rounded-lg",
+                isActive
+                  ? "text-[#4a9eff] sm:bg-[#4a9eff]/10 sm:border sm:border-[#4a9eff]/20"
+                  : "text-[#555555] hover:text-[#888888] sm:hover:bg-white/[0.04] sm:hover:text-[#888888]"
               )}
             >
-              {isActive && (
-                <div className="absolute inset-0 bg-[#4a9eff]/10 rounded-xl border border-[#4a9eff]/20" />
-              )}
-              {/* Active Indicator Line for Desktop */}
-              {isActive && (
-                <div className="hidden sm:block absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-[#4a9eff] rounded-r-full shadow-[0_0_10px_rgba(74,158,255,0.5)]" />
-              )}
-              <div className="relative z-10 transition-transform duration-300 group-hover:scale-110">
-                <item.icon className="size-6 sm:size-5" />
+              <div className={cn("relative transition-transform duration-200 group-hover:scale-105", "sm:shrink-0")}>
+                <item.icon className="size-6 sm:size-4" />
               </div>
-              <span className={cn("text-[10px] uppercase tracking-wider font-medium relative z-10", isActive && "font-semibold")}>
+              <span className={cn(
+                "text-[10px] uppercase tracking-wider font-medium",
+                "sm:text-xs sm:normal-case sm:tracking-normal sm:font-medium",
+                isActive && "font-semibold"
+              )}>
                 {item.label}
               </span>
             </Link>
@@ -221,7 +227,7 @@ export function DashboardLayout() {
       {/* Main Content Column */}
       <div className="flex flex-col flex-1 min-w-0">
         {/* Top Header */}
-        <header className="h-16 bg-[#0a0a0a] sm:bg-transparent border-b border-white/[0.06] flex items-center justify-between px-6 sticky top-0 z-40 backdrop-blur-md">
+        <header className="h-16 bg-[#0f0f0f] sm:bg-[#0f0f0f]/80 border-b border-white/[0.08] flex items-center justify-between px-6 sticky top-0 z-40 backdrop-blur-md">
           <div className="flex items-center gap-3 sm:pl-2">
             <div className="sm:hidden p-2 rounded-lg bg-[#4a9eff] border border-[#4a9eff]/50">
               <Activity className="size-6 text-black" />
@@ -401,11 +407,14 @@ export function DashboardLayout() {
         className={cn(
           "fixed bottom-[88px] sm:bottom-6 right-4 sm:right-6 z-50 p-3 sm:p-4 rounded-full transition-all duration-300 shadow-xl",
           chatOpen
-            ? "bg-[#ff4466] scale-90 shadow-[0_0_20px_rgba(255,68,102,0.3)]"
+            ? "bg-[#1e1e1e] border border-white/[0.12] shadow-none"
             : "bg-[#4a9eff] hover:bg-[#4a9eff]/80 shadow-[0_0_20px_rgba(74,158,255,0.3)] hover:scale-105"
         )}
       >
-        <MessageSquare className="size-6 text-white" />
+        {chatOpen
+          ? <X className="size-6 text-[#e8e8e8]" />
+          : <MessageSquare className="size-6 text-white" />
+        }
       </button>
 
       {/* Chat Panel */}

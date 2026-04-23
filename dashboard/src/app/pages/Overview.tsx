@@ -327,26 +327,37 @@ export function Overview() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <MetricCard
-          title="Portfolio Value"
-          value={`$${(account?.portfolio_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          icon={DollarSign}
-          iconColor="text-[#00d4aa]"
-        />
-        <MetricCard
-          title="Unrealized P&L"
-          value={`${totalPnl >= 0 ? '+' : ''}$${totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          change={pnlPct !== 0 ? Number(pnlPct.toFixed(2)) : undefined}
-          icon={totalPnl >= 0 ? TrendingUp : TrendingDown}
-          iconColor={totalPnl >= 0 ? "text-[#00d4aa]" : "text-[#ff4466]"}
-        />
-        <MetricCard title="Open Positions" value={summary?.open_positions ?? positions.length} icon={Activity} iconColor="text-[#4a9eff]" />
-        <MetricCard title="Active Strategies" value={summary?.active_strategies ?? 0} icon={Layers} iconColor="text-[#c0c0c0]" />
+      {/* Hero metrics — Portfolio Value + P&L */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 border-l-[#4a9eff]">
+          <p className="text-xs text-[#555555] uppercase tracking-widest mb-3 font-mono">Portfolio Value</p>
+          <p className="text-5xl font-bold tabular-nums text-[#e8e8e8] font-mono leading-none">
+            ${(account?.portfolio_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+          <div className="flex items-center gap-4 mt-3">
+            <span className="text-xs text-[#555555] uppercase tracking-wider font-mono">{mode.toUpperCase()} MODE</span>
+          </div>
+        </div>
+        <div className={`rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 ${totalPnl >= 0 ? 'border-l-[#00d4aa]' : 'border-l-[#ff4466]'}`}>
+          <p className="text-xs text-[#555555] uppercase tracking-widest mb-3 font-mono">Unrealized P&L</p>
+          <p className={`text-5xl font-bold tabular-nums font-mono leading-none ${totalPnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+            {totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+          <div className="flex items-center gap-2 mt-3">
+            {pnlPct !== 0 && (
+              <span className={`text-xs font-mono font-medium ${totalPnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+              </span>
+            )}
+            <span className="text-xs text-[#555555] uppercase tracking-wider font-mono">Across {positions.length} positions</span>
+          </div>
+        </div>
       </div>
 
-      {/* New operational stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Operational stats */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <MetricCard title="Open Positions" value={summary?.open_positions ?? positions.length} icon={Activity} iconColor="text-[#4a9eff]" />
+        <MetricCard title="Strategies" value={summary?.active_strategies ?? 0} icon={Layers} iconColor="text-[#c0c0c0]" />
         <MetricCard
           title="Win Streak"
           value={winStreak === 0 ? '—' : `${winStreak > 0 ? '+' : ''}${winStreak}`}
@@ -354,7 +365,7 @@ export function Overview() {
           iconColor={winStreak >= 3 ? 'text-[#00d4aa]' : winStreak <= -3 ? 'text-[#ff4466]' : 'text-[#ffa500]'}
         />
         <MetricCard
-          title="Peak Drawdown (30d)"
+          title="Drawdown (30d)"
           value={riskBudget ? `${(riskBudget.drawdown_pct ?? 0).toFixed(1)}%` : '—'}
           icon={BarChart2}
           iconColor={(riskBudget?.drawdown_pct ?? 0) < -8 ? 'text-[#ff4466]' : 'text-[#ffa500]'}
@@ -366,7 +377,7 @@ export function Overview() {
           iconColor={riskStageColor}
         />
         <MetricCard
-          title="Agent Accept Rate"
+          title="Agent Rate"
           value={agentAcceptRate !== null ? `${agentAcceptRate}%` : '—'}
           icon={Bot}
           iconColor="text-[#c0c0c0]"

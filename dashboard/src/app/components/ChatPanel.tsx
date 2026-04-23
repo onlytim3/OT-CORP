@@ -141,7 +141,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
   return (
     <div className="fixed bottom-20 sm:bottom-24 right-2 sm:right-4 w-[calc(100vw-1rem)] sm:w-96 max-h-[92vh] sm:max-h-[70vh] flex flex-col bg-black border border-white/[0.08] rounded-xl z-50 overflow-hidden shadow-2xl shadow-black/50" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#0a0a0a]">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-[#0f0f0f]">
         <div className="flex items-center gap-2">
           <MessageSquare className="size-5 text-[#4a9eff]" />
           <span className="font-semibold text-[#e8e8e8]">Trading Assistant</span>
