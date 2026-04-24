@@ -66,18 +66,23 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 # Claude model (primary reasoning engine — all user-visible outputs)
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
-# All user-visible outputs — Claude only, no silent fallback to weaker models
+# High-value reasoning — Claude only, no silent fallback to weaker models
+# These are operator-visible analysis outputs where quality matters most
 CLAUDE_TIER: frozenset[str] = frozenset({
     "chat", "chat_full",
     "agent_synthesis", "weekly_synthesis",
     "journal", "explain_trade", "performance",
-    "news_analysis", "risk_event",
-    "narrative", "pre_trade", "post_trade",
+    "news_analysis",
 })
 
-# Background/internal tasks only — Groq first, Claude fallback
+# Groq first, Claude fallback — routine per-cycle outputs, high call volume
+# Using Groq here preserves Claude credits for the high-value tier above
 GROQ_TIER: frozenset[str] = frozenset({
     "signal_summary", "annotate",
+    "narrative",    # action card descriptions — many per cycle, short output
+    "pre_trade",    # entry reasoning logged to DB — Groq quality sufficient
+    "post_trade",   # post-trade review — Groq quality sufficient
+    "risk_event",   # risk event narration — brief, factual
 })
 
 # Per-call-type token budgets
@@ -370,9 +375,10 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int |
         # Check if it's a billing error — give a clear message instead of the generic unavailable msg
         last_err = _provider_last_error.get("claude", "")
         if "BILLING" in last_err:
-            log.warning("ask_llm [%s]: Claude billing error — credit exhausted", call_type)
+            log.debug("ask_llm [%s]: Claude billing error — credit exhausted", call_type)
             return "LLM unavailable — Anthropic API credit exhausted. Please top up your balance at console.anthropic.com."
-        log.warning("ask_llm [%s]: Claude unavailable (circuit open or API error)", call_type)
+        # Log at DEBUG when circuit is already open (not WARNING — avoids log spam per cycle)
+        log.debug("ask_llm [%s]: Claude unavailable (circuit open or API error)", call_type)
         return _CLAUDE_UNAVAILABLE
 
     if call_type in GROQ_TIER:
