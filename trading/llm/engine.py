@@ -134,8 +134,8 @@ def _rate_limit():
 _provider_failures: dict[str, int] = {}        # provider → consecutive failure count
 _provider_disabled_until: dict[str, float] = {}  # provider → monotonic time when re-enabled
 _provider_last_error: dict[str, str] = {}        # provider → last error message (for diagnostics)
-_CIRCUIT_OPEN_AFTER = 5    # failures before disabling (was 3 — too aggressive for diagnostics)
-_CIRCUIT_COOLDOWN = 120.0  # 2 minutes (was 5 — faster recovery)
+_CIRCUIT_OPEN_AFTER = 5    # sustained failures before disabling (each failure = 3 attempts already tried)
+_CIRCUIT_COOLDOWN = 30.0   # 30s cooldown — short because retries already absorbed transient errors
 
 
 def _provider_ok(name: str) -> bool:
@@ -306,6 +306,10 @@ def _get_claude_client():
 def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system: bool = False) -> str | None:
     """Call Claude Sonnet via Anthropic SDK. Returns response text or None.
 
+    Retries up to 3 times with exponential backoff before counting a failure.
+    This means a single network blip never trips the circuit breaker — only
+    sustained, repeated failures do.
+
     cache_system=True enables prompt caching on the system prompt — use for
     repeated calls with the same large system prompt (saves ~90% input token cost).
     """
@@ -315,31 +319,41 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
     if client is None:
         return None
     max_tokens = min(max_tokens, 8096)
-    _rate_limit()
-    try:
-        # Use cache_control on system prompt when requested — reduces cost ~90% for cached tokens
-        if cache_system:
-            system_param = [{"type": "text", "text": _ascii_safe(system), "cache_control": {"type": "ephemeral"}}]
-        else:
-            system_param = _ascii_safe(system)
-        msg = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            system=system_param,
-            messages=[{"role": "user", "content": _ascii_safe(prompt)}],
-        )
-        _record_success("claude")
-        return msg.content[0].text
-    except Exception as e:
-        err = _ascii_safe(str(e))  # sanitise error message itself before logging
-        tb = _ascii_safe(traceback.format_exc())
-        if "402" in err or "credit" in err.lower() or "billing" in err.lower() or "payment" in err.lower() or "insufficient" in err.lower():
-            log.error("Claude BILLING ERROR — top up at console.anthropic.com: %s", err[:200])
-            _provider_last_error["claude"] = f"BILLING: {err[:200]}"
-            return None  # Don't count as circuit-breaker failure — not a transient error
-        log.warning("Claude API error [%s]: %s\n%s", type(e).__name__, err[:300], tb)
-        _record_failure("claude", f"{type(e).__name__}: {err}")
-        return None
+
+    # Build system param once (outside retry loop)
+    if cache_system:
+        system_param = [{"type": "text", "text": _ascii_safe(system), "cache_control": {"type": "ephemeral"}}]
+    else:
+        system_param = _ascii_safe(system)
+    user_content = _ascii_safe(prompt)
+
+    last_err: str = ""
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(2 ** attempt)  # 2s then 4s backoff
+        _rate_limit()
+        try:
+            msg = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=max_tokens,
+                system=system_param,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            _record_success("claude")
+            return msg.content[0].text
+        except Exception as e:
+            err = _ascii_safe(str(e))
+            if "402" in err or "credit" in err.lower() or "billing" in err.lower() or "payment" in err.lower() or "insufficient" in err.lower():
+                log.error("Claude BILLING ERROR — top up at console.anthropic.com: %s", err[:200])
+                _provider_last_error["claude"] = f"BILLING: {err[:200]}"
+                return None  # Billing: don't retry, don't trip circuit breaker
+            last_err = f"{type(e).__name__}: {err}"
+            log.warning("Claude API attempt %d/3 failed [%s]: %s", attempt + 1, type(e).__name__, err[:200])
+
+    # All 3 attempts failed — now count as one circuit-breaker failure
+    log.warning("Claude API error after 3 attempts: %s", last_err[:300])
+    _record_failure("claude", last_err)
+    return None
 
 
 _CLAUDE_UNAVAILABLE = (
