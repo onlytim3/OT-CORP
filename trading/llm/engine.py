@@ -126,8 +126,9 @@ def _rate_limit():
 
 _provider_failures: dict[str, int] = {}        # provider → consecutive failure count
 _provider_disabled_until: dict[str, float] = {}  # provider → monotonic time when re-enabled
-_CIRCUIT_OPEN_AFTER = 3    # failures before disabling
-_CIRCUIT_COOLDOWN = 300.0  # 5 minutes
+_provider_last_error: dict[str, str] = {}        # provider → last error message (for diagnostics)
+_CIRCUIT_OPEN_AFTER = 5    # failures before disabling (was 3 — too aggressive for diagnostics)
+_CIRCUIT_COOLDOWN = 120.0  # 2 minutes (was 5 — faster recovery)
 
 
 def _provider_ok(name: str) -> bool:
@@ -138,8 +139,18 @@ def _provider_ok(name: str) -> bool:
     return True
 
 
-def _record_failure(name: str) -> None:
+def reset_provider_circuit_breaker(name: str) -> None:
+    """Manually reset a provider's circuit breaker — called by operator or debug endpoint."""
+    _provider_failures.pop(name, None)
+    _provider_disabled_until.pop(name, None)
+    _provider_last_error.pop(name, None)
+    log.info("LLM circuit breaker RESET for '%s'", name)
+
+
+def _record_failure(name: str, error: str = "") -> None:
     _provider_failures[name] = _provider_failures.get(name, 0) + 1
+    if error:
+        _provider_last_error[name] = error[:300]
     if _provider_failures[name] >= _CIRCUIT_OPEN_AFTER:
         _provider_disabled_until[name] = time.monotonic() + _CIRCUIT_COOLDOWN
         log.warning("LLM circuit breaker OPEN for '%s' — disabled for %ds", name, int(_CIRCUIT_COOLDOWN))
@@ -157,11 +168,20 @@ def get_provider_health() -> dict:
     for name in ("groq", "claude"):
         disabled_until = _provider_disabled_until.get(name, 0.0)
         failures = _provider_failures.get(name, 0)
+        last_error = _provider_last_error.get(name, "")
         if now < disabled_until:
-            result[name] = {"status": "circuit_open", "failures": failures,
-                            "retry_in_seconds": int(disabled_until - now)}
+            result[name] = {
+                "status": "circuit_open",
+                "failures": failures,
+                "retry_in_seconds": int(disabled_until - now),
+                "last_error": last_error,
+            }
         else:
-            result[name] = {"status": "ok" if failures == 0 else "degraded", "failures": failures}
+            result[name] = {
+                "status": "ok" if failures == 0 else "degraded",
+                "failures": failures,
+                "last_error": last_error,
+            }
     return result
 
 
@@ -234,7 +254,7 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
             log.warning("Groq auth/access error [%s]: %s — circuit breaker triggered", type(e).__name__, err[:200])
         else:
             log.warning("Groq API error [%s]: %s", type(e).__name__, err[:200])
-        _record_failure("groq")
+        _record_failure("groq", err)
         return None
 
 
@@ -299,7 +319,7 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
         err = str(e)
         tb = traceback.format_exc()
         log.warning("Claude API error [%s]: %s\nTraceback:\n%s", type(e).__name__, err[:300], tb)
-        _record_failure("claude")
+        _record_failure("claude", f"{type(e).__name__}: {err}")
         return None
 
 
@@ -864,31 +884,76 @@ Only include signals with strength >= 0.5. Only include key_events that are mark
 # Health check
 # ---------------------------------------------------------------------------
 
+def _probe_claude_raw() -> tuple[bool, str]:
+    """Make a minimal test call to Claude WITHOUT affecting the circuit breaker.
+    Returns (success, error_message).
+    """
+    client = _get_claude_client()
+    if client is None:
+        key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not key:
+            return False, "ANTHROPIC_API_KEY not set"
+        return False, "anthropic package not installed or client init failed"
+    try:
+        msg = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=10,
+            system="You are a test probe.",
+            messages=[{"role": "user", "content": "Reply with OK"}],
+        )
+        return True, ""
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:200]}"
+
+
 def check_llm_availability() -> dict:
-    """Check which LLM providers are configured and reachable."""
+    """Check which LLM providers are configured and reachable.
+    Diagnostic probes do NOT affect the circuit breaker state.
+    """
     try:
         import trading.config  # noqa: F401
     except Exception:
         pass
 
-    status = {
-        "claude": {"configured": bool(os.getenv("ANTHROPIC_API_KEY")), "reachable": False},
-        "groq":   {"configured": bool(os.getenv("GROQ_API_KEY")),      "reachable": False},
-    }
+    health = get_provider_health()
 
-    if status["claude"]["configured"]:
-        result = _call_claude("Say OK", "ping", max_tokens=10)
-        status["claude"]["reachable"] = result is not None
+    claude_configured = bool(os.getenv("ANTHROPIC_API_KEY"))
+    groq_configured = bool(os.getenv("GROQ_API_KEY"))
 
-    if status["groq"]["configured"]:
+    # Only probe if configured and circuit is not open (avoid hammering a known-broken provider)
+    claude_reachable = False
+    claude_probe_error = ""
+    if claude_configured and health.get("claude", {}).get("status") != "circuit_open":
+        claude_reachable, claude_probe_error = _probe_claude_raw()
+    elif health.get("claude", {}).get("status") == "circuit_open":
+        claude_probe_error = f"circuit open — {health['claude'].get('retry_in_seconds', '?')}s until retry"
+
+    groq_reachable = False
+    groq_probe_error = ""
+    if groq_configured and health.get("groq", {}).get("status") != "circuit_open":
         result = _call_groq("Say OK", "ping", max_tokens=10)
-        status["groq"]["reachable"] = result is not None
+        groq_reachable = result is not None
+
+    status = {
+        "claude": {
+            "configured": claude_configured,
+            "reachable": claude_reachable,
+            "circuit_status": health.get("claude", {}).get("status", "ok"),
+            "failures": health.get("claude", {}).get("failures", 0),
+            "last_error": health.get("claude", {}).get("last_error") or claude_probe_error,
+        },
+        "groq": {
+            "configured": groq_configured,
+            "reachable": groq_reachable,
+            "circuit_status": health.get("groq", {}).get("status", "ok"),
+            "failures": health.get("groq", {}).get("failures", 0),
+            "last_error": health.get("groq", {}).get("last_error") or groq_probe_error,
+        },
+    }
 
     reachable = {k for k, v in status.items() if v["reachable"]}
     status["any_available"] = bool(reachable)
-    status["active_provider"] = (
-        "+".join(sorted(reachable)) if reachable else "none"
-    )
+    status["active_provider"] = "+".join(sorted(reachable)) if reachable else "none"
     status["reasoning_tier"] = "claude" if status["claude"]["reachable"] else "none"
     status["background_tier"] = "groq" if status["groq"]["reachable"] else "none"
     return status

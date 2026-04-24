@@ -2070,18 +2070,30 @@ def api_profile():
 
 @app.route("/api/debug/llm")
 def api_debug_llm():
-    """LLM provider health — shows circuit-breaker state and recent errors. Auth required."""
+    """LLM provider health — shows circuit-breaker state, last error, and key config."""
     from trading.llm.engine import get_provider_health
     import os
     health = get_provider_health()
     configured = {
         "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
         "groq":   bool(os.getenv("GROQ_API_KEY")),
-        "gemini": bool(os.getenv("GEMINI_API_KEY")),
     }
     for name, info in health.items():
         info["key_configured"] = configured.get(name, False)
-    return jsonify({"providers": health})
+    return jsonify({"providers": health, "hint": "POST /api/debug/llm/reset to clear circuit breakers"})
+
+
+@app.route("/api/debug/llm/reset", methods=["POST"])
+def api_debug_llm_reset():
+    """Reset LLM circuit breakers — use when Claude/Groq is healthy but stuck in open state."""
+    from trading.llm.engine import reset_provider_circuit_breaker
+    providers = request.json.get("providers", ["claude", "groq"]) if request.is_json else ["claude", "groq"]
+    reset = []
+    for name in providers:
+        if name in ("claude", "groq"):
+            reset_provider_circuit_breaker(name)
+            reset.append(name)
+    return jsonify({"reset": reset, "message": f"Circuit breakers cleared for: {', '.join(reset)}"})
 
 
 @app.route("/api/version")
