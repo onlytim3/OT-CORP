@@ -2102,7 +2102,7 @@ def api_debug_llm():
     return jsonify({"providers": health, "hint": "POST /api/debug/llm/reset to clear circuit breakers"})
 
 
-@app.route("/api/debug/llm/reset", methods=["POST"])
+@app.route("/api/debug/llm/reset", methods=["GET", "POST"])
 def api_debug_llm_reset():
     """Reset LLM circuit breakers — use when Claude/Groq is healthy but stuck in open state."""
     from trading.llm.engine import reset_provider_circuit_breaker
