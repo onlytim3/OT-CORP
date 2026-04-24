@@ -300,6 +300,20 @@ def _get_claude_client():
             _claude_init_attempted = True
             log.warning("ANTHROPIC_API_KEY not set — Claude-tier calls will return unavailable message")
         return None
+    # Validate key is ASCII-clean — HTTP/1.1 headers must be ASCII.
+    # Cyrillic characters (e.g. В ≈ B on a Russian keyboard) silently corrupt keys.
+    try:
+        api_key.encode("ascii")
+    except UnicodeEncodeError as e:
+        if not _claude_init_attempted:
+            _claude_init_attempted = True
+            log.error(
+                "ANTHROPIC_API_KEY contains a non-ASCII character at position %d "
+                "(likely a Cyrillic look-alike typed on a Russian keyboard). "
+                "Re-enter the key in Render env vars using only ASCII characters.",
+                e.start,
+            )
+        return None
     try:
         import anthropic
         import httpx
@@ -347,6 +361,7 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
     user_content = _clean(prompt)
 
     last_err: str = ""
+    unicode_errors_only = True  # track whether ALL failures were encoding issues
     for attempt in range(3):
         if attempt > 0:
             time.sleep(2 ** attempt)  # 2s then 4s backoff
@@ -361,12 +376,12 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
             _record_success("claude")
             return msg.content[0].text
         except UnicodeEncodeError as e:
-            # Non-ASCII slipped past _ascii_safe() — apply bytes-level strip and retry.
-            # Do NOT count as a circuit-breaker failure: this is a content issue,
-            # not an API availability issue.
+            # Non-ASCII in the request (content or API key) — NOT an API availability
+            # issue, so do NOT count against the circuit breaker.
             err_msg = str(e)
-            log.warning("Claude UnicodeEncodeError (attempt %d/3) — re-stripping: %s", attempt + 1, err_msg)
+            log.warning("Claude UnicodeEncodeError (attempt %d/3): %s", attempt + 1, err_msg)
             _provider_last_error["claude"] = f"UnicodeEncodeError: {err_msg}"
+            # Re-strip content (fixes content issues; can't fix a bad API key)
             if isinstance(system_param, list):
                 for item in system_param:
                     if isinstance(item, dict) and "text" in item:
@@ -374,8 +389,8 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
             elif isinstance(system_param, str):
                 system_param = _bytes_safe(system_param)
             user_content = _bytes_safe(user_content)
-            # Continue to next retry attempt with aggressively cleaned content
         except Exception as e:
+            unicode_errors_only = False
             err = _ascii_safe(str(e))
             if "402" in err or "credit" in err.lower() or "billing" in err.lower() or "payment" in err.lower() or "insufficient" in err.lower():
                 log.error("Claude BILLING ERROR — top up at console.anthropic.com: %s", err[:200])
@@ -384,7 +399,17 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
             last_err = f"{type(e).__name__}: {err}"
             log.warning("Claude API attempt %d/3 failed [%s]: %s", attempt + 1, type(e).__name__, err[:200])
 
-    # All 3 attempts failed — now count as one circuit-breaker failure
+    # If ALL failures were Unicode encoding errors, it's a content/key issue — not
+    # an API availability problem. Don't trip the circuit breaker.
+    if unicode_errors_only:
+        log.error(
+            "Claude call failed with UnicodeEncodeError on all 3 attempts. "
+            "Check ANTHROPIC_API_KEY in Render env vars for non-ASCII characters "
+            "(Cyrillic В looks identical to Latin B but breaks ASCII header encoding)."
+        )
+        return None
+
+    # Real API failures — count against circuit breaker
     log.warning("Claude API error after 3 attempts: %s", last_err[:300])
     _record_failure("claude", last_err)
     return None
