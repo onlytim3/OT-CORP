@@ -37,12 +37,14 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 
-def _ascii_safe(text: str) -> str:
-    """Strip all non-ASCII characters from text — belt-and-suspenders against encoding errors.
+_NON_ASCII_RE = re.compile(r"[^\x00-\x7F]+")
 
-    Accented Latin chars are first NFKD-decomposed (é→e+combining accent → e after strip).
-    Cyrillic, CJK, Arabic and all other non-ASCII are dropped silently.
-    Falls back to a character-by-character filter if normalization fails (e.g. lone surrogates).
+def _ascii_safe(text: str) -> str:
+    """Strip all non-ASCII characters from text — guaranteed to never raise.
+
+    Uses regex substitution which is immune to codec edge-cases (lone surrogates,
+    unusual normalisation forms, codec bugs). Previous encode/decode approach
+    could still raise UnicodeEncodeError for certain character sequences.
     """
     if not isinstance(text, str):
         try:
@@ -50,9 +52,9 @@ def _ascii_safe(text: str) -> str:
         except Exception:
             return ""
     try:
-        return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+        return _NON_ASCII_RE.sub("", text)
     except Exception:
-        # Fallback: char-by-char filter (handles lone surrogates and other edge cases)
+        # Last resort: char-by-char filter
         return "".join(c for c in text if ord(c) < 128)
 
 
@@ -242,8 +244,8 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
         response = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": _ascii_safe(system)},
+                {"role": "user", "content": _ascii_safe(prompt)},
             ],
             max_tokens=max_tokens,
             temperature=0.7,
@@ -329,14 +331,13 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
         _record_success("claude")
         return msg.content[0].text
     except Exception as e:
-        err = str(e)
-        tb = traceback.format_exc()
-        # Detect billing errors — don't trip circuit breaker, surface directly
+        err = _ascii_safe(str(e))  # sanitise error message itself before logging
+        tb = _ascii_safe(traceback.format_exc())
         if "402" in err or "credit" in err.lower() or "billing" in err.lower() or "payment" in err.lower() or "insufficient" in err.lower():
-            log.error("Claude BILLING ERROR — top up Anthropic API credit: %s", err[:200])
+            log.error("Claude BILLING ERROR — top up at console.anthropic.com: %s", err[:200])
             _provider_last_error["claude"] = f"BILLING: {err[:200]}"
-            return None  # Don't record as circuit-breaker failure — it's not transient
-        log.warning("Claude API error [%s]: %s\nTraceback:\n%s", type(e).__name__, err[:300], tb)
+            return None  # Don't count as circuit-breaker failure — not a transient error
+        log.warning("Claude API error [%s]: %s\n%s", type(e).__name__, err[:300], tb)
         _record_failure("claude", f"{type(e).__name__}: {err}")
         return None
 
