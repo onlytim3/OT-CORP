@@ -1728,6 +1728,25 @@ def api_llm_status():
         return jsonify({"error": "LLM module not installed", "any_available": False})
 
 
+@app.route("/api/reset_trading", methods=["POST"])
+def api_reset_trading():
+    """Full reset — clears ALL halt state and re-enables ALL strategies immediately.
+
+    Use when halt rules were over-triggered and you want to restart at the
+    current balance with normal position sizing (not gradual conservative recovery).
+    """
+    try:
+        from trading.strategy.circuit_breaker import full_reset_trading
+        body = request.get_json(silent=True) or {}
+        reason = body.get("reason", "Manual full reset via dashboard")
+        result = full_reset_trading(reason=reason)
+        log.info("Full trading reset executed: %s", reason)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("Full trading reset failed")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/resume_trading", methods=["POST"])
 def api_resume_trading():
     """Resume trading after an emergency halt in conservative recovery mode.

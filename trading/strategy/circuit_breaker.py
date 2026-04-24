@@ -238,6 +238,46 @@ def get_position_scale() -> float:
     return 1.0
 
 
+def full_reset_trading(reason: str = "Manual full reset") -> dict:
+    """Full reset — clears ALL halt state and re-enables ALL strategies immediately.
+
+    Use this when the halt rules were too aggressive and you want to restart
+    trading from the current balance without the gradual recovery protocol.
+    """
+    from trading.config import STRATEGY_ENABLED
+    from trading.db.store import set_setting, log_action
+
+    # Clear all halt flags
+    set_setting("daily_halt_date", "")
+    set_setting("recovery_mode", json.dumps({"active": False}))
+    set_setting("risk_stage", "0")
+
+    # Re-enable ALL strategies from config defaults
+    for strat in STRATEGY_ENABLED:
+        STRATEGY_ENABLED[strat] = True
+
+    # Persist the re-enabled state to DB so it survives the next restart
+    from trading.intelligence.autonomous import _DB_KEY_STRATEGY_ENABLED
+    set_setting(_DB_KEY_STRATEGY_ENABLED, json.dumps(
+        {k: True for k in STRATEGY_ENABLED}
+    ))
+
+    enabled_count = sum(1 for v in STRATEGY_ENABLED.values() if v)
+
+    log_action(
+        "system", "full_reset",
+        details=f"Full trading reset: all halt state cleared, {enabled_count} strategies re-enabled. Reason: {reason}",
+        result="normal",
+    )
+    logger.warning("FULL RESET: halt cleared, %d strategies re-enabled. %s", enabled_count, reason)
+
+    return {
+        "status": "normal",
+        "message": f"Full reset complete. All halt state cleared. {enabled_count} strategies re-enabled. Trading resumes at normal position sizing.",
+        "strategies_enabled": enabled_count,
+    }
+
+
 def resume_trading_conservatively(reason: str = "Manual resume") -> dict:
     """Public API: called by the /api/resume_trading endpoint.
 
