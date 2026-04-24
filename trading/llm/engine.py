@@ -275,6 +275,16 @@ _claude_client = None
 _claude_init_attempted = False
 
 
+def _bytes_safe(text: str) -> str:
+    """Final-resort bytes-level ASCII safety — encode to ASCII bytes then decode.
+
+    More aggressive than _ascii_safe() regex: catches any characters that the
+    regex misses due to edge cases in Python's unicode database. Guarantees
+    the result survives .encode('ascii') without raising UnicodeEncodeError.
+    """
+    return text.encode("ascii", errors="ignore").decode("ascii")
+
+
 def _get_claude_client():
     """Lazy-init the Anthropic client singleton."""
     global _claude_client, _claude_init_attempted
@@ -292,8 +302,12 @@ def _get_claude_client():
         return None
     try:
         import anthropic
-        _claude_client = anthropic.Anthropic(api_key=api_key)
-        log.info("Claude client initialized (model: %s)", CLAUDE_MODEL)
+        import httpx
+        _claude_client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=httpx.Timeout(45.0, connect=10.0),  # 45s total, 10s connect
+        )
+        log.info("Claude client initialized (model: %s, timeout=45s)", CLAUDE_MODEL)
         return _claude_client
     except ImportError:
         log.warning("anthropic package not installed — pip install anthropic")
@@ -320,12 +334,17 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
         return None
     max_tokens = min(max_tokens, 8096)
 
-    # Build system param once (outside retry loop)
+    # Build system param once (outside retry loop).
+    # Two-pass sanitisation: regex strips non-ASCII code points, then bytes
+    # encoding guarantees the result is truly ASCII-clean at the codec level.
+    def _clean(t: str) -> str:
+        return _bytes_safe(_ascii_safe(t))
+
     if cache_system:
-        system_param = [{"type": "text", "text": _ascii_safe(system), "cache_control": {"type": "ephemeral"}}]
+        system_param = [{"type": "text", "text": _clean(system), "cache_control": {"type": "ephemeral"}}]
     else:
-        system_param = _ascii_safe(system)
-    user_content = _ascii_safe(prompt)
+        system_param = _clean(system)
+    user_content = _clean(prompt)
 
     last_err: str = ""
     for attempt in range(3):
@@ -341,6 +360,21 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system:
             )
             _record_success("claude")
             return msg.content[0].text
+        except UnicodeEncodeError as e:
+            # Non-ASCII slipped past _ascii_safe() — apply bytes-level strip and retry.
+            # Do NOT count as a circuit-breaker failure: this is a content issue,
+            # not an API availability issue.
+            err_msg = str(e)
+            log.warning("Claude UnicodeEncodeError (attempt %d/3) — re-stripping: %s", attempt + 1, err_msg)
+            _provider_last_error["claude"] = f"UnicodeEncodeError: {err_msg}"
+            if isinstance(system_param, list):
+                for item in system_param:
+                    if isinstance(item, dict) and "text" in item:
+                        item["text"] = _bytes_safe(item["text"])
+            elif isinstance(system_param, str):
+                system_param = _bytes_safe(system_param)
+            user_content = _bytes_safe(user_content)
+            # Continue to next retry attempt with aggressively cleaned content
         except Exception as e:
             err = _ascii_safe(str(e))
             if "402" in err or "credit" in err.lower() or "billing" in err.lower() or "payment" in err.lower() or "insufficient" in err.lower():
