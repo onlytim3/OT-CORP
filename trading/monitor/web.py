@@ -1728,7 +1728,7 @@ def api_llm_status():
         return jsonify({"error": "LLM module not installed", "any_available": False})
 
 
-@app.route("/api/reset_trading", methods=["POST"])
+@app.route("/api/reset_trading", methods=["GET", "POST"])
 def api_reset_trading():
     """Full reset — clears ALL halt state and re-enables ALL strategies immediately.
 
@@ -1747,7 +1747,7 @@ def api_reset_trading():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/resume_trading", methods=["POST"])
+@app.route("/api/resume_trading", methods=["GET", "POST"])
 def api_resume_trading():
     """Resume trading after an emergency halt in conservative recovery mode.
 
