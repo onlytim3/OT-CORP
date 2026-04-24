@@ -415,6 +415,9 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
        re.search(r"\bemergency\s+(halt|stop)\b", lower):
         return _intent_halt_trading(msg, lower)
 
+    if re.search(r"\b(full.?reset|reset.?trading|reset.?all|clear.?all.?halt|force.?resume|hard.?reset)\b", lower):
+        return _intent_full_reset_trading(msg, lower)
+
     if re.search(r"\b(resume|restart|unhalt|clear.?halt|restore)\s+(all\s+)?(trading|trades)\b", lower) or \
        (re.search(r"\b(resume|unhalt)\s+trading\b", lower)):
         return _intent_resume_trading(msg, lower)
@@ -2460,6 +2463,24 @@ def _intent_resume_trading(msg: str, lower: str) -> dict:
         )
 
     return _queue_action("resume_trading", desc, execute)
+
+
+def _intent_full_reset_trading(msg: str, lower: str) -> dict:
+    """Full reset — clears ALL halt state, re-enables ALL strategies at normal sizing."""
+    from trading.strategy.circuit_breaker import full_reset_trading
+    desc = "Full reset: clear all halt state and re-enable all strategies"
+
+    def execute():
+        result = full_reset_trading(reason="Operator full reset command")
+        return (
+            f"**Full reset complete.**\n"
+            f"- All halt state cleared\n"
+            f"- {result['strategies_enabled']} strategies re-enabled\n"
+            f"- Normal position sizing restored\n"
+            f"- Trading resumes immediately on next cycle"
+        )
+
+    return _queue_action("full_reset_trading", desc, execute)
 
 
 def _intent_disable_emergency_halt(msg: str, lower: str) -> dict:
