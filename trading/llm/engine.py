@@ -296,21 +296,29 @@ def _get_claude_client():
         return None
 
 
-def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None:
-    """Call Claude Sonnet via Anthropic SDK. Returns response text or None."""
+def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system: bool = False) -> str | None:
+    """Call Claude Sonnet via Anthropic SDK. Returns response text or None.
+
+    cache_system=True enables prompt caching on the system prompt — use for
+    repeated calls with the same large system prompt (saves ~90% input token cost).
+    """
     if not _provider_ok("claude"):
         return None
     client = _get_claude_client()
     if client is None:
         return None
-    # Cap max_tokens to the model's documented output limit
     max_tokens = min(max_tokens, 8096)
     _rate_limit()
     try:
+        # Use cache_control on system prompt when requested — reduces cost ~90% for cached tokens
+        if cache_system:
+            system_param = [{"type": "text", "text": _ascii_safe(system), "cache_control": {"type": "ephemeral"}}]
+        else:
+            system_param = _ascii_safe(system)
         msg = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
-            system=_ascii_safe(system),
+            system=system_param,
             messages=[{"role": "user", "content": _ascii_safe(prompt)}],
         )
         _record_success("claude")
@@ -318,14 +326,19 @@ def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None
     except Exception as e:
         err = str(e)
         tb = traceback.format_exc()
+        # Detect billing errors — don't trip circuit breaker, surface directly
+        if "402" in err or "credit" in err.lower() or "billing" in err.lower() or "payment" in err.lower() or "insufficient" in err.lower():
+            log.error("Claude BILLING ERROR — top up Anthropic API credit: %s", err[:200])
+            _provider_last_error["claude"] = f"BILLING: {err[:200]}"
+            return None  # Don't record as circuit-breaker failure — it's not transient
         log.warning("Claude API error [%s]: %s\nTraceback:\n%s", type(e).__name__, err[:300], tb)
         _record_failure("claude", f"{type(e).__name__}: {err}")
         return None
 
 
 _CLAUDE_UNAVAILABLE = (
-    "LLM unavailable — Claude is temporarily offline, please try again in a few minutes. "
-    "(Check ANTHROPIC_API_KEY if this persists.)"
+    "LLM unavailable — Claude is temporarily offline. "
+    "Check /api/debug/llm for last_error details, or POST /api/debug/llm/reset to clear the circuit breaker."
 )
 
 
@@ -348,10 +361,17 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int |
         max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
     if call_type in CLAUDE_TIER:
-        result = _call_claude(system, prompt, max_tokens=max_tokens)
+        # Cache system prompt for calls that reuse the large trading context (saves ~90% input cost)
+        cache = call_type in {"chat", "chat_full", "news_analysis", "agent_synthesis", "journal", "performance"}
+        result = _call_claude(system, prompt, max_tokens=max_tokens, cache_system=cache)
         if result:
             log.debug("ask_llm [%s] → claude", call_type)
             return result
+        # Check if it's a billing error — give a clear message instead of the generic unavailable msg
+        last_err = _provider_last_error.get("claude", "")
+        if "BILLING" in last_err:
+            log.warning("ask_llm [%s]: Claude billing error — credit exhausted", call_type)
+            return "LLM unavailable — Anthropic API credit exhausted. Please top up your balance at console.anthropic.com."
         log.warning("ask_llm [%s]: Claude unavailable (circuit open or API error)", call_type)
         return _CLAUDE_UNAVAILABLE
 
