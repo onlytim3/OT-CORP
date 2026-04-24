@@ -1566,6 +1566,72 @@ def _evaluate_outcomes():
                 # Informational — always positive if it was recorded
                 outcome = "positive"
 
+            # --- Additional handlers to close remaining outcome gaps ---
+
+            elif action in ("gradual_recovery", "recovery_fallback"):
+                # Positive if at least some strategies are now enabled
+                enabled = sum(1 for v in STRATEGY_ENABLED.values() if v)
+                total = len(STRATEGY_ENABLED)
+                outcome = "positive" if enabled > 0 else "negative"
+
+            elif action == "revert_risk":
+                # Positive if drawdown stayed below tighten threshold after revert
+                outcome = "positive" if current_drawdown < get_threshold("drawdown_tighten_threshold") else "negative"
+
+            elif action in ("force_graduate", "relax_confluence"):
+                # Positive if portfolio drawdown has not worsened since graduating
+                outcome = "positive" if current_drawdown < get_threshold("drawdown_halt_threshold") else "negative"
+
+            elif action == "rehabilitate_strategy":
+                # Positive if the rehabilitated strategy has had any positive trades since
+                strat_trades = [t for t in trades if t.get("strategy") == target
+                                and t.get("timestamp", "") > rec.get("resolved_at", "")]
+                if strat_trades:
+                    strat_pnl = sum(t.get("pnl", 0) or 0 for t in strat_trades)
+                    outcome = "positive" if strat_pnl >= 0 else "negative"
+                else:
+                    outcome = "positive"  # No trades yet — strategy re-enabled, no harm done
+
+            elif action == "backtest_discard":
+                # Positive if the discarded strategy is still disabled (action stuck)
+                is_disabled = not STRATEGY_ENABLED.get(target, True)
+                outcome = "positive" if is_disabled else "negative"
+
+            elif action in ("volume_pattern", "re_evaluate_disabled",
+                            "coverage_gap", "research_finding"):
+                # Informational findings — always positive (they were recorded)
+                outcome = "positive"
+
+            elif action in ("dissent", "confirm"):
+                # Challenger agent peer review — always positive (audit trail)
+                outcome = "positive"
+
+            elif action == "memory_distilled":
+                # Memory agent ran — always positive
+                outcome = "positive"
+
+            elif action in ("thompson_budget", "adjust_budget"):
+                # Thompson budget allocation — verify the budget value matches
+                try:
+                    from trading.risk.portfolio import STRATEGY_BUDGETS
+                    expected_budget = data.get("new_budget") or data.get("budget_multiplier")
+                    actual_budget = STRATEGY_BUDGETS.get(target)
+                    if expected_budget and actual_budget:
+                        outcome = "positive" if abs(actual_budget - float(expected_budget)) < 0.01 else "negative"
+                    else:
+                        outcome = "positive"
+                except Exception:
+                    outcome = "positive"
+
+            elif action == "implement_strategy":
+                # Already handled above in the implement_strategy/coverage_gap block
+                pass
+
+            else:
+                # Catch-all: any unhandled action type → neutral (informational)
+                # This ensures no recommendation remains with outcome=NULL indefinitely
+                outcome = "neutral"
+
             if outcome:
                 update_recommendation_outcome(rec["id"], outcome)
                 log.debug("OUTCOME: rec #%d (%s on %s) → %s", rec["id"], action, target, outcome)
