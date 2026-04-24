@@ -624,6 +624,22 @@ def _build_live_context() -> str:
             lines.append(f"Drawdown from peak: {drawdown:+.2f}%")
         if recent_total:
             lines.append(f"Recent win rate (last {recent_total}): {win_rate}%")
+
+        # Inject accumulated system memory (distilled by memory agent, updated daily)
+        try:
+            raw_memory = get_setting("system_memory")
+            if raw_memory:
+                memory_data = json.loads(raw_memory)
+                memory_content = memory_data.get("content", "")
+                memory_date = memory_data.get("generated_at", "")[:10]
+                if memory_content:
+                    lines.append(
+                        f"\n--- Accumulated System Memory (as of {memory_date}) ---\n"
+                        + memory_content
+                    )
+        except Exception:
+            pass
+
         return "\n".join(lines)
     except Exception:
         return "(live context unavailable)"
