@@ -69,7 +69,7 @@ RISK = {
     "max_position_pct": 0.12,              # Max 12% of portfolio per position (was 8%)
     "stop_loss_pct": 0.05,                 # 5% stop loss (was 3% — too tight for crypto)
     "max_daily_loss_pct": 0.05,            # 5% max daily loss (was 3%)
-    "max_drawdown_pct": 0.18,              # Halt at 18% drawdown (was 12%)
+    "max_drawdown_pct": 0.50,              # Halt at 50% drawdown — paper trading, allows recovery from current ~36% trough
     "min_cash_reserve_pct": 0.05,          # Keep 5% cash minimum (was 10%)
     "max_trades_per_day": 25,              # Max 25 trades/day (was 15)
     "max_open_positions": 10,              # Max 10 simultaneous open positions (was 6)
