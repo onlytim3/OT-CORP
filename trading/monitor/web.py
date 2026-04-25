@@ -2094,22 +2094,23 @@ def api_debug_llm():
     import os
     health = get_provider_health()
     configured = {
-        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "openai": bool(os.getenv("OPENAI_API_KEY")),
         "groq":   bool(os.getenv("GROQ_API_KEY")),
+        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
     }
     for name, info in health.items():
         info["key_configured"] = configured.get(name, False)
-    return jsonify({"providers": health, "hint": "POST /api/debug/llm/reset to clear circuit breakers"})
+    return jsonify({"providers": health, "hint": "GET /api/debug/llm/reset to clear circuit breakers"})
 
 
 @app.route("/api/debug/llm/reset", methods=["GET", "POST"])
 def api_debug_llm_reset():
-    """Reset LLM circuit breakers — use when Claude/Groq is healthy but stuck in open state."""
+    """Reset LLM circuit breakers — use when a provider is healthy but stuck in open state."""
     from trading.llm.engine import reset_provider_circuit_breaker
-    providers = request.json.get("providers", ["claude", "groq"]) if request.is_json else ["claude", "groq"]
+    providers = request.json.get("providers", ["openai", "groq", "claude"]) if request.is_json else ["openai", "groq", "claude"]
     reset = []
     for name in providers:
-        if name in ("claude", "groq"):
+        if name in ("openai", "groq", "claude"):
             reset_provider_circuit_breaker(name)
             reset.append(name)
     return jsonify({"reset": reset, "message": f"Circuit breakers cleared for: {', '.join(reset)}"})

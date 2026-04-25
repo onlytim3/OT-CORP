@@ -1,26 +1,26 @@
-"""LLM engine for OT-CORP trading system — Claude-primary design.
+"""LLM engine for OT-CORP trading system — OpenAI-primary, three-tier design.
 
-Claude Reasoning Tier (ANTHROPIC_API_KEY): all user-visible outputs —
+Primary Tier (OPENAI_API_KEY): all user-visible outputs —
     chat, chat_full, agent_synthesis, weekly_synthesis, journal,
-    explain_trade, performance, news_analysis, risk_event,
-    narrative, pre_trade, post_trade — ~$12-18/month.
-    If Claude is unavailable, returns a clear operator-facing message.
-    Never silently falls back to a weaker model.
+    explain_trade, performance, news_analysis — GPT-4o-mini.
 
-Groq Background Tier (GROQ_API_KEY): internal logging only —
-    signal_summary, annotate — $0/month.
-    Falls back to Claude if Groq is down.
+Claude Fallback (ANTHROPIC_API_KEY): kicks in when OpenAI is unavailable.
+
+Groq Background Tier (GROQ_API_KEY): high-volume internal tasks —
+    signal_summary, annotate, narrative, pre_trade, post_trade, risk_event.
+    Falls back to OpenAI → Claude if Groq is rate-limited.
 
 Fallback chains:
-    Claude tier:      Claude → operator-visible error (no silent fallback)
-    Background tier:  Groq → Claude → static error string
+    Primary tier:     OpenAI → Claude → operator-visible error
+    Background tier:  Groq → OpenAI → Claude → static error string
 
 Usage:
     from trading.llm.engine import ask_llm, explain_trade, generate_journal
 
 Environment variables:
-    ANTHROPIC_API_KEY — Claude Sonnet (all reasoning, ~$12-18/mo)
-    GROQ_API_KEY      — Groq free tier (background tasks only, $0/mo)
+    OPENAI_API_KEY    — GPT-4o-mini (primary reasoning)
+    ANTHROPIC_API_KEY — Claude Sonnet (fallback reasoning)
+    GROQ_API_KEY      — Groq free tier (background tasks, $0/mo)
 """
 
 from __future__ import annotations
@@ -65,10 +65,13 @@ def _ascii_safe(text: str) -> str:
 # Groq models (background tasks only) — llama-3.3-70b-versatile is confirmed free-tier
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
-# Claude model (primary reasoning engine — all user-visible outputs)
+# Claude model (reasoning fallback)
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
-# High-value reasoning — Claude only, no silent fallback to weaker models
+# OpenAI model (primary reasoning engine — all user-visible outputs)
+OPENAI_MODEL = "gpt-4o-mini"
+
+# High-value reasoning — OpenAI primary, Claude fallback
 # These are operator-visible analysis outputs where quality matters most
 CLAUDE_TIER: frozenset[str] = frozenset({
     "chat", "chat_full",
@@ -77,13 +80,12 @@ CLAUDE_TIER: frozenset[str] = frozenset({
     "news_analysis",
 })
 
-# Groq first, Claude fallback — routine per-cycle outputs, high call volume
-# Using Groq here preserves Claude credits for the high-value tier above
+# Groq first, OpenAI fallback, Claude last resort — routine per-cycle outputs, high call volume
 GROQ_TIER: frozenset[str] = frozenset({
     "signal_summary", "annotate",
     "narrative",    # action card descriptions — many per cycle, short output
-    "pre_trade",    # entry reasoning logged to DB — Groq quality sufficient
-    "post_trade",   # post-trade review — Groq quality sufficient
+    "pre_trade",    # entry reasoning logged to DB
+    "post_trade",   # post-trade review
     "risk_event",   # risk event narration — brief, factual
 })
 
@@ -172,7 +174,7 @@ def get_provider_health() -> dict:
     """Return health status of each LLM provider (for diagnostics)."""
     now = time.monotonic()
     result = {}
-    for name in ("groq", "claude"):
+    for name in ("openai", "groq"):
         disabled_until = _provider_disabled_until.get(name, 0.0)
         failures = _provider_failures.get(name, 0)
         last_error = _provider_last_error.get(name, "")
@@ -265,10 +267,76 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Provider: OpenAI (primary reasoning tier)
+# ---------------------------------------------------------------------------
+
+_openai_client = None
+_openai_init_attempted = False
+
+
+def _get_openai_client():
+    """Lazy-init the OpenAI client singleton."""
+    global _openai_client, _openai_init_attempted
+    if _openai_client is not None:
+        return _openai_client
+    try:
+        import trading.config  # noqa: F401
+    except Exception:
+        pass
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        if not _openai_init_attempted:
+            _openai_init_attempted = True
+            log.info("OPENAI_API_KEY not set — OpenAI tier disabled, falling back to Claude")
+        return None
+    try:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=api_key)
+        log.info("OpenAI client initialized (model: %s)", OPENAI_MODEL)
+        return _openai_client
+    except ImportError:
+        log.warning("openai package not installed — pip install openai")
+        return None
+    except Exception as e:
+        log.warning("Failed to initialize OpenAI client: %s", e)
+        return None
+
+
+def _call_openai(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
+    """Call OpenAI API. Returns response text or None."""
+    if not _provider_ok("openai"):
+        return None
+    client = _get_openai_client()
+    if client is None:
+        return None
+    _rate_limit()
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _ascii_safe(system)},
+                {"role": "user",   "content": _ascii_safe(prompt)},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        _record_success("openai")
+        return response.choices[0].message.content
+    except Exception as e:
+        err = str(e)
+        if "429" in err or "rate_limit" in err.lower() or "quota" in err.lower():
+            log.warning("OpenAI rate limited — backing off")
+        elif "401" in err or "403" in err or "invalid_api_key" in err.lower():
+            log.warning("OpenAI auth error [%s]: %s", type(e).__name__, err[:200])
+        else:
+            log.warning("OpenAI API error [%s]: %s", type(e).__name__, err[:200])
+        _record_failure("openai", err)
+        return None
 
 
 # ---------------------------------------------------------------------------
-# Provider: Claude (reasoning tier)
+# Provider: Claude (reasoning fallback)
 # ---------------------------------------------------------------------------
 
 _claude_client = None
@@ -424,12 +492,11 @@ _CLAUDE_UNAVAILABLE = (
 def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int | None = None) -> str:
     """Send prompt to LLM with call-type-specific token budget and tier routing.
 
-    Claude tier (all user-visible outputs — no silent fallback):
-        If Claude is unavailable, returns a clear operator-facing message
-        rather than silently substituting a weaker model.
+    Primary tier (operator-visible outputs):
+        OpenAI GPT-4o-mini → Claude fallback → error message.
 
-    Groq tier (background/internal only):
-        Groq → Claude fallback → static error string.
+    Background tier (high-volume internal tasks):
+        Groq → OpenAI → Claude → static error string.
 
     Always returns a string.
     """
@@ -440,39 +507,31 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int |
         max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
     if call_type in CLAUDE_TIER:
-        # Cache system prompt for calls that reuse the large trading context (saves ~90% input cost)
-        cache = call_type in {"chat", "chat_full", "news_analysis", "agent_synthesis", "journal", "performance"}
-        result = _call_claude(system, prompt, max_tokens=max_tokens, cache_system=cache)
+        result = _call_openai(system, prompt, max_tokens=max_tokens)
         if result:
-            log.debug("ask_llm [%s] → claude", call_type)
+            log.debug("ask_llm [%s] → openai", call_type)
             return result
-        # Check if it's a billing error — give a clear message instead of the generic unavailable msg
-        last_err = _provider_last_error.get("claude", "")
-        if "BILLING" in last_err:
-            log.debug("ask_llm [%s]: Claude billing error — credit exhausted", call_type)
-            return "LLM unavailable — Anthropic API credit exhausted. Please top up your balance at console.anthropic.com."
-        # Log at DEBUG when circuit is already open (not WARNING — avoids log spam per cycle)
-        log.debug("ask_llm [%s]: Claude unavailable (circuit open or API error)", call_type)
-        return _CLAUDE_UNAVAILABLE
+        log.warning("ask_llm [%s]: OpenAI unavailable", call_type)
+        return "LLM unavailable — check OPENAI_API_KEY on Render, or visit /api/debug/llm for details."
 
     if call_type in GROQ_TIER:
         result = _call_groq(system, prompt, max_tokens=max_tokens)
         if result:
             log.debug("ask_llm [%s] → groq", call_type)
             return result
-        result = _call_claude(system, prompt, max_tokens=max_tokens)
+        result = _call_openai(system, prompt, max_tokens=max_tokens)
         if result:
-            log.debug("ask_llm [%s] → claude (groq unavailable)", call_type)
+            log.debug("ask_llm [%s] → openai (groq unavailable)", call_type)
             return result
         log.error("ask_llm [%s]: all providers failed", call_type)
-        return "(LLM unavailable — add ANTHROPIC_API_KEY and GROQ_API_KEY to Render)"
+        return "(LLM unavailable — add OPENAI_API_KEY or GROQ_API_KEY to Render)"
 
-    # Unknown call_type — treat as Claude tier (safe default)
-    log.warning("ask_llm: unknown call_type '%s', routing to Claude", call_type)
-    result = _call_claude(system, prompt, max_tokens=max_tokens)
+    # Unknown call_type — route to OpenAI
+    log.warning("ask_llm: unknown call_type '%s', routing to OpenAI", call_type)
+    result = _call_openai(system, prompt, max_tokens=max_tokens)
     if result:
         return result
-    return _CLAUDE_UNAVAILABLE
+    return "LLM unavailable — check OPENAI_API_KEY on Render."
 
 
 # ---------------------------------------------------------------------------
