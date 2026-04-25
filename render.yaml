@@ -42,16 +42,12 @@ services:
       - key: ASTER_API_SECRET
         sync: false
 
-      # ── LLM (Claude Sonnet — operator chat, reasoning tier) ──
-      - key: ANTHROPIC_API_KEY
+      # ── LLM (OpenAI GPT-4o-mini — primary reasoning) ──
+      - key: OPENAI_API_KEY
         sync: false
 
-      # ── LLM (Groq free tier — Llama 4 Scout) ──
+      # ── LLM (Groq free tier — background tasks) ──
       - key: GROQ_API_KEY
-        sync: false
-
-      # ── LLM (Gemini Flash — emergency fallback) ──
-      - key: GEMINI_API_KEY
         sync: false
 
       # ── Social Sentiment (Reddit PRAW — read-only) ──
