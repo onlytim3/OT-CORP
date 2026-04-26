@@ -476,6 +476,11 @@ def run_trading_cycle():
         risk_mgr = RiskManager(portfolio_value, account=account)
         executed_count = 0
         blocked_count = 0
+        sell_skip_count = 0
+        order_size_zero_count = 0
+        buying_power_skip_count = 0
+        execution_rejected_count = 0
+        execution_failed_count = 0
 
         # Count buy signals for position sizing
         buy_count = sum(1 for s in consolidated if s.action == "buy")
@@ -503,6 +508,7 @@ def run_trading_cycle():
                     else:
                         short_allowed = strat_name in SHORT_ALLOWED_STRATEGIES
                     if not ALLOW_SHORT_SELLING or not short_allowed:
+                        sell_skip_count += 1
                         console.print(f"  [dim]Skip SELL {signal.symbol} -- no position held[/dim]")
                         continue
                     # Allow short for permitted strategies
@@ -563,6 +569,7 @@ def run_trading_cycle():
                 signal, portfolio_value, buy_count
             )
             if order_value <= 0:
+                order_size_zero_count += 1
                 console.print(f"  [dim]Skip {signal.symbol} -- too small or budget exhausted[/dim]")
                 continue
 
@@ -571,7 +578,8 @@ def run_trading_cycle():
             if order_value > buying_power:
                 order_value = max(buying_power - 10, 0)  # Leave $10 buffer
                 if order_value <= 5:
-                    console.print(f"  [yellow]Skip {signal.symbol} -- insufficient buying power[/yellow]")
+                    buying_power_skip_count += 1
+                    console.print(f"  [yellow]Skip {signal.symbol} -- insufficient buying power (${buying_power:.0f})[/yellow]")
                     continue
 
             # Risk check (correlation limits, crypto cap, etc.)
@@ -660,6 +668,7 @@ def run_trading_cycle():
                 order = _execute_order(signal.symbol, signal.action, notional=order_value,
                                        stop_loss_price=stop_loss_price, leverage=lev)
             except Exception as exec_err:
+                execution_failed_count += 1
                 log_action(
                     "error", "order_failed",
                     symbol=signal.symbol,
@@ -848,17 +857,23 @@ def run_trading_cycle():
                     signal.strategy,
                 )
             else:
+                execution_rejected_count += 1
+                rejection_reason = order.get("reason", order.get("status", "unknown"))
+                log.warning("Order rejected for %s: %s (value=$%.2f)",
+                            signal.symbol, rejection_reason, order_value)
                 log_action(
                     "error", "order_rejected",
                     symbol=signal.symbol,
-                    details=order.get("reason", order.get("status", "unknown")),
+                    details=rejection_reason,
                     data={
                         "order_value": order_value,
                         "action": signal.action,
                         "strategy": signal.strategy,
                         "qty": order.get("qty", 0),
+                        "reason": rejection_reason,
                     },
                 )
+                console.print(f"  [red]REJECTED {signal.symbol}: {rejection_reason}[/red]")
 
         # ---------------------------------------------------------------
         # Phase 5: Post-trade sync (verify fills + pair trades for P&L)
@@ -1007,18 +1022,33 @@ def run_trading_cycle():
         try:
             import json as _json
             _cycle_elapsed = time.monotonic() - _cycle_start_time
+            # attempted = signals that passed all pre-checks and reached execute_order
+            attempted = actionable_count - sell_skip_count - order_size_zero_count - buying_power_skip_count - blocked_count
             funnel_data = {
                 "generated": signal_count,
                 "consolidated": len(consolidated),
                 "actionable": actionable_count,
-                "risk_passed": actionable_count - blocked_count,
+                "sell_skip": sell_skip_count,
+                "order_size_zero": order_size_zero_count,
+                "buying_power_skip": buying_power_skip_count,
+                "risk_blocked": blocked_count,
+                "attempted": max(attempted, 0),
+                "execution_rejected": execution_rejected_count,
+                "execution_failed": execution_failed_count,
                 "executed": executed_count,
+                # Legacy field: approximate (actionable - risk_blocked), kept for dashboard compat
+                "risk_passed": actionable_count - blocked_count,
                 "blocked": blocked_count,
                 "cycle_time_s": round(_cycle_elapsed, 2),
             }
             log_action(
                 "funnel", "cycle_funnel",
-                details=f"Gen:{signal_count} Con:{len(consolidated)} Act:{actionable_count} Exec:{executed_count}",
+                details=(
+                    f"Gen:{signal_count} Act:{actionable_count} "
+                    f"SellSkip:{sell_skip_count} SizeZero:{order_size_zero_count} "
+                    f"BPSkip:{buying_power_skip_count} RiskBlocked:{blocked_count} "
+                    f"Attempted:{max(attempted,0)} Rejected:{execution_rejected_count} Exec:{executed_count}"
+                ),
                 data=funnel_data,
             )
         except Exception as _funnel_err:

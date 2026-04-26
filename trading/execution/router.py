@@ -1101,8 +1101,11 @@ def _paper_submit_order(
             "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
         }
 
-    # Round to exchange step size (even paper should be realistic)
-    qty = _round_qty(aster_sym, qty)
+    # Paper trading: don't enforce exchange minQty — paper tracks fractional quantities.
+    # minQty enforcement on a $15 order for BTC (~0.00016 BTC) would inflate it to
+    # 0.001 BTC ($95+), silently draining margin far beyond what the risk model approved.
+    # Just round to 6 decimal places for readability.
+    qty = round(qty, 6)
     if qty <= 0:
         return {
             "id": str(uuid.uuid4()),
