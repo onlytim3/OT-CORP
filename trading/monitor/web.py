@@ -1358,10 +1358,10 @@ def api_intelligence():
         ).fetchall()
         result["briefings"] = [dict(r) for r in rows]
 
-        # Regime signals
+        # Regime signals — all strategies, skip pure hold/0.0 noise, dedupe by strategy+symbol
         rows = conn.execute(
-            "SELECT * FROM signals WHERE strategy IN ('hmm_regime', 'volatility_regime', 'regime_mean_reversion') "
-            "ORDER BY timestamp DESC LIMIT 5"
+            "SELECT * FROM signals WHERE NOT (signal = 'hold' AND (strength IS NULL OR strength = 0)) "
+            "ORDER BY timestamp DESC LIMIT 50"
         ).fetchall()
         regime_sigs = []
         for r in rows:

@@ -554,9 +554,9 @@ export function Analytics() {
             </CardContent>
           </Card>
 
-          {/* Regime Signals — merged from former Regime tab */}
+          {/* Strategy Signals — all recent non-hold signals across all strategies */}
           <Card>
-            <CardHeader><CardTitle>Regime Signals</CardTitle></CardHeader>
+            <CardHeader><CardTitle>Strategy Signals</CardTitle></CardHeader>
             <CardContent>
               {(() => {
                 const actionable = regimeSignals.filter(
@@ -564,15 +564,15 @@ export function Analytics() {
                 );
                 const seen = new Map<string, typeof regimeSignals[0]>();
                 for (const s of actionable) {
-                  const key = `${s.strategy}:${s.signal}`;
+                  const key = `${s.strategy}:${s.symbol}`;
                   const existing = seen.get(key);
                   if (!existing || (s.strength || 0) > (existing.strength || 0)) {
                     seen.set(key, s);
                   }
                 }
-                const filtered = Array.from(seen.values());
+                const filtered = Array.from(seen.values()).sort((a, b) => (b.strength || 0) - (a.strength || 0));
                 return filtered.length === 0 ? (
-                <p className="text-[#888888] text-center py-8">No actionable regime signals</p>
+                <p className="text-[#888888] text-center py-8">No actionable signals yet — waiting for next strategy cycle</p>
               ) : (
                 <div className="space-y-3 max-h-[50vh] overflow-y-auto">
                   {filtered.map((s) => {
@@ -584,7 +584,7 @@ export function Analytics() {
                         <div className="flex items-center gap-3">
                           <div className={`size-3 rounded-full ${s.signal === 'buy' ? 'bg-[#00d4aa]' : s.signal === 'sell' ? 'bg-[#ff4466]' : 'bg-[#ffa500]'}`} />
                           <div>
-                            <p className="font-medium text-[#e8e8e8]">{s.strategy.replace(/_/g, ' ')}</p>
+                            <p className="font-medium text-[#e8e8e8]">{s.strategy.replace(/_/g, ' ')} <span className="text-[#888888] font-normal">{s.symbol}</span></p>
                             <div className="flex items-center gap-2">
                               <p className="text-xs text-[#888888]">{new Date(s.timestamp).toLocaleString()}</p>
                               {regime && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{regime}</Badge>}
