@@ -1553,10 +1553,11 @@ def run_scalping_cycle():
                 sl_price = None
                 tp_price = None
 
+            sl_str = f"{sl_price:.2f}" if sl_price else "0.00"
+            tp_str = f"{tp_price:.2f}" if tp_price else "0.00"
             console.print(
                 f"  [bold cyan]SCALP {signal.action.upper()} {signal.symbol}[/bold cyan] "
-                f"${notional:.0f} @ {leverage}x | SL=${sl_price:.2f if sl_price else 0:.2f} "
-                f"TP=${tp_price:.2f if tp_price else 0:.2f} | {signal.reason}"
+                f"${notional:.0f} @ {leverage}x | SL=${sl_str} TP=${tp_str} | {signal.reason}"
             )
 
             try:
