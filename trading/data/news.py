@@ -552,7 +552,315 @@ def fetch_finnhub_sentiment(symbols: list[str] | None = None) -> dict[str, float
     return scores
 
 
+def fetch_finnhub_social_sentiment(symbols: list[str] | None = None) -> dict:
+    """Reddit + Twitter mention counts and sentiment for crypto-correlated equities.
 
+    Endpoint: GET /stock/social-sentiment
+    Cache: 10 min — social signal is fast-moving.
+    Returns: {symbol: {reddit_mentions, reddit_sentiment, twitter_mentions, twitter_sentiment}}
+    """
+    import os
+    from datetime import date, timedelta
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+    if symbols is None:
+        symbols = ["COIN", "MSTR", "BTC"]
+
+    from_date = (date.today() - timedelta(days=7)).isoformat()
+    to_date = date.today().isoformat()
+    result = {}
+    for sym in symbols:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/stock/social-sentiment",
+                params={"symbol": sym, "from": from_date, "to": to_date, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            reddit = data.get("reddit", [])
+            twitter = data.get("twitter", [])
+            r_mention = sum(d.get("mention", 0) for d in reddit)
+            r_sent = (sum(d.get("score", 0) for d in reddit) / len(reddit)) if reddit else 0
+            t_mention = sum(d.get("mention", 0) for d in twitter)
+            t_sent = (sum(d.get("score", 0) for d in twitter) / len(twitter)) if twitter else 0
+            result[sym] = {
+                "reddit_mentions": r_mention,
+                "reddit_sentiment": round(r_sent, 3),
+                "twitter_mentions": t_mention,
+                "twitter_sentiment": round(t_sent, 3),
+            }
+        except Exception as e:
+            log.debug("Finnhub social sentiment failed for %s: %s", sym, e)
+    return result
+
+
+def fetch_finnhub_economic_calendar() -> list[dict]:
+    """Economic calendar with consensus vs actual — calculates economic surprise.
+
+    Endpoint: GET /calendar/economic
+    Surprise = (actual - estimate) / |estimate| * 100
+    Positive surprise = economy beating expectations = risk-on.
+    """
+    import os
+    from datetime import date, timedelta
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return []
+    try:
+        from_date = (date.today() - timedelta(days=7)).isoformat()
+        to_date = (date.today() + timedelta(days=7)).isoformat()
+        resp = requests.get(
+            "https://finnhub.io/api/v1/calendar/economic",
+            params={"from": from_date, "to": to_date, "token": api_key},
+            timeout=10, headers=_HEADERS,
+        )
+        resp.raise_for_status()
+        events = resp.json().get("economicCalendar", [])
+        result = []
+        for e in events:
+            if e.get("country", "").upper() != "US":
+                continue
+            actual = e.get("actual")
+            estimate = e.get("estimate")
+            surprise_pct = None
+            if actual is not None and estimate and abs(estimate) > 0:
+                surprise_pct = round((actual - estimate) / abs(estimate) * 100, 2)
+            result.append({
+                "event": e.get("event", ""),
+                "date": e.get("time", "")[:10],
+                "actual": actual,
+                "estimate": estimate,
+                "surprise_pct": surprise_pct,
+                "impact": e.get("impact", "low"),
+            })
+        return result
+    except Exception as e:
+        log.debug("Finnhub economic calendar failed: %s", e)
+        return []
+
+
+def fetch_finnhub_earnings_calendar(symbols: list[str] | None = None) -> list[dict]:
+    """Upcoming and recent earnings with EPS surprise for crypto-correlated equities.
+
+    Endpoint: GET /calendar/earnings
+    COIN earnings = exchange volume proxy; MSTR = BTC exposure proxy.
+    """
+    import os
+    from datetime import date, timedelta
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return []
+    if symbols is None:
+        symbols = ["COIN", "MSTR", "NVDA"]
+
+    from_date = (date.today() - timedelta(days=30)).isoformat()
+    to_date = (date.today() + timedelta(days=30)).isoformat()
+    result = []
+    for sym in symbols:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/calendar/earnings",
+                params={"symbol": sym, "from": from_date, "to": to_date, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            earnings = resp.json().get("earningsCalendar", [])
+            for e in earnings:
+                eps_est = e.get("epsEstimate")
+                eps_act = e.get("epsActual")
+                surprise_pct = None
+                if eps_est and eps_act and abs(eps_est) > 0:
+                    surprise_pct = round((eps_act - eps_est) / abs(eps_est) * 100, 2)
+                result.append({
+                    "symbol": sym,
+                    "date": e.get("date", ""),
+                    "eps_estimate": eps_est,
+                    "eps_actual": eps_act,
+                    "surprise_pct": surprise_pct,
+                    "quarter": e.get("quarter"),
+                    "year": e.get("year"),
+                })
+        except Exception as e:
+            log.debug("Finnhub earnings calendar failed for %s: %s", sym, e)
+    return result
+
+
+def fetch_finnhub_recommendations(symbols: list[str] | None = None) -> dict:
+    """Analyst buy/sell/hold consensus for crypto-correlated equities.
+
+    Endpoint: GET /stock/recommendation
+    net_score = (strongBuy*2 + buy - sell - strongSell*2) / total → -1..+1
+    Analyst downgrades of COIN often precede BTC pullbacks.
+    """
+    import os
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+    if symbols is None:
+        symbols = ["COIN", "MSTR"]
+
+    result = {}
+    for sym in symbols:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/stock/recommendation",
+                params={"symbol": sym, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            recs = resp.json()
+            if not recs:
+                continue
+            latest = recs[0]  # Most recent month
+            sb = latest.get("strongBuy", 0)
+            b = latest.get("buy", 0)
+            h = latest.get("hold", 0)
+            s = latest.get("sell", 0)
+            ss = latest.get("strongSell", 0)
+            total = sb + b + h + s + ss
+            net_score = round((sb * 2 + b - s - ss * 2) / total, 3) if total > 0 else 0
+            result[sym] = {
+                "strong_buy": sb, "buy": b, "hold": h, "sell": s, "strong_sell": ss,
+                "total": total, "net_score": net_score, "period": latest.get("period", ""),
+            }
+        except Exception as e:
+            log.debug("Finnhub recommendations failed for %s: %s", sym, e)
+    return result
+
+
+def fetch_finnhub_insider_transactions(symbols: list[str] | None = None) -> dict:
+    """Insider buy/sell transactions for crypto-correlated equities (last 30 days).
+
+    Endpoint: GET /stock/insider-transactions
+    P = purchase (buy), S = sale (sell).
+    Heavy insider selling at COIN = leading indicator of trouble.
+    """
+    import os
+    from datetime import date, timedelta
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+    if symbols is None:
+        symbols = ["COIN", "MSTR"]
+
+    from_date = (date.today() - timedelta(days=30)).isoformat()
+    result = {}
+    for sym in symbols:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/stock/insider-transactions",
+                params={"symbol": sym, "from": from_date, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            txns = resp.json().get("data", [])
+            result[sym] = [
+                {
+                    "name": t.get("name", ""),
+                    "shares": t.get("share", 0),
+                    "value": t.get("value", 0),
+                    "date": t.get("transactionDate", ""),
+                    "action": "buy" if t.get("transactionCode", "") == "P" else "sell",
+                }
+                for t in txns
+                if t.get("transactionCode") in ("P", "S")
+            ]
+        except Exception as e:
+            log.debug("Finnhub insider transactions failed for %s: %s", sym, e)
+    return result
+
+
+def fetch_finnhub_economic_indicators() -> dict:
+    """Same-day macro economic indicators from Finnhub — faster than FRED.
+
+    Endpoint: GET /economic?code=<series_code>
+    Complements FRED (which lags by days on release date).
+    """
+    import os
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+
+    # Finnhub economic series codes
+    series = {
+        "united states cpi": "MA-USA-656880",
+        "united states unemployment": "RBUSR",
+        "united states interest rate": "IR",
+        "united states gdp growth": "GDPC1",
+    }
+    result = {}
+    for name, code in series.items():
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/economic",
+                params={"code": code, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data and len(data) >= 1:
+                latest = data[-1]
+                prev = data[-2] if len(data) >= 2 else latest
+                val = latest.get("v") or latest.get("value")
+                prev_val = prev.get("v") or prev.get("value")
+                if val is not None:
+                    result[name] = {
+                        "value": round(float(val), 4),
+                        "previous": round(float(prev_val), 4) if prev_val is not None else None,
+                        "change": round(float(val) - float(prev_val), 4) if prev_val is not None else None,
+                        "date": latest.get("period", ""),
+                    }
+        except Exception as e:
+            log.debug("Finnhub economic indicator %s failed: %s", code, e)
+    return result
+
+
+def fetch_finnhub_institutional_ownership(symbols: list[str] | None = None) -> dict:
+    """Institutional ownership changes for BTC ETFs — tracks smart money flows.
+
+    Endpoint: GET /institutional/ownership
+    Increasing institutional BTC ETF holdings = sustained demand signal.
+    Symbols: IBIT (BlackRock), FBTC (Fidelity), ARKB (ARK).
+    """
+    import os
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+    if symbols is None:
+        symbols = ["IBIT", "FBTC", "ARKB"]
+
+    result = {}
+    for sym in symbols:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/institutional/ownership",
+                params={"symbol": sym, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            ownership = data.get("ownership", [])
+            if not ownership:
+                continue
+            latest = ownership[0]
+            prev = ownership[1] if len(ownership) > 1 else None
+            cur_shares = latest.get("share", 0)
+            prev_shares = prev.get("share", 0) if prev else cur_shares
+            change_pct = round((cur_shares - prev_shares) / prev_shares * 100, 2) if prev_shares else 0
+            result[sym] = {
+                "total_shares": cur_shares,
+                "num_holders": latest.get("investor", 0),
+                "change_pct": change_pct,
+                "quarter": latest.get("reportDate", ""),
+            }
+        except Exception as e:
+            log.debug("Finnhub institutional ownership failed for %s: %s", sym, e)
+    return result
+
+
+def fetch_all_headlines(max_per_source: int = 10) -> list[dict]:
     """Fetch headlines from ALL sources — RSS, GDELT, crypto API, Finnhub.
 
     Returns a combined, deduplicated list of headlines across all categories.
@@ -727,5 +1035,47 @@ def fetch_all_category_data() -> dict:
                     log.debug("FRED %s failed: %s", series_id, e)
     except Exception as e:
         log.debug("FRED macro fetch failed: %s", e)
+
+    # Finnhub social sentiment (Reddit + Twitter) for COIN, MSTR, BTC
+    try:
+        data["finnhub_social_sentiment"] = fetch_finnhub_social_sentiment()
+    except Exception as e:
+        log.debug("Finnhub social sentiment failed: %s", e)
+
+    # Finnhub economic calendar with surprise calculation
+    try:
+        data["finnhub_economic_calendar"] = fetch_finnhub_economic_calendar()
+    except Exception as e:
+        log.debug("Finnhub economic calendar failed: %s", e)
+
+    # Finnhub earnings calendar for COIN, MSTR, NVDA
+    try:
+        data["finnhub_earnings_calendar"] = fetch_finnhub_earnings_calendar()
+    except Exception as e:
+        log.debug("Finnhub earnings calendar failed: %s", e)
+
+    # Finnhub analyst recommendations for COIN, MSTR
+    try:
+        data["finnhub_recommendations"] = fetch_finnhub_recommendations()
+    except Exception as e:
+        log.debug("Finnhub recommendations failed: %s", e)
+
+    # Finnhub insider transactions for COIN, MSTR (last 30 days)
+    try:
+        data["finnhub_insider_transactions"] = fetch_finnhub_insider_transactions()
+    except Exception as e:
+        log.debug("Finnhub insider transactions failed: %s", e)
+
+    # Finnhub economic indicators (same-day data, faster than FRED)
+    try:
+        data["finnhub_economic_indicators"] = fetch_finnhub_economic_indicators()
+    except Exception as e:
+        log.debug("Finnhub economic indicators failed: %s", e)
+
+    # Finnhub institutional ownership for BTC ETFs (IBIT, FBTC, ARKB)
+    try:
+        data["finnhub_institutional_ownership"] = fetch_finnhub_institutional_ownership()
+    except Exception as e:
+        log.debug("Finnhub institutional ownership failed: %s", e)
 
     return data

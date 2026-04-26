@@ -185,12 +185,35 @@ def _score_crypto(data: dict) -> dict:
     except Exception:
         pass
 
-    # Headlines — 10% weight
+    # Headlines — 8% weight
     headlines = data.get("headlines", {}).get("crypto", [])
     hl_score, top_hl = _score_headlines(headlines, _CRYPTO_BULLISH, _CRYPTO_BEARISH)
     if headlines:
-        score += hl_score * 0.10
-        confidence += 0.10
+        score += hl_score * 0.08
+        confidence += 0.08
+
+    # Finnhub social sentiment (Reddit + Twitter for COIN, MSTR, BTC) — 7% weight
+    try:
+        social = data.get("finnhub_social_sentiment", {})
+        if social:
+            sentiments = []
+            for sym_data in social.values():
+                r = sym_data.get("reddit_sentiment", 0)
+                t = sym_data.get("twitter_sentiment", 0)
+                if r or t:
+                    sentiments.append((r + t) / 2 if (r and t) else (r or t))
+            if sentiments:
+                avg_social = sum(sentiments) / len(sentiments)
+                score += avg_social * 0.07
+                confidence += 0.07
+                # Mention volume as a separate signal: spike = volatility incoming
+                total_mentions = sum(
+                    d.get("reddit_mentions", 0) + d.get("twitter_mentions", 0)
+                    for d in social.values()
+                )
+                components.append(f"Social sent={avg_social:+.2f} ({total_mentions:,} mentions)")
+    except Exception:
+        pass
 
     score = round(max(min(score, 1.0), -1.0), 3)
     confidence = round(min(confidence, 1.0), 2)
@@ -388,6 +411,89 @@ def _score_macro(data: dict) -> dict:
         confidence += 0.10
         sym_parts = [f"{s}:{v:+.2f}" for s, v in fh_sentiment.items()]
         components.append(f"Equity sentiment: {', '.join(sym_parts)}")
+
+    # Finnhub economic calendar surprises — 5% weight
+    # Positive surprise (economy beating estimates) = risk-on
+    try:
+        fh_econ_cal = data.get("finnhub_economic_calendar", [])
+        surprises = [e["surprise_pct"] for e in fh_econ_cal if e.get("surprise_pct") is not None]
+        if surprises:
+            avg_surprise = sum(surprises) / len(surprises)
+            surprise_score = max(min(avg_surprise / 10.0, 1.0), -1.0)
+            score += surprise_score * 0.05
+            confidence += 0.05
+            direction = "beat" if avg_surprise > 0 else "miss"
+            components.append(f"Econ surprise={avg_surprise:+.1f}% avg ({direction}, {len(surprises)} events)")
+    except Exception:
+        pass
+
+    # Finnhub earnings surprises for COIN/MSTR — 5% weight
+    try:
+        earnings = data.get("finnhub_earnings_calendar", [])
+        reported = [e for e in earnings if e.get("eps_actual") is not None and e.get("surprise_pct") is not None]
+        if reported:
+            avg_eps_surprise = sum(e["surprise_pct"] for e in reported) / len(reported)
+            eps_score = max(min(avg_eps_surprise / 20.0, 1.0), -1.0)
+            score += eps_score * 0.05
+            confidence += 0.05
+            sym_parts = [f"{e['symbol']} {e['surprise_pct']:+.0f}%" for e in reported]
+            components.append(f"EPS surprise: {', '.join(sym_parts)}")
+        # Upcoming earnings = volatility warning
+        upcoming = [e for e in earnings if e.get("eps_actual") is None]
+        if upcoming:
+            names = list({e["symbol"] for e in upcoming})
+            components.append(f"Earnings due: {', '.join(names)} — expect volatility")
+    except Exception:
+        pass
+
+    # Finnhub insider transactions — 4% weight
+    # Net insider buying at COIN/MSTR = bullish signal; selling = bearish
+    try:
+        insider = data.get("finnhub_insider_transactions", {})
+        net_buys = 0
+        total_txns = 0
+        for sym_txns in insider.values():
+            buys = sum(1 for t in sym_txns if t.get("action") == "buy")
+            sells = sum(1 for t in sym_txns if t.get("action") == "sell")
+            net_buys += buys - sells
+            total_txns += buys + sells
+        if total_txns > 0:
+            insider_score = max(min(net_buys / max(total_txns, 5), 1.0), -1.0)
+            score += insider_score * 0.04
+            confidence += 0.04
+            direction = "buying" if net_buys > 0 else "selling"
+            components.append(f"Insider net={net_buys:+d} ({direction}, {total_txns} txns)")
+    except Exception:
+        pass
+
+    # Finnhub analyst recommendations — 4% weight
+    # Strong analyst consensus on COIN/MSTR carries forward sentiment
+    try:
+        recs = data.get("finnhub_recommendations", {})
+        if recs:
+            avg_net = sum(r.get("net_score", 0) for r in recs.values()) / len(recs)
+            score += avg_net * 0.04
+            confidence += 0.04
+            sym_parts = [f"{s}={r.get('net_score', 0):+.2f}" for s, r in recs.items()]
+            components.append(f"Analyst consensus: {', '.join(sym_parts)}")
+    except Exception:
+        pass
+
+    # Finnhub institutional BTC ETF ownership — 2% weight (quarterly, slow signal)
+    try:
+        inst = data.get("finnhub_institutional_ownership", {})
+        if inst:
+            changes = [v.get("change_pct", 0) for v in inst.values() if v.get("change_pct") is not None]
+            if changes:
+                avg_change = sum(changes) / len(changes)
+                inst_score = max(min(avg_change / 10.0, 1.0), -1.0)
+                score += inst_score * 0.02
+                confidence += 0.02
+                direction = "increasing" if avg_change > 0 else "decreasing"
+                sym_parts = [f"{s}: {v.get('change_pct', 0):+.1f}%" for s, v in inst.items()]
+                components.append(f"BTC ETF holdings {direction}: {', '.join(sym_parts)}")
+    except Exception:
+        pass
 
     # Event risk from calendar
     calendar = data.get("calendar", [])
