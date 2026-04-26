@@ -472,7 +472,87 @@ def fetch_finnhub_news(category: str = "general") -> list[dict]:
         return []
 
 
-def fetch_all_headlines(max_per_source: int = 10) -> list[dict]:
+def fetch_finnhub_company_news(symbols: list[str] | None = None) -> list[dict]:
+    """Fetch company-specific news from Finnhub for crypto-correlated equities.
+
+    Targets COIN (Coinbase), MSTR (MicroStrategy), IBIT (BlackRock BTC ETF) —
+    these move with BTC and carry information about institutional sentiment
+    before it shows up in crypto prices.
+    """
+    import os
+    from datetime import date, timedelta
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return []
+
+    if symbols is None:
+        symbols = ["COIN", "MSTR", "IBIT"]
+
+    from_date = (date.today() - timedelta(days=3)).isoformat()
+    to_date = date.today().isoformat()
+
+    headlines = []
+    for sym in symbols:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/company-news",
+                params={"symbol": sym, "from": from_date, "to": to_date, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            articles = resp.json()
+            for a in articles[:5]:
+                headlines.append({
+                    "title": a.get("headline", "").strip(),
+                    "published": datetime.fromtimestamp(a.get("datetime", 0), tz=timezone.utc).isoformat() if a.get("datetime") else "",
+                    "source": a.get("source", "finnhub"),
+                    "category": "crypto",
+                    "url": a.get("url", ""),
+                    "summary": a.get("summary", "")[:200],
+                    "related_symbol": sym,
+                })
+        except Exception as e:
+            log.debug("Finnhub company news failed for %s: %s", sym, e)
+
+    return headlines
+
+
+def fetch_finnhub_sentiment(symbols: list[str] | None = None) -> dict[str, float]:
+    """Fetch Finnhub's NLP sentiment scores for crypto-correlated equities.
+
+    Returns dict of symbol → sentiment score (-1 bearish to +1 bullish).
+    Uses the /news-sentiment endpoint which aggregates recent articles.
+    """
+    import os
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+
+    if symbols is None:
+        symbols = ["COIN", "MSTR", "IBIT"]
+
+    scores = {}
+    for sym in symbols:
+        try:
+            resp = requests.get(
+                "https://finnhub.io/api/v1/news-sentiment",
+                params={"symbol": sym, "token": api_key},
+                timeout=10, headers=_HEADERS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # buzz.weeklyAverage gives article volume, sentiment.bullishPercent/bearishPercent are 0-1
+            bull = data.get("sentiment", {}).get("bullishPercent", 0)
+            bear = data.get("sentiment", {}).get("bearishPercent", 0)
+            if bull or bear:
+                scores[sym] = round(bull - bear, 3)
+        except Exception as e:
+            log.debug("Finnhub sentiment failed for %s: %s", sym, e)
+
+    return scores
+
+
+
     """Fetch headlines from ALL sources — RSS, GDELT, crypto API, Finnhub.
 
     Returns a combined, deduplicated list of headlines across all categories.
@@ -506,6 +586,12 @@ def fetch_all_headlines(max_per_source: int = 10) -> list[dict]:
             all_headlines.extend(fetch_finnhub_news(cat))
         except Exception:
             pass
+
+    # Finnhub company news — COIN, MSTR, IBIT (crypto-correlated equities)
+    try:
+        all_headlines.extend(fetch_finnhub_company_news())
+    except Exception:
+        pass
 
     # Deduplicate by title (case-insensitive)
     seen = set()
@@ -599,5 +685,47 @@ def fetch_all_category_data() -> dict:
         data["calendar"] = fetch_economic_calendar()
     except Exception as e:
         log.debug("Calendar failed: %s", e)
+
+    # Finnhub company news for crypto-correlated equities (COIN, MSTR, IBIT)
+    try:
+        company_news = fetch_finnhub_company_news()
+        if company_news:
+            data["headlines"]["crypto"] = data["headlines"].get("crypto", []) + company_news
+    except Exception as e:
+        log.debug("Finnhub company news failed: %s", e)
+
+    # Finnhub NLP sentiment scores for crypto-correlated equities
+    try:
+        data["finnhub_sentiment"] = fetch_finnhub_sentiment()
+    except Exception as e:
+        log.debug("Finnhub sentiment failed: %s", e)
+
+    # FRED macro series — CPI, Fed Funds rate, yield curve, unemployment
+    # These supersede the BLS/NY Fed free endpoints with cleaner data
+    try:
+        from trading.data.commodities import get_fred_series
+        from trading.config import FRED_API_KEY
+        if FRED_API_KEY:
+            fred_series = {
+                "CPIAUCSL": "cpi_fred",        # CPI all items, seasonally adjusted
+                "FEDFUNDS": "fedfunds_fred",    # Effective Fed Funds rate
+                "T10Y2Y": "yield_spread_fred",  # 10Y-2Y spread (recession signal)
+                "UNRATE": "unrate_fred",        # Unemployment rate
+            }
+            for series_id, key in fred_series.items():
+                try:
+                    df = get_fred_series(series_id, limit=3)
+                    if df is not None and not df.empty:
+                        latest = float(df["value"].iloc[-1])
+                        prev = float(df["value"].iloc[-2]) if len(df) > 1 else latest
+                        data["macro"][key] = {
+                            "value": latest,
+                            "change": round(latest - prev, 4),
+                            "series": series_id,
+                        }
+                except Exception as e:
+                    log.debug("FRED %s failed: %s", series_id, e)
+    except Exception as e:
+        log.debug("FRED macro fetch failed: %s", e)
 
     return data

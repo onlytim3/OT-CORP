@@ -315,44 +315,79 @@ def _score_currency(data: dict) -> dict:
 def _score_macro(data: dict) -> dict:
     """Score the macro/cross-asset regime.
 
-    Inputs: macro headlines, FRED data, economic calendar.
+    Inputs: macro headlines, FRED data (CPI, FEDFUNDS, T10Y2Y, UNRATE),
+            Finnhub equity sentiment, economic calendar.
 
-    Weights (sum to 1.0 when all sources present):
-      Headlines=0.40, Unemployment=0.35, Yield curve=0.25
+    Weights when all sources present:
+      Headlines=0.25, Unemployment=0.20, Yield curve=0.20,
+      CPI trend=0.15, Fed Funds=0.10, Finnhub equity sentiment=0.10
     """
     score = 0.0
     components = []
     confidence = 0.0
 
-    # Headlines — 40% weight
+    # Headlines — 25% weight
     headlines = data.get("headlines", {}).get("macro", [])
     hl_score, top_hl = _score_headlines(headlines, _MACRO_RISK_ON, _MACRO_RISK_OFF)
     if headlines:
-        score += hl_score * 0.40
-        confidence += 0.40
+        score += hl_score * 0.25
+        confidence += 0.25
 
-    # Unemployment trend — 35% weight
     macro = data.get("macro", {})
-    unemp = macro.get("unemployment")
+
+    # Unemployment — prefer FRED UNRATE over BLS, 20% weight
+    unemp = macro.get("unrate_fred") or macro.get("unemployment")
     if unemp and unemp.get("change") is not None:
         unemp_score = -max(min(unemp["change"] / 0.5, 1.0), -1.0)
-        score += unemp_score * 0.35
-        confidence += 0.35
-        components.append(f"Unemployment={unemp['value']:.1f}% (chg {unemp['change']:+.1f})")
+        score += unemp_score * 0.20
+        confidence += 0.20
+        components.append(f"Unemployment={unemp['value']:.1f}% (chg {unemp['change']:+.2f})")
 
-    # Yield curve as macro signal — 25% weight
+    # Yield curve — prefer FRED T10Y2Y over Treasury XML, 20% weight
+    yc_fred = macro.get("yield_spread_fred")
     yields = macro.get("yield_curve")
-    if yields:
-        spread_val = yields["spread"]
-        yc_score = max(min(spread_val / 1.0, 1.0), -1.0) * 0.25
+    if yc_fred is not None:
+        spread_val = yc_fred["value"]
+        yc_score = max(min(spread_val / 1.0, 1.0), -1.0) * 0.20
         score += yc_score
-        if spread_val < -0.2:
-            components.append(f"Yield curve deeply inverted ({spread_val:+.3f}) — recession risk")
-        elif spread_val > 0.5:
-            components.append(f"Yield curve normal ({spread_val:+.3f}) — expansion")
-        else:
-            components.append(f"Yield curve ({spread_val:+.3f})")
-        confidence += 0.25
+        confidence += 0.20
+        label = "inverted — recession risk" if spread_val < -0.2 else ("normal" if spread_val > 0.5 else "flat")
+        components.append(f"10Y-2Y spread={spread_val:+.3f} ({label}) [FRED]")
+    elif yields:
+        spread_val = yields["spread"]
+        yc_score = max(min(spread_val / 1.0, 1.0), -1.0) * 0.20
+        score += yc_score
+        confidence += 0.20
+        components.append(f"Yield curve={spread_val:+.3f}")
+
+    # CPI trend — rising inflation = hawkish Fed = risk-off for crypto, 15% weight
+    cpi = macro.get("cpi_fred")
+    if cpi and cpi.get("change") is not None:
+        # Monthly CPI change: +0.4% = hot (risk-off), -0.1% = cooling (risk-on)
+        cpi_score = -max(min(cpi["change"] / 0.5, 1.0), -1.0)
+        score += cpi_score * 0.15
+        confidence += 0.15
+        trend = "hot" if cpi["change"] > 0.3 else ("cooling" if cpi["change"] < 0 else "moderate")
+        components.append(f"CPI={cpi['value']:.1f} (MoM {cpi['change']:+.3f}, {trend}) [FRED]")
+
+    # Fed Funds rate level — high rate = risk-off headwind, 10% weight
+    fedfunds = macro.get("fedfunds_fred") or macro.get("fed_funds_rate")
+    if fedfunds:
+        rate = fedfunds.get("value", 0)
+        # >4% = restrictive (risk-off), <2% = accommodative (risk-on)
+        ffr_score = -max(min((rate - 2.5) / 2.5, 1.0), -1.0)
+        score += ffr_score * 0.10
+        confidence += 0.10
+        components.append(f"Fed Funds={rate:.2f}% [FRED]")
+
+    # Finnhub equity sentiment for COIN, MSTR, IBIT — 10% weight
+    fh_sentiment = data.get("finnhub_sentiment", {})
+    if fh_sentiment:
+        avg_sentiment = sum(fh_sentiment.values()) / len(fh_sentiment)
+        score += avg_sentiment * 0.10
+        confidence += 0.10
+        sym_parts = [f"{s}:{v:+.2f}" for s, v in fh_sentiment.items()]
+        components.append(f"Equity sentiment: {', '.join(sym_parts)}")
 
     # Event risk from calendar
     calendar = data.get("calendar", [])
