@@ -356,6 +356,19 @@ def init_db():
                 strength_weight REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS income_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                fetched_at  TEXT NOT NULL,
+                symbol      TEXT NOT NULL,
+                income_type TEXT NOT NULL,
+                income      REAL NOT NULL,
+                trade_id    TEXT,
+                tran_id     TEXT UNIQUE
+            );
+            CREATE INDEX IF NOT EXISTS idx_income_symbol  ON income_history(symbol);
+            CREATE INDEX IF NOT EXISTS idx_income_type    ON income_history(income_type);
+            CREATE INDEX IF NOT EXISTS idx_income_fetched ON income_history(fetched_at);
+
             CREATE TABLE IF NOT EXISTS scheduled_commands (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 command TEXT NOT NULL,
@@ -431,6 +444,7 @@ def init_db():
             ("leverage", "INTEGER"),
             ("entry_reasoning", "TEXT"),
             ("regime", "TEXT"),
+            ("commission", "REAL"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {coltype}")
@@ -778,6 +792,64 @@ def update_journal_outcome(trade_id, outcome, pnl, lesson):
             "UPDATE journal SET outcome=?, pnl=?, lesson=? WHERE trade_id=?",
             (outcome, pnl, lesson, trade_id),
         )
+
+
+@_retry_on_locked
+def insert_income_batch(rows: list) -> int:
+    """Upsert income records from aster_get_income(); returns count of new rows inserted."""
+    inserted = 0
+    now = _now()
+    with get_db() as conn:
+        for r in rows:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO income_history "
+                    "(fetched_at, symbol, income_type, income, trade_id, tran_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (now, r.get("symbol", ""), r.get("incomeType", ""),
+                     float(r.get("income", 0)), str(r.get("tradeId", "")),
+                     str(r.get("tranId", ""))),
+                )
+                inserted += conn.execute("SELECT changes()").fetchone()[0]
+            except Exception:
+                pass
+    return inserted
+
+
+@_retry_on_locked
+def insert_fill_quality(symbol: str, side: str, mid_price: float,
+                         fill_price: float, slippage_bps: float, notional: float):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO fill_quality "
+            "(timestamp, symbol, side, mid_price, fill_price, slippage_bps, notional) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (_now(), symbol, side, mid_price, fill_price, slippage_bps, notional),
+        )
+
+
+def get_income_summary(days: int = 30) -> dict:
+    """Return totals per income_type over the last N days."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with get_read_db() as conn:
+        rows = conn.execute(
+            "SELECT income_type, SUM(income) as total, COUNT(*) as count "
+            "FROM income_history WHERE fetched_at >= ? GROUP BY income_type",
+            (since,),
+        ).fetchall()
+    return {r["income_type"]: {"total": r["total"], "count": r["count"]} for r in rows}
+
+
+def get_stale_pending_trades(max_age_minutes: int = 15) -> list:
+    """Return trades stuck in pending/new/accepted status older than max_age_minutes."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
+    with get_read_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE status IN ('pending','new','accepted') "
+            "AND timestamp < ? ORDER BY timestamp ASC",
+            (cutoff,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_journal(limit=20):

@@ -655,6 +655,36 @@ def api_actions():
     return jsonify(actions[offset:])
 
 
+@app.route("/api/income")
+@_require_pin
+def api_income():
+    from trading.db.store import get_income_summary
+    summary = get_income_summary(days=30)
+    recent = []
+    try:
+        from trading.execution.aster_client import aster_get_income
+        recent = aster_get_income(limit=20) or []
+    except Exception as e:
+        log.debug("aster_get_income failed: %s", e)
+    return jsonify({"summary": summary, "recent": recent, "days": 30})
+
+
+@app.route("/api/pending-orders")
+@_require_pin
+def api_pending_orders():
+    from trading.db.store import get_stale_pending_trades
+    try:
+        from trading.execution.aster_client import aster_get_open_orders
+        live = aster_get_open_orders() or []
+    except Exception as e:
+        return jsonify({"error": str(e), "orders": [], "stale_count": 0})
+    stale = get_stale_pending_trades(max_age_minutes=15)
+    stale_ids = {str(t.get("alpaca_order_id", "")) for t in stale}
+    for o in live:
+        o["stale"] = str(o.get("orderId", "")) in stale_ids
+    return jsonify({"orders": live, "stale_count": len(stale)})
+
+
 @app.route("/api/trades")
 def api_trades():
     trades = get_trades(limit=50)

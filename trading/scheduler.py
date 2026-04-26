@@ -298,6 +298,38 @@ def run_trading_cycle():
             console.print(f"[yellow]Sync warning: {e}[/yellow]")
 
         # ---------------------------------------------------------------
+        # Phase 1.5a: Sync exchange income (realized P&L, funding fees, commissions)
+        # ---------------------------------------------------------------
+        try:
+            from trading.execution.aster_client import aster_get_income
+            from trading.db.store import insert_income_batch
+            for _itype in ("REALIZED_PNL", "FUNDING_FEE", "COMMISSION"):
+                _rows = aster_get_income(income_type=_itype, limit=100)
+                if _rows:
+                    _n = insert_income_batch(_rows)
+                    if _n:
+                        log.info("Income sync: %d new %s records", _n, _itype)
+        except Exception as _ie:
+            log.debug("Income sync skipped: %s", _ie)
+
+        # Phase 1.5b: Stale-order cleanup
+        try:
+            from trading.db.store import get_stale_pending_trades, update_trade_status
+            from trading.execution.aster_client import aster_get_open_orders
+            _stale = get_stale_pending_trades(max_age_minutes=15)
+            if _stale:
+                _open = {str(o["orderId"]): o for o in (aster_get_open_orders() or [])}
+                for _t in _stale:
+                    _oid = str(_t.get("alpaca_order_id", ""))
+                    if _oid and _oid not in _open:
+                        update_trade_status(_t["id"], "cancelled")
+                        log.info("Stale order %s gone from exchange — marked cancelled", _oid)
+                    elif _oid and _oid in _open:
+                        log.warning("Order %s still pending on exchange after 15min", _oid)
+        except Exception as _soe:
+            log.debug("Stale-order cleanup skipped: %s", _soe)
+
+        # ---------------------------------------------------------------
         # Phase 1.5: Market Intelligence Briefing
         # ---------------------------------------------------------------
         briefing = None
