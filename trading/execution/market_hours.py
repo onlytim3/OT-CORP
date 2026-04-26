@@ -179,23 +179,27 @@ def is_market_open(now: datetime | None = None) -> bool:
     return NYSE_OPEN <= current_time < NYSE_CLOSE
 
 
-def is_crypto_symbol(symbol: str) -> bool:
-    """Return True if *symbol* looks like a crypto pair (contains ``/``).
+_CRYPTO_SUFFIXES = ("USDT", "USDC", "BUSD", "BTC", "ETH", "USD")
 
-    Examples: ``"BTC/USD"``, ``"ETH/USDT"``.
+
+def is_crypto_symbol(symbol: str) -> bool:
+    """Return True if *symbol* is a crypto pair.
+
+    Recognises both slash format (``"BTC/USD"``) and AsterDex concatenated
+    format (``"BTCUSDT"``, ``"BNBUSDT"``, ``"SOLUSDT"``).
     """
-    return "/" in symbol
+    if "/" in symbol:
+        return True
+    upper = symbol.upper()
+    return any(upper.endswith(s) for s in _CRYPTO_SUFFIXES) and len(upper) > len(max(_CRYPTO_SUFFIXES, key=len))
 
 
 def is_etf_symbol(symbol: str) -> bool:
-    """Return True if *symbol* is a plain ticker with no slash.
-
-    Plain tickers are assumed to be equities or ETFs that trade on NYSE/
-    NASDAQ and are therefore subject to market-hours constraints.
+    """Return True if *symbol* is a plain equity/ETF ticker (not crypto).
 
     Examples: ``"UGL"``, ``"AGQ"``, ``"SPY"``.
     """
-    return "/" not in symbol
+    return not is_crypto_symbol(symbol)
 
 
 def can_trade_now(symbol: str, now: datetime | None = None) -> tuple[bool, str]:
