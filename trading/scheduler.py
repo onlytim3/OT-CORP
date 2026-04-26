@@ -1409,7 +1409,7 @@ def _check_scale_in_winners(positions, portfolio_value):
 def _check_scalp_exits(scalp_positions: list) -> list:
     """Check open scalp positions for SL or TP hits. Returns list of symbols closed."""
     from trading.config import SCALP_RISK
-    from trading.db.store import log_action, insert_trade
+    from trading.db.store import log_action, insert_trade, close_matching_entry_trades
 
     closed = []
     for pos in scalp_positions:
@@ -1467,12 +1467,13 @@ def _check_scalp_exits(scalp_positions: list) -> list:
                         symbol=symbol, side=close_side, qty=qty,
                         price=exit_price, total=qty * exit_price,
                         strategy="intraday_scalp",
-                        data={
-                            "action": action_type, "pnl": round(pnl, 4),
-                            "pnl_pct": round(gain_pct * 100, 2),
-                            "leverage": leverage, "avg_cost": avg_cost,
-                        },
+                        status=order.get("status", "filled"),
+                        leverage=leverage,
                     )
+                    try:
+                        close_matching_entry_trades(symbol, exit_price, qty, exit_side=close_side)
+                    except Exception as _cmt_err:
+                        log.warning("close_matching_entry_trades failed for scalp %s: %s", symbol, _cmt_err)
                     log_action("scalp_cycle", action_type, symbol=symbol, result="closed", details=reason,
                                data={"pnl": round(pnl, 4), "gain_pct": round(gain_pct * 100, 2)})
             except Exception as e:
@@ -1610,6 +1611,22 @@ def run_scalping_cycle():
                 status = order.get("status", "unknown")
                 if status in ("filled", "accepted", "new", "pending_new"):
                     executed += 1
+                    fill_price = float(order.get("filled_avg_price") or price or 0)
+                    fill_qty = float(order.get("filled_qty") or order.get("qty") or 0)
+                    if fill_qty <= 0 and fill_price > 0:
+                        fill_qty = notional / fill_price
+                    insert_trade(
+                        symbol=signal.symbol,
+                        side=signal.action,
+                        qty=fill_qty,
+                        price=fill_price,
+                        total=fill_qty * fill_price if fill_qty and fill_price else notional,
+                        strategy="intraday_scalp",
+                        status=status,
+                        stop_loss_price=sl_price,
+                        take_profit_price=tp_price,
+                        leverage=leverage,
+                    )
                     log_action(
                         "scalp_cycle", "scalp_trade",
                         symbol=signal.symbol, result="executed",

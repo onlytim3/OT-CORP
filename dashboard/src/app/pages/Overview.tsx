@@ -22,6 +22,14 @@ function formatQty(qty: number): string {
   return Number(qty.toPrecision(6)).toString();
 }
 
+function fmtPrice(v: number): string {
+  const abs = Math.abs(v);
+  if (abs >= 100) return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (abs >= 1) return v.toFixed(2);
+  if (abs >= 0.01) return v.toFixed(4);
+  return v.toFixed(6);
+}
+
 /** Convert raw system details into human-readable text */
 function humanizeDetails(action: string, details: string): string {
   if (!details) return '';
@@ -557,8 +565,8 @@ export function Overview() {
                     ['P&L', `${(selectedPosition.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(selectedPosition.unrealized_pnl || 0).toFixed(2)}`],
                     ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
                     ['Leverage', match?.leverage ? `${match.leverage}x` : selectedPosition.leverage ? `${selectedPosition.leverage}x` : '1x'],
-                    ['Take Profit', (match?.take_profit_price || selectedPosition.take_profit_price) ? `$${(match?.take_profit_price ?? selectedPosition.take_profit_price ?? 0).toFixed(2)}` : 'None'],
-                    ['Stop Loss', (match?.stop_loss_price || selectedPosition.stop_loss_price) ? `$${(match?.stop_loss_price ?? selectedPosition.stop_loss_price ?? 0).toFixed(2)}` : 'None'],
+                    ['Take Profit', (match?.take_profit_price || selectedPosition.take_profit_price) ? `$${fmtPrice(match?.take_profit_price ?? selectedPosition.take_profit_price ?? 0)}` : 'None'],
+                    ['Stop Loss', (match?.stop_loss_price || selectedPosition.stop_loss_price) ? `$${fmtPrice(match?.stop_loss_price ?? selectedPosition.stop_loss_price ?? 0)}` : 'None'],
                     ['Age', selectedPosition.age || 'N/A'],
                     ['Opened', match ? new Date(match.timestamp).toLocaleString() : selectedPosition.opened_at ? new Date(selectedPosition.opened_at).toLocaleString() : '-'],
                   ].map(([label, value]) => (
@@ -586,9 +594,9 @@ export function Overview() {
                           </>
                         )}
                         <div className="absolute inset-0 flex items-center justify-between px-3 text-[10px] font-medium">
-                          <span className="text-[#ff4466]">{sl ? `SL $${sl.toFixed(2)}` : ''}</span>
-                          <span className="text-[#4a9eff]">Entry ${(selectedPosition.avg_cost || 0).toFixed(2)}</span>
-                          <span className="text-[#00d4aa]">{tp ? `TP $${tp.toFixed(2)}` : ''}</span>
+                          <span className="text-[#ff4466]">{sl ? `SL $${fmtPrice(sl)}` : ''}</span>
+                          <span className="text-[#4a9eff]">Entry ${fmtPrice(selectedPosition.avg_cost || 0)}</span>
+                          <span className="text-[#00d4aa]">{tp ? `TP $${fmtPrice(tp)}` : ''}</span>
                         </div>
                       </div>
                     </div>
