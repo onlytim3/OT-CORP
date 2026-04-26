@@ -26,37 +26,162 @@ _HEADERS = {"User-Agent": "TradingIntelligence/1.0"}
 # RSS feeds — verified working 2026-03-14
 # ---------------------------------------------------------------------------
 
+_GN = "https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+
 _RSS_FEEDS = {
+    # ── CRYPTO ────────────────────────────────────────────────────────────────
     "crypto": [
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://cointelegraph.com/rss",
         "https://decrypt.co/feed",
         "https://cryptoslate.com/feed/",
         "https://bitcoinmagazine.com/feed",
+        "https://www.theblock.co/rss.xml",
+        "https://cryptobriefing.com/feed/",
+        _GN.format(q="Bitcoin+BTC+cryptocurrency+price+market"),
+        _GN.format(q="Ethereum+ETH+DeFi+altcoin+crypto"),
+        _GN.format(q="crypto+regulation+SEC+CFTC+blockchain"),
     ],
+
+    # ── EQUITIES ──────────────────────────────────────────────────────────────
+    "equities": [
+        "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://seekingalpha.com/feed.xml",
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+        _GN.format(q="S%26P+500+NASDAQ+Dow+Jones+stock+market+rally"),
+        _GN.format(q="earnings+revenue+profit+guidance+quarterly+results"),
+        _GN.format(q="IPO+merger+acquisition+buyback+dividend"),
+    ],
+
+    # ── TECHNOLOGY ────────────────────────────────────────────────────────────
+    "technology": [
+        "https://techcrunch.com/feed/",
+        "https://feeds.feedburner.com/venturebeat/SZYF",
+        "https://www.theverge.com/rss/index.xml",
+        _GN.format(q="NVIDIA+AMD+semiconductor+chip+AI+artificial+intelligence"),
+        _GN.format(q="Apple+Microsoft+Google+Meta+Amazon+tech+stocks"),
+        _GN.format(q="AI+machine+learning+OpenAI+ChatGPT+LLM+data+center"),
+        _GN.format(q="cybersecurity+cloud+computing+SaaS+software"),
+    ],
+
+    # ── ENERGY ────────────────────────────────────────────────────────────────
+    "energy": [
+        "https://oilprice.com/rss/main",
+        _GN.format(q="oil+price+WTI+Brent+crude+OPEC+petroleum"),
+        _GN.format(q="natural+gas+LNG+pipeline+energy+supply"),
+        _GN.format(q="renewable+energy+solar+wind+EV+electric+vehicle+battery"),
+        _GN.format(q="ExxonMobil+Chevron+Shell+BP+TotalEnergies+energy+stocks"),
+    ],
+
+    # ── HEALTHCARE / PHARMA ───────────────────────────────────────────────────
+    "healthcare": [
+        "https://www.statnews.com/feed/",
+        _GN.format(q="FDA+approval+drug+pharmaceutical+clinical+trial"),
+        _GN.format(q="biotech+Pfizer+Moderna+Johnson+Eli+Lilly+healthcare"),
+        _GN.format(q="healthcare+insurance+hospital+Medicare+policy"),
+    ],
+
+    # ── COMMODITIES ───────────────────────────────────────────────────────────
+    "commodities": [
+        "https://oilprice.com/rss/main",
+        "https://www.investing.com/rss/news_11.rss",
+        _GN.format(q="gold+silver+platinum+palladium+precious+metals"),
+        _GN.format(q="copper+aluminum+zinc+nickel+iron+ore+mining"),
+        _GN.format(q="commodity+futures+raw+materials+supply+chain"),
+    ],
+
+    # ── AGRICULTURE ───────────────────────────────────────────────────────────
+    "agriculture": [
+        _GN.format(q="wheat+corn+soybean+agriculture+crop+harvest+USDA"),
+        _GN.format(q="food+price+inflation+drought+climate+farming"),
+        _GN.format(q="coffee+cocoa+sugar+cotton+agricultural+commodity"),
+    ],
+
+    # ── FOREX / FX ────────────────────────────────────────────────────────────
+    "forex": [
+        "https://www.investing.com/rss/news_1.rss",
+        _GN.format(q="dollar+DXY+EUR+USD+JPY+GBP+currency+exchange+rate"),
+        _GN.format(q="Federal+Reserve+ECB+Bank+of+England+BOJ+central+bank+rate"),
+        _GN.format(q="emerging+market+currency+peso+lira+rupee+real+FX"),
+    ],
+
+    # ── MACRO / ECONOMY ───────────────────────────────────────────────────────
+    "macro": [
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
+        _GN.format(q="inflation+CPI+PCE+GDP+recession+economic+data"),
+        _GN.format(q="Federal+Reserve+FOMC+interest+rate+hike+cut+Powell"),
+        _GN.format(q="unemployment+jobs+nonfarm+payroll+labor+market"),
+        _GN.format(q="US+budget+deficit+debt+ceiling+treasury+fiscal+policy"),
+    ],
+
+    # ── FIXED INCOME / BONDS ─────────────────────────────────────────────────
+    "bonds": [
+        _GN.format(q="bond+yield+treasury+10+year+2+year+spread+inversion"),
+        _GN.format(q="high+yield+junk+bond+credit+spread+investment+grade"),
+        _GN.format(q="corporate+bond+debt+default+credit+rating+Moody%27s"),
+    ],
+
+    # ── BANKING / FINANCE ─────────────────────────────────────────────────────
+    "banking": [
+        _GN.format(q="JPMorgan+Goldman+Sachs+Morgan+Stanley+bank+earnings"),
+        _GN.format(q="banking+crisis+financial+stability+Fed+liquidity+credit"),
+        _GN.format(q="hedge+fund+private+equity+asset+management+BlackRock"),
+    ],
+
+    # ── REAL ESTATE ───────────────────────────────────────────────────────────
+    "real_estate": [
+        _GN.format(q="housing+market+mortgage+rate+home+price+real+estate"),
+        _GN.format(q="REIT+commercial+real+estate+office+retail+construction"),
+    ],
+
+    # ── GEOPOLITICAL / RISK ──────────────────────────────────────────────────
+    "geopolitical": [
+        _GN.format(q="war+conflict+sanctions+tariff+trade+war+military"),
+        _GN.format(q="US+China+Russia+Middle+East+NATO+geopolitical+risk"),
+        _GN.format(q="election+government+policy+regulation+legislation+law"),
+        _GN.format(q="Iran+Israel+Ukraine+Taiwan+North+Korea+geopolitics"),
+    ],
+
+    # ── EMERGING MARKETS ─────────────────────────────────────────────────────
+    "emerging_markets": [
+        _GN.format(q="China+PBOC+yuan+renminbi+economy+growth+Xi"),
+        _GN.format(q="India+Brazil+Mexico+Indonesia+emerging+markets+GDP"),
+        _GN.format(q="EM+capital+flows+foreign+investment+developing+economy"),
+        _GN.format(q="Africa+Middle+East+Latin+America+frontier+markets"),
+    ],
+
+    # ── ASIA PACIFIC ─────────────────────────────────────────────────────────
+    "asia": [
+        _GN.format(q="Bank+of+Japan+BOJ+yen+Nikkei+Japan+economy"),
+        _GN.format(q="Hong+Kong+China+markets+Hang+Seng+CSI"),
+        _GN.format(q="Korea+Taiwan+Singapore+ASEAN+Asia+Pacific+economy"),
+    ],
+
+    # ── EUROPE ───────────────────────────────────────────────────────────────
+    "europe": [
+        _GN.format(q="ECB+European+Central+Bank+eurozone+inflation+rate"),
+        _GN.format(q="Bank+of+England+pound+sterling+UK+economy+gilt"),
+        _GN.format(q="Germany+France+Italy+EU+economy+DAX+CAC"),
+    ],
+
+    # ── CORPORATE / M&A ──────────────────────────────────────────────────────
+    "corporate": [
+        _GN.format(q="merger+acquisition+takeover+deal+M%26A+buyout"),
+        _GN.format(q="IPO+SPAC+listing+spinoff+restructuring+bankruptcy"),
+    ],
+
+    # ── STOCKS (legacy key kept) ──────────────────────────────────────────────
     "stocks": [
         "https://feeds.marketwatch.com/marketwatch/topstories/",
         "https://seekingalpha.com/feed.xml",
         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
     ],
-    "commodities": [
-        "https://oilprice.com/rss/main",
-        "https://news.google.com/rss/search?q=gold+silver+commodities+precious+metals&hl=en-US&gl=US&ceid=US:en",
-        "https://www.investing.com/rss/news_11.rss",
-    ],
-    "forex": [
-        "https://www.investing.com/rss/news_1.rss",
-        "https://seekingalpha.com/tag/forex.xml",
-    ],
-    "macro": [
-        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
-        "https://news.google.com/rss/search?q=central+bank+interest+rate+federal+reserve+economic+data&hl=en-US&gl=US&ceid=US:en",
-        "https://www.cnbc.com/id/20910258/device/rss/rss.html",
-    ],
+
+    # ── GLOBAL ────────────────────────────────────────────────────────────────
     "global": [
-        # Reuters global business/markets (English, no geo-redirect)
-        "https://news.google.com/rss/search?q=global+financial+markets+economy+GDP&hl=en-US&gl=US&ceid=US:en",
-        "https://news.google.com/rss/search?q=US+economy+recession+inflation+federal+reserve&hl=en-US&gl=US&ceid=US:en",
+        _GN.format(q="global+financial+markets+economy+GDP+trade"),
+        _GN.format(q="US+economy+recession+inflation+federal+reserve+outlook"),
+        _GN.format(q="world+economy+IMF+World+Bank+G7+G20+growth"),
     ],
 }
 
@@ -487,7 +612,24 @@ def fetch_finnhub_company_news(symbols: list[str] | None = None) -> list[dict]:
         return []
 
     if symbols is None:
-        symbols = ["COIN", "MSTR", "IBIT"]
+        symbols = [
+            # Crypto-native / BTC proxies
+            "COIN", "MSTR", "RIOT", "MARA", "CLSK",
+            # BTC ETFs (institutional demand signal)
+            "IBIT", "FBTC", "ARKB", "BITB",
+            # Mega-cap tech (NASDAQ ↔ crypto correlation)
+            "NVDA", "AAPL", "MSFT", "GOOGL", "META", "TSLA", "AMD",
+            # Finance / banking (risk sentiment)
+            "JPM", "GS", "MS", "BAC", "BLK",
+            # Energy (inflation / macro signal)
+            "XOM", "CVX",
+            # Healthcare (defensive sector)
+            "LLY", "MRNA", "PFE",
+            # Broad market ETFs (macro backdrop)
+            "SPY", "QQQ", "IWM",
+            # Commodity ETFs (alternative asset flows)
+            "GLD", "SLV", "USO",
+        ]
 
     from_date = (date.today() - timedelta(days=3)).isoformat()
     to_date = date.today().isoformat()
@@ -939,7 +1081,7 @@ def fetch_all_category_data() -> dict:
         "calendar": [],
     }
 
-    # Headlines by category
+    # Headlines for ALL categories — RSS feeds cover every asset class
     for category in _RSS_FEEDS:
         try:
             data["headlines"][category] = fetch_rss_headlines(category)
@@ -1017,17 +1159,33 @@ def fetch_all_category_data() -> dict:
     except Exception as e:
         log.debug("Finnhub sentiment failed: %s", e)
 
-    # FRED macro series — CPI, Fed Funds rate, yield curve, unemployment
-    # These supersede the BLS/NY Fed free endpoints with cleaner data
+    # FRED macro series — comprehensive economic indicators
     try:
         from trading.data.commodities import get_fred_series
         from trading.config import FRED_API_KEY
         if FRED_API_KEY:
             fred_series = {
-                "CPIAUCSL": "cpi_fred",        # CPI all items, seasonally adjusted
-                "FEDFUNDS": "fedfunds_fred",    # Effective Fed Funds rate
-                "T10Y2Y": "yield_spread_fred",  # 10Y-2Y spread (recession signal)
-                "UNRATE": "unrate_fred",        # Unemployment rate
+                # Monetary policy
+                "CPIAUCSL":        "cpi_fred",         # CPI all items (YoY inflation gauge)
+                "PCEPI":           "pce_fred",          # PCE inflation (Fed preferred)
+                "FEDFUNDS":        "fedfunds_fred",     # Fed Funds effective rate
+                "DGS10":           "yield_10y_fred",    # 10Y treasury yield
+                "DGS2":            "yield_2y_fred",     # 2Y treasury yield
+                "T10Y2Y":          "yield_spread_fred", # 10Y-2Y spread (recession signal)
+                # Labor & growth
+                "UNRATE":          "unrate_fred",       # Unemployment rate
+                "INDPRO":          "indpro_fred",       # Industrial production index
+                "RSXFS":           "retail_fred",       # Retail sales ex-food services
+                # Money & credit
+                "M2SL":            "m2_fred",           # M2 money supply (liquidity)
+                "BAMLH0A0HYM2":    "hy_spread_fred",    # High-yield credit spread (risk gauge)
+                # Market fear / volatility
+                "VIXCLS":          "vix_fred",          # VIX (market fear index)
+                # Commodities
+                "DCOILWTICO":      "wti_fred",          # WTI crude oil price
+                "GOLDAMGBD228NLBM": "gold_fred",        # Gold price (London fixing)
+                # Dollar strength
+                "DTWEXBGS":        "dxy_fred",          # Dollar index broad
             }
             for series_id, key in fred_series.items():
                 try:

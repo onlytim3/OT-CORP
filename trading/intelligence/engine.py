@@ -61,6 +61,45 @@ _MACRO_RISK_OFF = [
     "miss expectations", "weak data",
 ]
 
+_TECH_BULLISH = [
+    "ai boom", "chip demand", "data center", "record revenue", "beat estimates",
+    "nvidia", "strong quarter", "guidance raised", "partnership", "breakthrough",
+    "adoption", "hyperscaler", "capex increase",
+]
+_TECH_BEARISH = [
+    "layoffs", "weak guidance", "miss estimates", "antitrust", "regulation",
+    "chip ban", "export control", "earnings miss", "revenue decline", "slowdown",
+    "overvalued", "bubble", "correction",
+]
+
+_ENERGY_BULLISH = [
+    "oil rally", "opec cut", "supply disruption", "geopolitical tension",
+    "crude surge", "energy shortage", "wti rise", "brent rise",
+]
+_ENERGY_BEARISH = [
+    "oil plunge", "opec increase", "demand weak", "recession fears",
+    "crude falls", "inventory build", "oversupply", "price war",
+]
+
+_GEOPOLITICAL_RISK = [
+    "war", "conflict", "military", "sanctions", "tariff", "trade war",
+    "missile", "attack", "invasion", "crisis", "nuclear", "escalation",
+    "ceasefire fail", "tension", "coup", "assassination",
+]
+_GEOPOLITICAL_CALM = [
+    "ceasefire", "peace deal", "diplomacy", "trade deal", "summit",
+    "agreement", "de-escalation", "negotiation", "sanctions lifted",
+]
+
+_CREDIT_STRESS = [
+    "credit spread", "high yield", "junk bond", "default", "downgrade",
+    "bankruptcy", "restructuring", "debt crisis", "credit crunch", "contagion",
+]
+_CREDIT_HEALTHY = [
+    "upgrade", "investment grade", "spread tighten", "credit rally",
+    "strong balance sheet", "refinancing", "debt reduction",
+]
+
 
 def _score_headlines(headlines: list[dict], bullish_kw: list[str],
                      bearish_kw: list[str]) -> tuple[float, list[str]]:
@@ -519,6 +558,207 @@ def _score_macro(data: dict) -> dict:
     }
 
 
+def _score_technology(data: dict) -> dict:
+    """Score tech sector sentiment — strong NASDAQ ↔ crypto correlation."""
+    score = 0.0
+    confidence = 0.0
+    components = []
+
+    headlines = data.get("headlines", {}).get("technology", [])
+    hl_score, top_hl = _score_headlines(headlines, _TECH_BULLISH, _TECH_BEARISH)
+    if headlines:
+        score += hl_score * 0.60
+        confidence += 0.60
+
+    # VIX from FRED — high VIX = tech sell-off risk
+    vix = data.get("macro", {}).get("vix_fred")
+    if vix:
+        vix_val = vix.get("value", 20)
+        vix_score = -max(min((vix_val - 20) / 20, 1.0), -1.0) * 0.40
+        score += vix_score
+        confidence += 0.40
+        label = "elevated fear" if vix_val > 25 else ("calm" if vix_val < 15 else "normal")
+        components.append(f"VIX={vix_val:.1f} ({label})")
+
+    if headlines:
+        components.append(f"Tech headlines: {len(headlines)}")
+
+    score = round(max(min(score, 1.0), -1.0), 3)
+    return {"category": "technology", "score": score, "confidence": round(min(confidence, 1.0), 2),
+            "label": _score_label(score), "components": components, "top_headlines": top_hl}
+
+
+def _score_energy(data: dict) -> dict:
+    """Score energy sector — oil price feeds inflation, which drives Fed, which drives crypto."""
+    score = 0.0
+    confidence = 0.0
+    components = []
+
+    headlines = (data.get("headlines", {}).get("energy", []) +
+                 data.get("headlines", {}).get("commodities", []))
+    hl_score, top_hl = _score_headlines(headlines, _ENERGY_BULLISH, _ENERGY_BEARISH)
+    if headlines:
+        score += hl_score * 0.50
+        confidence += 0.50
+
+    # WTI crude from FRED
+    wti = data.get("macro", {}).get("wti_fred")
+    if wti:
+        val = wti.get("value", 70)
+        chg = wti.get("change", 0)
+        # Rising oil = inflationary = hawkish = risk-off
+        oil_score = -max(min(chg / 5, 1.0), -1.0) * 0.30
+        score += oil_score
+        confidence += 0.30
+        components.append(f"WTI=${val:.1f} (chg {chg:+.2f})")
+
+    # Gold from FRED — rising gold = safe haven demand = risk-off
+    gold = data.get("macro", {}).get("gold_fred")
+    if gold:
+        chg = gold.get("change", 0)
+        gold_score = -max(min(chg / 50, 1.0), -1.0) * 0.20
+        score += gold_score
+        confidence += 0.20
+        components.append(f"Gold=${gold.get('value', 0):.0f} (chg {chg:+.0f})")
+
+    score = round(max(min(score, 1.0), -1.0), 3)
+    return {"category": "energy", "score": score, "confidence": round(min(confidence, 1.0), 2),
+            "label": _score_label(score), "components": components, "top_headlines": top_hl}
+
+
+def _score_geopolitical(data: dict) -> dict:
+    """Score geopolitical risk — conflict and sanctions drive safe-haven flows."""
+    score = 0.0
+    confidence = 0.0
+    components = []
+
+    geo_hl = data.get("headlines", {}).get("geopolitical", [])
+    global_hl = data.get("headlines", {}).get("global", [])
+    all_hl = geo_hl + global_hl
+    hl_score, top_hl = _score_headlines(all_hl, _GEOPOLITICAL_CALM, _GEOPOLITICAL_RISK)
+    if all_hl:
+        score += hl_score * 0.70
+        confidence += 0.70
+        geo_count = sum(1 for h in all_hl if any(kw in h.get("title", "").lower()
+                        for kw in _GEOPOLITICAL_RISK))
+        if geo_count > 5:
+            components.append(f"HIGH risk-event density: {geo_count} conflict headlines")
+        elif geo_count > 2:
+            components.append(f"Moderate geopolitical tension ({geo_count} events)")
+
+    # Geopolitical risk → safe haven → BTC tailwind (slightly bullish for crypto)
+    # Score -1 = extreme conflict (risk-off), +1 = calm (risk-on)
+    # For crypto, conflict can be ambiguous: fear = sell, then flight to BTC
+    score = round(max(min(score, 1.0), -1.0), 3)
+    return {"category": "geopolitical", "score": score, "confidence": round(min(confidence, 1.0), 2),
+            "label": _score_label(score), "components": components, "top_headlines": top_hl}
+
+
+def _score_credit(data: dict) -> dict:
+    """Score credit market health — tight spreads = risk-on, wide spreads = stress."""
+    score = 0.0
+    confidence = 0.0
+    components = []
+
+    bond_hl = data.get("headlines", {}).get("bonds", [])
+    bank_hl = data.get("headlines", {}).get("banking", [])
+    all_hl = bond_hl + bank_hl
+    hl_score, top_hl = _score_headlines(all_hl, _CREDIT_HEALTHY, _CREDIT_STRESS)
+    if all_hl:
+        score += hl_score * 0.40
+        confidence += 0.40
+
+    # High-yield credit spread from FRED — wide = stress, tight = risk-on
+    hy = data.get("macro", {}).get("hy_spread_fred")
+    if hy:
+        spread = hy.get("value", 4.0)
+        chg = hy.get("change", 0)
+        # HY spread >6% = crisis territory, <3% = very tight (risk-on)
+        spread_score = -max(min((spread - 3.5) / 3.0, 1.0), -1.0)
+        score += spread_score * 0.40
+        confidence += 0.40
+        label = "stressed" if spread > 6 else ("tight" if spread < 3.5 else "normal")
+        components.append(f"HY spread={spread:.2f}% ({label}, chg {chg:+.3f})")
+
+    # 10Y yield level — rising yields = tighter financial conditions
+    y10 = data.get("macro", {}).get("yield_10y_fred")
+    if y10:
+        val = y10.get("value", 4.5)
+        chg = y10.get("change", 0)
+        y10_score = -max(min(chg / 0.3, 1.0), -1.0) * 0.20
+        score += y10_score
+        confidence += 0.20
+        components.append(f"10Y yield={val:.2f}% (chg {chg:+.3f})")
+
+    score = round(max(min(score, 1.0), -1.0), 3)
+    return {"category": "credit", "score": score, "confidence": round(min(confidence, 1.0), 2),
+            "label": _score_label(score), "components": components, "top_headlines": top_hl}
+
+
+def _score_emerging_markets(data: dict) -> dict:
+    """Score emerging market conditions — EM stress often precedes crypto sell-offs."""
+    score = 0.0
+    confidence = 0.0
+    components = []
+
+    em_hl = (data.get("headlines", {}).get("emerging_markets", []) +
+             data.get("headlines", {}).get("asia", []))
+    hl_score, top_hl = _score_headlines(
+        em_hl,
+        ["growth", "recovery", "surplus", "reform", "investment", "rally"],
+        ["crisis", "default", "currency crash", "capital flight", "contagion",
+         "inflation spike", "devaluation", "sanctions"]
+    )
+    if em_hl:
+        score += hl_score * 0.80
+        confidence += 0.80
+        components.append(f"EM/Asia headlines: {len(em_hl)}")
+
+    # Dollar strength hurts EM — use DXY/dollar index
+    dxy = data.get("macro", {}).get("dxy_fred") or data.get("macro", {}).get("dxy_index")
+    if dxy:
+        chg = dxy.get("change", 0)
+        dxy_score = -max(min(chg / 2.0, 1.0), -1.0) * 0.20
+        score += dxy_score
+        confidence += 0.20
+        components.append(f"DXY chg {chg:+.2f}")
+
+    score = round(max(min(score, 1.0), -1.0), 3)
+    return {"category": "emerging_markets", "score": score, "confidence": round(min(confidence, 1.0), 2),
+            "label": _score_label(score), "components": components, "top_headlines": top_hl}
+
+
+def _score_liquidity(data: dict) -> dict:
+    """Score global liquidity — M2 growth and VIX regime drive risk appetite."""
+    score = 0.0
+    confidence = 0.0
+    components = []
+
+    # M2 money supply — expanding M2 = more liquidity = bullish for risk assets
+    m2 = data.get("macro", {}).get("m2_fred")
+    if m2:
+        chg = m2.get("change", 0)
+        m2_score = max(min(chg / 200, 1.0), -1.0) * 0.50
+        score += m2_score
+        confidence += 0.50
+        direction = "expanding" if chg > 0 else "contracting"
+        components.append(f"M2 {direction} ${chg:+,.0f}B")
+
+    # VIX — market fear gauge
+    vix = data.get("macro", {}).get("vix_fred")
+    if vix:
+        val = vix.get("value", 20)
+        vix_score = -max(min((val - 18) / 20, 1.0), -1.0) * 0.50
+        score += vix_score
+        confidence += 0.50
+        regime = "fear" if val > 30 else ("complacent" if val < 15 else "normal")
+        components.append(f"VIX={val:.1f} ({regime})")
+
+    score = round(max(min(score, 1.0), -1.0), 3)
+    return {"category": "liquidity", "score": score, "confidence": round(min(confidence, 1.0), 2),
+            "label": _score_label(score), "components": components, "top_headlines": []}
+
+
 def _score_label(score: float) -> str:
     """Convert numeric score to readable label."""
     if score >= 0.5:
@@ -720,29 +960,40 @@ def generate_briefing() -> MarketBriefing:
     commodities = _score_commodities(raw)
     currency = _score_currency(raw)
     macro = _score_macro(raw)
+    technology = _score_technology(raw)
+    energy = _score_energy(raw)
+    geopolitical = _score_geopolitical(raw)
+    credit = _score_credit(raw)
+    emerging_markets = _score_emerging_markets(raw)
+    liquidity = _score_liquidity(raw)
 
     categories = {
         "crypto": crypto,
         "commodities": commodities,
         "currency": currency,
         "macro": macro,
+        "technology": technology,
+        "energy": energy,
+        "geopolitical": geopolitical,
+        "credit": credit,
+        "emerging_markets": emerging_markets,
+        "liquidity": liquidity,
     }
 
     # Collect event risk across categories
     event_risk = macro.get("event_risk", [])
 
-    # Overall regime: two-tier weighted average.
-    # Macro (slow-moving FRED/calendar data) contributes 25% of the final score.
-    # Real-time categories (crypto, commodities, currency) share the remaining 75%
-    # with weights proportional to their market relevance (sum to 0.75).
-    _MACRO_WEIGHT = 0.25
-    _RT_WEIGHTS = {"crypto": 0.375, "commodities": 0.1875, "currency": 0.1875}
-    # _RT_WEIGHTS sum: 0.375+0.1875+0.1875 = 0.75 ✓  total with macro: 1.0 ✓
-    rt_score = sum(
-        categories[cat]["score"] * w
-        for cat, w in _RT_WEIGHTS.items()
-    )
-    overall = round(rt_score + categories["macro"]["score"] * _MACRO_WEIGHT, 3)
+    # Overall regime: 10-category weighted average (weights sum to 1.0).
+    # crypto=0.30 (primary), macro=0.20 (FRED/calendar), technology=0.10 (NASDAQ correlation),
+    # credit=0.10 (financial conditions), liquidity=0.10 (M2/VIX regime),
+    # commodities=0.07, currency=0.06, energy=0.04, geopolitical=0.02, emerging_markets=0.01
+    _WEIGHTS = {
+        "crypto": 0.30, "macro": 0.20, "technology": 0.10,
+        "credit": 0.10, "liquidity": 0.10, "commodities": 0.07,
+        "currency": 0.06, "energy": 0.04, "geopolitical": 0.02,
+        "emerging_markets": 0.01,
+    }
+    overall = round(sum(categories[c]["score"] * w for c, w in _WEIGHTS.items()), 3)
     regime = _score_label(overall)
 
     # Event risk dampens confidence in any direction
