@@ -549,7 +549,7 @@ export function Overview() {
                 {/* Core Info Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
                   {[
-                    ['Strategy', match?.strategy || '-'],
+                    ['Strategy', match?.strategy || selectedPosition.strategy || '-'],
                     ['Quantity', formatQty(selectedPosition.qty)],
                     ['Entry', `$${(selectedPosition.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
                     ['Current', `$${(selectedPosition.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
@@ -557,10 +557,10 @@ export function Overview() {
                     ['P&L', `${(selectedPosition.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(selectedPosition.unrealized_pnl || 0).toFixed(2)}`],
                     ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
                     ['Leverage', match?.leverage ? `${match.leverage}x` : selectedPosition.leverage ? `${selectedPosition.leverage}x` : '1x'],
-                    ['Take Profit', match?.take_profit_price ? `$${match.take_profit_price.toFixed(2)}` : 'None'],
-                    ['Stop Loss', match?.stop_loss_price ? `$${match.stop_loss_price.toFixed(2)}` : 'None'],
+                    ['Take Profit', (match?.take_profit_price || selectedPosition.take_profit_price) ? `$${(match?.take_profit_price ?? selectedPosition.take_profit_price ?? 0).toFixed(2)}` : 'None'],
+                    ['Stop Loss', (match?.stop_loss_price || selectedPosition.stop_loss_price) ? `$${(match?.stop_loss_price ?? selectedPosition.stop_loss_price ?? 0).toFixed(2)}` : 'None'],
                     ['Age', selectedPosition.age || 'N/A'],
-                    ['Opened', match ? new Date(match.timestamp).toLocaleString() : '-'],
+                    ['Opened', match ? new Date(match.timestamp).toLocaleString() : selectedPosition.opened_at ? new Date(selectedPosition.opened_at).toLocaleString() : '-'],
                   ].map(([label, value]) => (
                     <div key={String(label)} className="p-2.5 sm:p-3 rounded-lg bg-white/5 border border-white/10">
                       <p className="text-[10px] sm:text-xs text-[#888888] mb-1">{label}</p>
@@ -570,25 +570,30 @@ export function Overview() {
                 </div>
 
                 {/* TP/SL Visual Bar */}
-                {match && (match.stop_loss_price || match.take_profit_price) && (
-                  <div className="p-3 rounded-lg bg-white/5 border border-white/10">
-                    <p className="text-xs text-[#888888] mb-2">Risk/Reward Range</p>
-                    <div className="relative h-6 bg-white/5 rounded-full overflow-hidden">
-                      {match.stop_loss_price && match.take_profit_price && (
-                        <>
-                          <div className="absolute left-0 top-0 h-full bg-[#ff4466]/20 rounded-l-full" style={{ width: '30%' }} />
-                          <div className="absolute right-0 top-0 h-full bg-[#00d4aa]/20 rounded-r-full" style={{ width: '30%' }} />
-                          <div className="absolute left-1/2 top-0 h-full w-0.5 bg-[#4a9eff] -translate-x-1/2" />
-                        </>
-                      )}
-                      <div className="absolute inset-0 flex items-center justify-between px-3 text-[10px] font-medium">
-                        <span className="text-[#ff4466]">{match.stop_loss_price ? `SL $${match.stop_loss_price.toFixed(2)}` : ''}</span>
-                        <span className="text-[#4a9eff]">Entry ${(selectedPosition.avg_cost || 0).toFixed(2)}</span>
-                        <span className="text-[#00d4aa]">{match.take_profit_price ? `TP $${match.take_profit_price.toFixed(2)}` : ''}</span>
+                {(() => {
+                  const sl = match?.stop_loss_price || selectedPosition.stop_loss_price || 0;
+                  const tp = match?.take_profit_price || selectedPosition.take_profit_price || 0;
+                  if (!sl && !tp) return null;
+                  return (
+                    <div className="p-3 rounded-lg bg-white/5 border border-white/10">
+                      <p className="text-xs text-[#888888] mb-2">Risk/Reward Range</p>
+                      <div className="relative h-6 bg-white/5 rounded-full overflow-hidden">
+                        {sl && tp && (
+                          <>
+                            <div className="absolute left-0 top-0 h-full bg-[#ff4466]/20 rounded-l-full" style={{ width: '30%' }} />
+                            <div className="absolute right-0 top-0 h-full bg-[#00d4aa]/20 rounded-r-full" style={{ width: '30%' }} />
+                            <div className="absolute left-1/2 top-0 h-full w-0.5 bg-[#4a9eff] -translate-x-1/2" />
+                          </>
+                        )}
+                        <div className="absolute inset-0 flex items-center justify-between px-3 text-[10px] font-medium">
+                          <span className="text-[#ff4466]">{sl ? `SL $${sl.toFixed(2)}` : ''}</span>
+                          <span className="text-[#4a9eff]">Entry ${(selectedPosition.avg_cost || 0).toFixed(2)}</span>
+                          <span className="text-[#00d4aa]">{tp ? `TP $${tp.toFixed(2)}` : ''}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Volume & Margin Analysis */}
                 {(() => {

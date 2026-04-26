@@ -445,71 +445,35 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
 
 
 def _add_position_ages(positions: list) -> list:
-    """Add human-readable age to each position based on earliest open buy trade.
-
-    Falls back to the most recent buy trade if no explicitly 'open' trade is found.
-    """
+    """Add human-readable age to each position using paper_positions.opened_at."""
     if not positions:
         return positions
-    try:
-        now = datetime.now(timezone.utc)
-        with get_read_db() as conn:
-            for p in positions:
-                sym = p["symbol"]
-                variants = symbol_variants(sym)
-                placeholders = ",".join("?" for _ in variants)
-
-                # Try 1: most recent open buy trade (not closed)
-                row = conn.execute(
-                    f"SELECT MAX(timestamp) as opened FROM trades "
-                    f"WHERE symbol IN ({placeholders}) AND side='buy' "
-                    f"AND (status IS NULL OR status != 'closed') AND closed_at IS NULL",
-                    variants,
-                ).fetchone()
-
-                # Try 2: fall back to most recent unclosed buy trade
-                if not row or not row["opened"]:
-                    row = conn.execute(
-                        f"SELECT MAX(timestamp) as opened FROM trades "
-                        f"WHERE symbol IN ({placeholders}) AND side='buy' AND closed_at IS NULL",
-                        variants,
-                    ).fetchone()
-
-                # Try 3: fall back to most recent buy trade for this symbol
-                if not row or not row["opened"]:
-                    row = conn.execute(
-                        f"SELECT MAX(timestamp) as opened FROM trades "
-                        f"WHERE symbol IN ({placeholders}) AND side='buy'",
-                        variants,
-                    ).fetchone()
-
-                if row and row["opened"]:
-                    opened_str = row["opened"]
-                    try:
-                        opened = datetime.fromisoformat(opened_str.replace("Z", "+00:00"))
-                    except (ValueError, AttributeError):
-                        p["age"] = ""
-                        continue
-                    if opened.tzinfo is None:
-                        opened = opened.replace(tzinfo=timezone.utc)
-                    delta = now - opened
-                    mins = int(delta.total_seconds() / 60)
-                    if mins < 0:
-                        p["age"] = "0m"
-                    elif mins < 60:
-                        p["age"] = f"{mins}m"
-                    elif mins < 1440:
-                        hours = mins // 60
-                        remaining_mins = mins % 60
-                        p["age"] = f"{hours}h {remaining_mins}m" if remaining_mins else f"{hours}h"
-                    else:
-                        days = mins // 1440
-                        remaining_hours = (mins % 1440) // 60
-                        p["age"] = f"{days}d {remaining_hours}h" if remaining_hours else f"{days}d"
-                else:
-                    p["age"] = "new"
-    except Exception:
-        log.debug("Could not compute position ages", exc_info=True)
+    now = datetime.now(timezone.utc)
+    for p in positions:
+        opened_str = p.get("opened_at") or ""
+        if not opened_str:
+            p["age"] = "new"
+            continue
+        try:
+            opened = datetime.fromisoformat(opened_str.replace("Z", "+00:00"))
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            delta = now - opened
+            mins = int(delta.total_seconds() / 60)
+            if mins < 0:
+                p["age"] = "0m"
+            elif mins < 60:
+                p["age"] = f"{mins}m"
+            elif mins < 1440:
+                hours = mins // 60
+                remaining_mins = mins % 60
+                p["age"] = f"{hours}h {remaining_mins}m" if remaining_mins else f"{hours}h"
+            else:
+                days = mins // 1440
+                remaining_hours = (mins % 1440) // 60
+                p["age"] = f"{days}d {remaining_hours}h" if remaining_hours else f"{days}d"
+        except (ValueError, AttributeError):
+            p["age"] = "new"
     return positions
 
 
@@ -727,7 +691,7 @@ def api_pending_orders():
 
 @app.route("/api/trades")
 def api_trades():
-    trades = get_trades(limit=50)
+    trades = get_trades(limit=200)
 
     # Build maps of the most recent entry price per symbol for P&L computation
     # In futures, entries can be buy (long) or sell (short)

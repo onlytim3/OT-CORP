@@ -91,6 +91,10 @@ export interface Position {
   age?: string;
   side?: string;
   leverage?: number;
+  strategy?: string;
+  stop_loss_price?: number;
+  take_profit_price?: number;
+  opened_at?: string;
 }
 
 export interface StatusResponse {

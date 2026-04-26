@@ -1336,6 +1336,7 @@ def _paper_get_positions() -> list[dict]:
             "leverage": row.get("leverage", 1) or 1,
             "stop_loss_price": float(row.get("stop_loss_price") or 0),
             "take_profit_price": float(row.get("take_profit_price") or 0),
+            "opened_at": row.get("opened_at", ""),
             "liquidation_price": 0,
             "paper": True,
         })
