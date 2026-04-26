@@ -417,18 +417,18 @@ def _add_position_ages(positions: list) -> list:
                 variants = symbol_variants(sym)
                 placeholders = ",".join("?" for _ in variants)
 
-                # Try 1: earliest open buy trade (not closed)
+                # Try 1: most recent open buy trade (not closed)
                 row = conn.execute(
-                    f"SELECT MIN(timestamp) as opened FROM trades "
+                    f"SELECT MAX(timestamp) as opened FROM trades "
                     f"WHERE symbol IN ({placeholders}) AND side='buy' "
                     f"AND (status IS NULL OR status != 'closed') AND closed_at IS NULL",
                     variants,
                 ).fetchone()
 
-                # Try 2: fall back to earliest unclosed buy trade
+                # Try 2: fall back to most recent unclosed buy trade
                 if not row or not row["opened"]:
                     row = conn.execute(
-                        f"SELECT MIN(timestamp) as opened FROM trades "
+                        f"SELECT MAX(timestamp) as opened FROM trades "
                         f"WHERE symbol IN ({placeholders}) AND side='buy' AND closed_at IS NULL",
                         variants,
                     ).fetchone()
@@ -818,7 +818,7 @@ def api_position_detail(symbol):
     sl_pct = ((avg_cost - stop_loss_price) / avg_cost * 100) if avg_cost else 0
     tp_pct = ((take_profit_price - avg_cost) / avg_cost * 100) if avg_cost else 0
 
-    leverage = LEVERAGE_FACTORS.get(pos["symbol"], 1.0)
+    leverage = (latest_buy or {}).get("leverage") or 1
 
     # Find correlation group
     # Resolved symbol variants for mapping

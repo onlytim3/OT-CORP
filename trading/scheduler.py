@@ -1355,6 +1355,11 @@ def check_stop_losses():
                     close_matching_entry_trades(symbol, exit_price, action["qty"], exit_side=exit_side)
                 except Exception as cmt_err:
                     log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                try:
+                    from trading.execution.router import _paper_close_position
+                    _paper_close_position(symbol)
+                except Exception as pcp_err:
+                    log.warning("_paper_close_position failed for %s: %s", symbol, pcp_err)
                 log_action("trade", f"{action['action']}_{exit_side}", symbol=symbol, result=order["status"])
                 tracker.remove(symbol)
                 try:
@@ -1425,6 +1430,11 @@ def check_stop_losses():
                         close_matching_entry_trades(symbol, sl_price, pos["qty"], exit_side=exit_side)
                     except Exception as cmt_err:
                         log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                    try:
+                        from trading.execution.router import _paper_close_position
+                        _paper_close_position(symbol)
+                    except Exception as pcp_err:
+                        log.warning("_paper_close_position failed for %s: %s", symbol, pcp_err)
                     log_action("trade", f"stop_loss_{exit_side}", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
                     try:
@@ -1469,6 +1479,11 @@ def check_stop_losses():
                             try:
                                 from trading.db.store import close_matching_entry_trades
                                 close_matching_entry_trades(symbol, exit_price, alert["qty"], exit_side=exit_side)
+                            except Exception:
+                                pass
+                            try:
+                                from trading.execution.router import _paper_close_position
+                                _paper_close_position(symbol)
                             except Exception:
                                 pass
                             log_action("trade", "passive_loss_closed", symbol=symbol, result=order["status"])
@@ -1564,6 +1579,11 @@ def check_stop_losses():
                         close_matching_entry_trades(symbol, vol_exit_price, pos["qty"], exit_side=exit_side)
                     except Exception as cmt_err:
                         log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                    try:
+                        from trading.execution.router import _paper_close_position
+                        _paper_close_position(symbol)
+                    except Exception as pcp_err:
+                        log.warning("_paper_close_position failed for %s: %s", symbol, pcp_err)
                     log_action("trade", f"volume_exit_{exit_side}", symbol=symbol, result=order["status"])
                     try:
                         from trading.monitor.notifications import notify_volume_exit
