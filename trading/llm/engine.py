@@ -1,26 +1,26 @@
-"""LLM engine for OT-CORP trading system — Claude-primary design.
+"""LLM engine for OT-CORP trading system — OpenAI-primary, three-tier design.
 
-Claude Reasoning Tier (ANTHROPIC_API_KEY): all user-visible outputs —
+Primary Tier (OPENAI_API_KEY): all user-visible outputs —
     chat, chat_full, agent_synthesis, weekly_synthesis, journal,
-    explain_trade, performance, news_analysis, risk_event,
-    narrative, pre_trade, post_trade — ~$12-18/month.
-    If Claude is unavailable, returns a clear operator-facing message.
-    Never silently falls back to a weaker model.
+    explain_trade, performance, news_analysis — GPT-4o-mini.
 
-Groq Background Tier (GROQ_API_KEY): internal logging only —
-    signal_summary, annotate — $0/month.
-    Falls back to Claude if Groq is down.
+Claude Fallback (ANTHROPIC_API_KEY): kicks in when OpenAI is unavailable.
+
+Groq Background Tier (GROQ_API_KEY): high-volume internal tasks —
+    signal_summary, annotate, narrative, pre_trade, post_trade, risk_event.
+    Falls back to OpenAI → Claude if Groq is rate-limited.
 
 Fallback chains:
-    Claude tier:      Claude → operator-visible error (no silent fallback)
-    Background tier:  Groq → Claude → static error string
+    Primary tier:     OpenAI → Claude → operator-visible error
+    Background tier:  Groq → OpenAI → Claude → static error string
 
 Usage:
     from trading.llm.engine import ask_llm, explain_trade, generate_journal
 
 Environment variables:
-    ANTHROPIC_API_KEY — Claude Sonnet (all reasoning, ~$12-18/mo)
-    GROQ_API_KEY      — Groq free tier (background tasks only, $0/mo)
+    OPENAI_API_KEY    — GPT-4o-mini (primary reasoning)
+    ANTHROPIC_API_KEY — Claude Sonnet (fallback reasoning)
+    GROQ_API_KEY      — Groq free tier (background tasks, $0/mo)
 """
 
 from __future__ import annotations
@@ -37,12 +37,14 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 
-def _ascii_safe(text: str) -> str:
-    """Strip all non-ASCII characters from text — belt-and-suspenders against encoding errors.
+_NON_ASCII_RE = re.compile(r"[^\x00-\x7F]+")
 
-    Accented Latin chars are first NFKD-decomposed (é→e+combining accent → e after strip).
-    Cyrillic, CJK, Arabic and all other non-ASCII are dropped silently.
-    Falls back to a character-by-character filter if normalization fails (e.g. lone surrogates).
+def _ascii_safe(text: str) -> str:
+    """Strip all non-ASCII characters from text — guaranteed to never raise.
+
+    Uses regex substitution which is immune to codec edge-cases (lone surrogates,
+    unusual normalisation forms, codec bugs). Previous encode/decode approach
+    could still raise UnicodeEncodeError for certain character sequences.
     """
     if not isinstance(text, str):
         try:
@@ -50,9 +52,9 @@ def _ascii_safe(text: str) -> str:
         except Exception:
             return ""
     try:
-        return unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+        return _NON_ASCII_RE.sub("", text)
     except Exception:
-        # Fallback: char-by-char filter (handles lone surrogates and other edge cases)
+        # Last resort: char-by-char filter
         return "".join(c for c in text if ord(c) < 128)
 
 
@@ -63,21 +65,28 @@ def _ascii_safe(text: str) -> str:
 # Groq models (background tasks only) — llama-3.3-70b-versatile is confirmed free-tier
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
-# Claude model (primary reasoning engine — all user-visible outputs)
+# Claude model (reasoning fallback)
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
-# All user-visible outputs — Claude only, no silent fallback to weaker models
+# OpenAI model (primary reasoning engine — all user-visible outputs)
+OPENAI_MODEL = "gpt-4o-mini"
+
+# High-value reasoning — OpenAI primary, Claude fallback
+# These are operator-visible analysis outputs where quality matters most
 CLAUDE_TIER: frozenset[str] = frozenset({
     "chat", "chat_full",
     "agent_synthesis", "weekly_synthesis",
     "journal", "explain_trade", "performance",
-    "news_analysis", "risk_event",
-    "narrative", "pre_trade", "post_trade",
+    "news_analysis",
 })
 
-# Background/internal tasks only — Groq first, Claude fallback
+# Groq first, OpenAI fallback, Claude last resort — routine per-cycle outputs, high call volume
 GROQ_TIER: frozenset[str] = frozenset({
     "signal_summary", "annotate",
+    "narrative",    # action card descriptions — many per cycle, short output
+    "pre_trade",    # entry reasoning logged to DB
+    "post_trade",   # post-trade review
+    "risk_event",   # risk event narration — brief, factual
 })
 
 # Per-call-type token budgets
@@ -127,8 +136,8 @@ def _rate_limit():
 _provider_failures: dict[str, int] = {}        # provider → consecutive failure count
 _provider_disabled_until: dict[str, float] = {}  # provider → monotonic time when re-enabled
 _provider_last_error: dict[str, str] = {}        # provider → last error message (for diagnostics)
-_CIRCUIT_OPEN_AFTER = 5    # failures before disabling (was 3 — too aggressive for diagnostics)
-_CIRCUIT_COOLDOWN = 120.0  # 2 minutes (was 5 — faster recovery)
+_CIRCUIT_OPEN_AFTER = 5    # sustained failures before disabling (each failure = 3 attempts already tried)
+_CIRCUIT_COOLDOWN = 30.0   # 30s cooldown — short because retries already absorbed transient errors
 
 
 def _provider_ok(name: str) -> bool:
@@ -165,7 +174,7 @@ def get_provider_health() -> dict:
     """Return health status of each LLM provider (for diagnostics)."""
     now = time.monotonic()
     result = {}
-    for name in ("groq", "claude"):
+    for name in ("openai", "groq"):
         disabled_until = _provider_disabled_until.get(name, 0.0)
         failures = _provider_failures.get(name, 0)
         last_error = _provider_last_error.get(name, "")
@@ -237,8 +246,8 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
         response = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": _ascii_safe(system)},
+                {"role": "user", "content": _ascii_safe(prompt)},
             ],
             max_tokens=max_tokens,
             temperature=0.7,
@@ -258,14 +267,90 @@ def _call_groq(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Provider: OpenAI (primary reasoning tier)
+# ---------------------------------------------------------------------------
+
+_openai_client = None
+_openai_init_attempted = False
+
+
+def _get_openai_client():
+    """Lazy-init the OpenAI client singleton."""
+    global _openai_client, _openai_init_attempted
+    if _openai_client is not None:
+        return _openai_client
+    try:
+        import trading.config  # noqa: F401
+    except Exception:
+        pass
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        if not _openai_init_attempted:
+            _openai_init_attempted = True
+            log.info("OPENAI_API_KEY not set — OpenAI tier disabled, falling back to Claude")
+        return None
+    try:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=api_key)
+        log.info("OpenAI client initialized (model: %s)", OPENAI_MODEL)
+        return _openai_client
+    except ImportError:
+        log.warning("openai package not installed — pip install openai")
+        return None
+    except Exception as e:
+        log.warning("Failed to initialize OpenAI client: %s", e)
+        return None
+
+
+def _call_openai(system: str, prompt: str, max_tokens: int = 1500) -> str | None:
+    """Call OpenAI API. Returns response text or None."""
+    if not _provider_ok("openai"):
+        return None
+    client = _get_openai_client()
+    if client is None:
+        return None
+    _rate_limit()
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _ascii_safe(system)},
+                {"role": "user",   "content": _ascii_safe(prompt)},
+            ],
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        _record_success("openai")
+        return response.choices[0].message.content
+    except Exception as e:
+        err = str(e)
+        if "429" in err or "rate_limit" in err.lower() or "quota" in err.lower():
+            log.warning("OpenAI rate limited — backing off")
+        elif "401" in err or "403" in err or "invalid_api_key" in err.lower():
+            log.warning("OpenAI auth error [%s]: %s", type(e).__name__, err[:200])
+        else:
+            log.warning("OpenAI API error [%s]: %s", type(e).__name__, err[:200])
+        _record_failure("openai", err)
+        return None
 
 
 # ---------------------------------------------------------------------------
-# Provider: Claude (reasoning tier)
+# Provider: Claude (reasoning fallback)
 # ---------------------------------------------------------------------------
 
 _claude_client = None
 _claude_init_attempted = False
+
+
+def _bytes_safe(text: str) -> str:
+    """Final-resort bytes-level ASCII safety — encode to ASCII bytes then decode.
+
+    More aggressive than _ascii_safe() regex: catches any characters that the
+    regex misses due to edge cases in Python's unicode database. Guarantees
+    the result survives .encode('ascii') without raising UnicodeEncodeError.
+    """
+    return text.encode("ascii", errors="ignore").decode("ascii")
 
 
 def _get_claude_client():
@@ -283,10 +368,28 @@ def _get_claude_client():
             _claude_init_attempted = True
             log.warning("ANTHROPIC_API_KEY not set — Claude-tier calls will return unavailable message")
         return None
+    # Validate key is ASCII-clean — HTTP/1.1 headers must be ASCII.
+    # Cyrillic characters (e.g. В ≈ B on a Russian keyboard) silently corrupt keys.
+    try:
+        api_key.encode("ascii")
+    except UnicodeEncodeError as e:
+        if not _claude_init_attempted:
+            _claude_init_attempted = True
+            log.error(
+                "ANTHROPIC_API_KEY contains a non-ASCII character at position %d "
+                "(likely a Cyrillic look-alike typed on a Russian keyboard). "
+                "Re-enter the key in Render env vars using only ASCII characters.",
+                e.start,
+            )
+        return None
     try:
         import anthropic
-        _claude_client = anthropic.Anthropic(api_key=api_key)
-        log.info("Claude client initialized (model: %s)", CLAUDE_MODEL)
+        import httpx
+        _claude_client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=httpx.Timeout(45.0, connect=10.0),  # 45s total, 10s connect
+        )
+        log.info("Claude client initialized (model: %s, timeout=45s)", CLAUDE_MODEL)
         return _claude_client
     except ImportError:
         log.warning("anthropic package not installed — pip install anthropic")
@@ -296,48 +399,104 @@ def _get_claude_client():
         return None
 
 
-def _call_claude(system: str, prompt: str, max_tokens: int = 4096) -> str | None:
-    """Call Claude Sonnet via Anthropic SDK. Returns response text or None."""
+def _call_claude(system: str, prompt: str, max_tokens: int = 4096, cache_system: bool = False) -> str | None:
+    """Call Claude Sonnet via Anthropic SDK. Returns response text or None.
+
+    Retries up to 3 times with exponential backoff before counting a failure.
+    This means a single network blip never trips the circuit breaker — only
+    sustained, repeated failures do.
+
+    cache_system=True enables prompt caching on the system prompt — use for
+    repeated calls with the same large system prompt (saves ~90% input token cost).
+    """
     if not _provider_ok("claude"):
         return None
     client = _get_claude_client()
     if client is None:
         return None
-    # Cap max_tokens to the model's documented output limit
     max_tokens = min(max_tokens, 8096)
-    _rate_limit()
-    try:
-        msg = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            system=_ascii_safe(system),
-            messages=[{"role": "user", "content": _ascii_safe(prompt)}],
+
+    # Build system param once (outside retry loop).
+    # Two-pass sanitisation: regex strips non-ASCII code points, then bytes
+    # encoding guarantees the result is truly ASCII-clean at the codec level.
+    def _clean(t: str) -> str:
+        return _bytes_safe(_ascii_safe(t))
+
+    if cache_system:
+        system_param = [{"type": "text", "text": _clean(system), "cache_control": {"type": "ephemeral"}}]
+    else:
+        system_param = _clean(system)
+    user_content = _clean(prompt)
+
+    last_err: str = ""
+    unicode_errors_only = True  # track whether ALL failures were encoding issues
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(2 ** attempt)  # 2s then 4s backoff
+        _rate_limit()
+        try:
+            msg = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=max_tokens,
+                system=system_param,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            _record_success("claude")
+            return msg.content[0].text
+        except UnicodeEncodeError as e:
+            # Non-ASCII in the request (content or API key) — NOT an API availability
+            # issue, so do NOT count against the circuit breaker.
+            err_msg = str(e)
+            log.warning("Claude UnicodeEncodeError (attempt %d/3): %s", attempt + 1, err_msg)
+            _provider_last_error["claude"] = f"UnicodeEncodeError: {err_msg}"
+            # Re-strip content (fixes content issues; can't fix a bad API key)
+            if isinstance(system_param, list):
+                for item in system_param:
+                    if isinstance(item, dict) and "text" in item:
+                        item["text"] = _bytes_safe(item["text"])
+            elif isinstance(system_param, str):
+                system_param = _bytes_safe(system_param)
+            user_content = _bytes_safe(user_content)
+        except Exception as e:
+            unicode_errors_only = False
+            err = _ascii_safe(str(e))
+            if "402" in err or "credit" in err.lower() or "billing" in err.lower() or "payment" in err.lower() or "insufficient" in err.lower():
+                log.error("Claude BILLING ERROR — top up at console.anthropic.com: %s", err[:200])
+                _provider_last_error["claude"] = f"BILLING: {err[:200]}"
+                return None  # Billing: don't retry, don't trip circuit breaker
+            last_err = f"{type(e).__name__}: {err}"
+            log.warning("Claude API attempt %d/3 failed [%s]: %s", attempt + 1, type(e).__name__, err[:200])
+
+    # If ALL failures were Unicode encoding errors, it's a content/key issue — not
+    # an API availability problem. Don't trip the circuit breaker.
+    if unicode_errors_only:
+        log.error(
+            "Claude call failed with UnicodeEncodeError on all 3 attempts. "
+            "Check ANTHROPIC_API_KEY in Render env vars for non-ASCII characters "
+            "(Cyrillic В looks identical to Latin B but breaks ASCII header encoding)."
         )
-        _record_success("claude")
-        return msg.content[0].text
-    except Exception as e:
-        err = str(e)
-        tb = traceback.format_exc()
-        log.warning("Claude API error [%s]: %s\nTraceback:\n%s", type(e).__name__, err[:300], tb)
-        _record_failure("claude", f"{type(e).__name__}: {err}")
         return None
+
+    # Real API failures — count against circuit breaker
+    log.warning("Claude API error after 3 attempts: %s", last_err[:300])
+    _record_failure("claude", last_err)
+    return None
 
 
 _CLAUDE_UNAVAILABLE = (
-    "LLM unavailable — Claude is temporarily offline, please try again in a few minutes. "
-    "(Check ANTHROPIC_API_KEY if this persists.)"
+    "LLM unavailable — Claude is temporarily offline. "
+    "Check /api/debug/llm for last_error details, or POST /api/debug/llm/reset to clear the circuit breaker."
 )
 
 
 def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int | None = None) -> str:
     """Send prompt to LLM with call-type-specific token budget and tier routing.
 
-    Claude tier (all user-visible outputs — no silent fallback):
-        If Claude is unavailable, returns a clear operator-facing message
-        rather than silently substituting a weaker model.
+    Primary tier (operator-visible outputs):
+        OpenAI GPT-4o-mini → Claude fallback → error message.
 
-    Groq tier (background/internal only):
-        Groq → Claude fallback → static error string.
+    Background tier (high-volume internal tasks):
+        Groq → OpenAI → Claude → static error string.
 
     Always returns a string.
     """
@@ -348,31 +507,31 @@ def ask_llm(system: str, prompt: str, call_type: str = "chat", max_tokens: int |
         max_tokens = CALL_PROFILES.get(call_type, CALL_PROFILES["chat"])["max_tokens"]
 
     if call_type in CLAUDE_TIER:
-        result = _call_claude(system, prompt, max_tokens=max_tokens)
+        result = _call_openai(system, prompt, max_tokens=max_tokens)
         if result:
-            log.debug("ask_llm [%s] → claude", call_type)
+            log.debug("ask_llm [%s] → openai", call_type)
             return result
-        log.warning("ask_llm [%s]: Claude unavailable (circuit open or API error)", call_type)
-        return _CLAUDE_UNAVAILABLE
+        log.warning("ask_llm [%s]: OpenAI unavailable", call_type)
+        return "LLM unavailable — check OPENAI_API_KEY on Render, or visit /api/debug/llm for details."
 
     if call_type in GROQ_TIER:
         result = _call_groq(system, prompt, max_tokens=max_tokens)
         if result:
             log.debug("ask_llm [%s] → groq", call_type)
             return result
-        result = _call_claude(system, prompt, max_tokens=max_tokens)
+        result = _call_openai(system, prompt, max_tokens=max_tokens)
         if result:
-            log.debug("ask_llm [%s] → claude (groq unavailable)", call_type)
+            log.debug("ask_llm [%s] → openai (groq unavailable)", call_type)
             return result
         log.error("ask_llm [%s]: all providers failed", call_type)
-        return "(LLM unavailable — add ANTHROPIC_API_KEY and GROQ_API_KEY to Render)"
+        return "(LLM unavailable — add OPENAI_API_KEY or GROQ_API_KEY to Render)"
 
-    # Unknown call_type — treat as Claude tier (safe default)
-    log.warning("ask_llm: unknown call_type '%s', routing to Claude", call_type)
-    result = _call_claude(system, prompt, max_tokens=max_tokens)
+    # Unknown call_type — route to OpenAI
+    log.warning("ask_llm: unknown call_type '%s', routing to OpenAI", call_type)
+    result = _call_openai(system, prompt, max_tokens=max_tokens)
     if result:
         return result
-    return _CLAUDE_UNAVAILABLE
+    return "LLM unavailable — check OPENAI_API_KEY on Render."
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +742,22 @@ def _build_live_context() -> str:
             lines.append(f"Drawdown from peak: {drawdown:+.2f}%")
         if recent_total:
             lines.append(f"Recent win rate (last {recent_total}): {win_rate}%")
+
+        # Inject accumulated system memory (distilled by memory agent, updated daily)
+        try:
+            raw_memory = get_setting("system_memory")
+            if raw_memory:
+                memory_data = json.loads(raw_memory)
+                memory_content = memory_data.get("content", "")
+                memory_date = memory_data.get("generated_at", "")[:10]
+                if memory_content:
+                    lines.append(
+                        f"\n--- Accumulated System Memory (as of {memory_date}) ---\n"
+                        + memory_content
+                    )
+        except Exception:
+            pass
+
         return "\n".join(lines)
     except Exception:
         return "(live context unavailable)"

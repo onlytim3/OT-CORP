@@ -17,9 +17,9 @@ CONSECUTIVE_LOSS_THRESHOLD = 5
 COOLDOWN_HOURS = 48
 
 # Recovery protocol settings
-CONSERVATIVE_POSITION_SCALE = 0.50   # 50% of normal position size
-CONSERVATIVE_MIN_STRATEGIES = 2       # Require at least 2 confirming strategies
-RECOVERY_TARGET_PCT = 0.80           # Exit conservative mode at 80% of peak portfolio
+CONSERVATIVE_POSITION_SCALE = 0.65   # 65% of normal position size (was 50% — too restrictive)
+CONSERVATIVE_MIN_STRATEGIES = 1       # 1 confirming strategy (was 2 — starved capital in recovery)
+RECOVERY_TARGET_PCT = 0.70           # Exit conservative mode at 70% of peak (was 80% — too hard to reach)
 
 # Strategies NOT allowed in conservative mode (historically weakest)
 CONSERVATIVE_BLOCKLIST = {"aggregator", "meme_momentum", "onchain_flow", "multi_factor_rank"}

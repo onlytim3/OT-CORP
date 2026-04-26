@@ -101,14 +101,36 @@ def calculate_sharpe_from_daily_pnl(days: int = 30) -> float:
 
 
 def metrics_by_strategy(trades: list[dict]) -> dict[str, dict]:
-    """Break down metrics by strategy."""
-    by_strategy = {}
+    """Break down metrics by strategy, enriched with actual slippage from fill_quality."""
+    by_strategy: dict = {}
     for trade in trades:
         strategy = trade.get("strategy", "unknown")
         if strategy not in by_strategy:
             by_strategy[strategy] = []
         by_strategy[strategy].append(trade)
-    return {name: calculate_metrics(trades) for name, trades in by_strategy.items()}
+    result = {name: calculate_metrics(strat_trades) for name, strat_trades in by_strategy.items()}
+
+    # Enrich with avg slippage from fill_quality table
+    try:
+        from trading.db.store import get_read_db
+        with get_read_db() as conn:
+            for strategy_name, metrics in result.items():
+                symbols = list({t.get("symbol", "") for t in by_strategy.get(strategy_name, []) if t.get("symbol")})
+                if not symbols:
+                    continue
+                placeholders = ",".join("?" * len(symbols))
+                row = conn.execute(
+                    f"SELECT AVG(slippage_bps) as avg_slip, COUNT(*) as fills "
+                    f"FROM fill_quality WHERE symbol IN ({placeholders})",
+                    symbols,
+                ).fetchone()
+                if row and row["fills"] > 0:
+                    metrics["avg_slippage_bps"] = round(row["avg_slip"], 1)
+                    metrics["fill_count"] = row["fills"]
+    except Exception:
+        pass
+
+    return result
 
 
 def generate_review(period: str = "weekly") -> str:

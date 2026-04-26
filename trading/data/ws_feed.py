@@ -25,9 +25,10 @@ def get_realtime_price(symbol: str) -> Optional[float]:
         return entry["price"]
     # Fallback to REST
     try:
-        from trading.execution.aster_client import get_aster_mark_price
+        from trading.execution.aster_client import get_aster_mark_prices
 
-        price = get_aster_mark_price(symbol)
+        data = get_aster_mark_prices(symbol)
+        price = data.get("markPrice") if isinstance(data, dict) else None
         if price:
             _price_cache[symbol] = {"price": float(price), "updated": time.time()}
             return float(price)

@@ -55,12 +55,12 @@ class RecommendationGuardrail:
         neg = pattern["negative"]
         total = pos + neg
         
-        if total < 3:  # Need at least 3 samples to judge
+        if total < 5:  # Need at least 5 samples to judge (was 3 — too easy to blacklist)
             return None
-            
+
         return pos / total
 
-    def should_allow(self, from_agent, category, action, threshold=0.3):
+    def should_allow(self, from_agent, category, action, threshold=0.2):
         """Determine if a recommendation should be allowed to auto-execute.
         
         If the success rate for this pattern is below the threshold, returns False.
@@ -82,7 +82,7 @@ class RecommendationGuardrail:
         for key, pattern in self.stats.items():
             pos, neg = pattern["positive"], pattern["negative"]
             total = pos + neg
-            if total >= 3 and (pos / total) < 0.3:
+            if total >= 5 and (pos / total) < 0.2:
                 blacklist.append({
                     "pattern": key,
                     "success_rate": round(pos / total, 3),

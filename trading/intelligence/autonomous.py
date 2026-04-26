@@ -58,20 +58,20 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_THRESHOLDS = {
-    "auto_disable_win_rate": 0.20,       # Disable strategy if win rate below this (was 0.25)
-    "auto_disable_min_trades": 30,       # Minimum trades before auto-disabling (was 20 — need more data)
-    "auto_disable_max_loss_pct": -0.20,  # Disable if total loss > this % of capital (was -0.15)
-    "drawdown_tighten_threshold": 0.12,  # Tighten risk at this drawdown (was 0.10)
-    "drawdown_halt_threshold": 0.22,     # Emergency halt at this drawdown (was 0.18)
-    "backtest_adopt_win_rate": 0.60,     # Auto-enable if win rate >= this
-    "backtest_adopt_sharpe": 0.3,        # Minimum Sharpe to adopt
-    "backtest_adopt_max_dd": 0.20,       # Max drawdown to still adopt
-    "backtest_discard_win_rate": 0.30,   # Discard if win rate < this
-    "backtest_discard_max_dd": 0.30,     # Discard if drawdown > this
-    "concentration_max_pct": 0.25,       # Trim budget when position > this
-    "event_risk_sizing_mult": 0.6,       # Reduce sizing during event risk
-    "recovery_buffer_pct": 0.05,         # Drawdown must drop this far below halt to start recovery
-    "recovery_max_strategies_per_cycle": 2,  # Max strategies to re-enable per recovery cycle
+    "auto_disable_win_rate": 0.18,       # Disable strategy if win rate below this (was 0.20)
+    "auto_disable_min_trades": 35,       # Minimum trades before auto-disabling (was 30 — more data = less false positives)
+    "auto_disable_max_loss_pct": -0.25,  # Disable if total loss > this % of capital (was -0.20)
+    "drawdown_tighten_threshold": 0.14,  # Tighten risk at this drawdown (was 0.12)
+    "drawdown_halt_threshold": 0.25,     # Emergency halt at this drawdown (was 0.22)
+    "backtest_adopt_win_rate": 0.45,     # Auto-enable if win rate >= this (was 0.60 — too high a bar)
+    "backtest_adopt_sharpe": 0.15,       # Minimum Sharpe to adopt (was 0.3)
+    "backtest_adopt_max_dd": 0.30,       # Max drawdown to still adopt (was 0.20)
+    "backtest_discard_win_rate": 0.20,   # Discard if win rate < this (was 0.30)
+    "backtest_discard_max_dd": 0.40,     # Discard if drawdown > this (was 0.30)
+    "concentration_max_pct": 0.30,       # Trim budget when position > this (was 0.25)
+    "event_risk_sizing_mult": 0.7,       # Reduce sizing during event risk (was 0.6)
+    "recovery_buffer_pct": 0.03,         # Drawdown must drop this far below halt to start recovery (was 0.05)
+    "recovery_max_strategies_per_cycle": 5,  # Max strategies to re-enable per recovery cycle (was 2)
 }
 
 _THRESHOLD_BOUNDS = {
@@ -288,7 +288,7 @@ REALLOCATION_INTERVAL_HOURS = 24    # Rebalance allocations daily
 PERFORMANCE_REVIEW_TRADES = 50      # Look at last 50 trades per strategy
 BACKTEST_MIN_TRADES = 5              # Need at least 5 trades to judge
 BACKTEST_LOOKBACK_DAYS = 365         # Test against past year of data
-BACKTEST_COOLDOWN_DAYS = 7           # Don't re-test within 7 days
+BACKTEST_COOLDOWN_DAYS = 2           # Don't re-test within 2 days (was 7 — kept strategies stuck too long)
 BACKTEST_MAX_PER_CYCLE = 3           # Max backtests per autonomous cycle
 VERIFY_LOOKBACK_HOURS = 6            # Check actions from last N hours
 MAX_FOLLOWUP_ESCALATIONS = 3         # Re-raise failed action up to N times
@@ -303,6 +303,7 @@ BACKTEST_AGENT = "backtest_agent"
 EXECUTOR_AGENT = "executor_agent"
 POSITION_REVIEW_AGENT = "position_review_agent"
 RECOVERY_AGENT = "recovery_agent"
+MEMORY_AGENT = "memory_agent"
 
 # Position review thresholds
 POSITION_REVIEW_INTERVAL_HOURS = 12   # How often we review open positions
@@ -1176,6 +1177,202 @@ def _learning_agent_think() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Memory Agent — distils accumulated knowledge into a persistent brain memory
+# ---------------------------------------------------------------------------
+
+_MEMORY_DISTILL_INTERVAL_HOURS = 24
+_DB_KEY_SYSTEM_MEMORY = "system_memory"
+_DB_KEY_LAST_MEMORY_RUN = "last_memory_distillation"
+
+
+def _collect_memory_data() -> str:
+    """Gather all system data into a formatted block for memory distillation."""
+    sections = []
+
+    # 1. Portfolio trajectory
+    try:
+        pnl_data = get_daily_pnl(limit=90)
+        if pnl_data:
+            peak = max(r["portfolio_value"] for r in pnl_data)
+            current = pnl_data[0]["portfolio_value"]
+            week_pnl = sum(r.get("daily_pnl", 0) or 0 for r in pnl_data[:7])
+            dd = (current - peak) / peak * 100 if peak > 0 else 0
+            sections.append(
+                f"PORTFOLIO (90 days):\n"
+                f"  Current: ${current:,.2f} | Peak: ${peak:,.2f} | Drawdown: {dd:+.1f}%\n"
+                f"  Last 7 days P&L: ${week_pnl:+,.2f}"
+            )
+    except Exception:
+        pass
+
+    # 2. Strategy performance breakdown
+    try:
+        all_trades = get_trades(limit=500)
+        closed = [t for t in all_trades if t.get("status") == "closed" and t.get("pnl") is not None]
+        by_strat: dict[str, list] = {}
+        for t in closed:
+            by_strat.setdefault(t.get("strategy", "unknown"), []).append(t)
+        strat_lines = []
+        for strat, trades in sorted(by_strat.items(), key=lambda x: sum(t.get("pnl", 0) for t in x[1]), reverse=True):
+            wins = sum(1 for t in trades if t.get("pnl", 0) > 0)
+            total_pnl = sum(t.get("pnl", 0) for t in trades)
+            wr = wins / len(trades) * 100 if trades else 0
+            strat_lines.append(f"  {strat}: {len(trades)} trades, {wr:.0f}% WR, ${total_pnl:+.2f} P&L")
+        if strat_lines:
+            sections.append("STRATEGY PERFORMANCE (closed trades):\n" + "\n".join(strat_lines[:15]))
+    except Exception:
+        pass
+
+    # 3. Recent journal entries
+    try:
+        journals = get_journal(limit=14)
+        if journals:
+            lines = "\n".join(
+                f"  [{j.get('timestamp', '')[:10]}] {str(j.get('content', ''))[:300]}"
+                for j in journals[:10]
+            )
+            sections.append(f"RECENT JOURNAL ENTRIES:\n{lines}")
+    except Exception:
+        pass
+
+    # 4. Significant system events
+    try:
+        events = get_action_log(limit=100)
+        _sig_actions = {
+            "emergency_halt", "strategy_disabled", "strategy_enabled",
+            "drawdown_halt", "trading_resumed", "recovery_mode_activated",
+            "full_reset", "auto_disable", "tighten_risk", "revert_risk",
+            "force_graduate", "strategy_rehabilitated",
+        }
+        significant = [e for e in events if e.get("action") in _sig_actions][:20]
+        if significant:
+            lines = "\n".join(
+                f"  [{e.get('timestamp', '')[:16]}] {e.get('action')}: {str(e.get('details', ''))[:200]}"
+                for e in significant
+            )
+            sections.append(f"KEY SYSTEM EVENTS (recent):\n{lines}")
+    except Exception:
+        pass
+
+    # 5. Agent recommendation outcomes
+    try:
+        history = get_recommendation_history(limit=50)
+        resolved = [r for r in history if r.get("resolution") in ("applied", "rejected")]
+        applied = [r for r in resolved if r.get("resolution") == "applied"]
+        successful = [r for r in applied if r.get("outcome") == "positive"]
+        if resolved:
+            success_pct = len(successful) / len(applied) * 100 if applied else 0
+            sections.append(
+                f"AGENT RECOMMENDATION OUTCOMES ({len(resolved)} resolved):\n"
+                f"  Applied: {len(applied)} | Successful: {len(successful)} ({success_pct:.0f}%)\n"
+                f"  Rejected: {len(resolved) - len(applied)}"
+            )
+    except Exception:
+        pass
+
+    # 6. Threshold adjustments vs defaults
+    try:
+        if _threshold_overrides:
+            lines = [
+                f"  {k}: {v} (default: {_DEFAULT_THRESHOLDS.get(k, '?')})"
+                for k, v in _threshold_overrides.items()
+            ]
+            sections.append("AUTONOMOUS THRESHOLD ADJUSTMENTS:\n" + "\n".join(lines))
+    except Exception:
+        pass
+
+    return "\n\n".join(sections)
+
+
+def _memory_agent_think() -> list[dict]:
+    """Distil all accumulated system data into a persistent memory block.
+
+    Runs at most once per 24 hours. Reads journals, trade outcomes, action logs,
+    and agent recommendation history, then asks Claude to compress everything into
+    a structured ~600-word 'system memory' that is injected into every future
+    Claude prompt — making the brain progressively smarter over time.
+    """
+    # Rate-limit: max once per day
+    try:
+        last_run = get_setting(_DB_KEY_LAST_MEMORY_RUN)
+        if last_run:
+            last_dt = datetime.fromisoformat(last_run)
+            hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+            if hours_since < _MEMORY_DISTILL_INTERVAL_HOURS:
+                log.debug("Memory agent: skipping (last run %.1fh ago)", hours_since)
+                return []
+    except Exception:
+        pass
+
+    log.info("Memory agent: starting knowledge distillation")
+
+    data_sections = _collect_memory_data()
+    if not data_sections:
+        log.warning("Memory agent: no data to distil")
+        return []
+
+    try:
+        from trading.llm.engine import ask_llm
+        synthesis_prompt = f"""You are the memory system of an autonomous trading AI. Analyse all the data below and write a SYSTEM MEMORY document — a dense, factual summary of what this trading system has learned.
+
+This memory will be injected into every future AI response to make reasoning progressively better.
+
+=== SYSTEM DATA ===
+{data_sections}
+
+=== OUTPUT FORMAT ===
+Write exactly these 5 sections. Be specific: use strategy names, percentages, dates, $ amounts. No vague statements.
+
+**WHAT'S WORKING**
+(3-5 bullets: which strategies and conditions are generating consistent profits)
+
+**WHAT'S NOT WORKING**
+(3-5 bullets: which strategies/conditions lose money, patterns to avoid)
+
+**KEY PATTERNS DISCOVERED**
+(3-5 bullets: regime correlations, timing windows, volume signals, repeatable edges)
+
+**RISK LESSONS**
+(2-4 bullets: what triggered halts/drawdowns, warning signs, what to watch)
+
+**CURRENT FOCUS**
+(2-3 bullets: what the system should prioritise this week based on recent trajectory)
+
+Keep total output under 650 words. Every statement must be grounded in the data above."""
+
+        memory = ask_llm(
+            "You are the persistent memory layer of an autonomous trading system. Synthesise raw operational data into actionable knowledge.",
+            synthesis_prompt,
+            call_type="agent_synthesis",
+        )
+
+        if not memory or "LLM unavailable" in memory:
+            log.warning("Memory agent: LLM unavailable — skipping distillation this cycle")
+            return []
+
+        memory_record = json.dumps({
+            "content": memory,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "data_window_days": 90,
+        })
+        set_setting(_DB_KEY_SYSTEM_MEMORY, memory_record)
+        set_setting(_DB_KEY_LAST_MEMORY_RUN, datetime.now(timezone.utc).isoformat())
+
+        log_action(
+            "memory_agent", "memory_distilled",
+            details=f"System memory updated ({len(memory)} chars, 90-day data window)",
+            result="success",
+        )
+        log.info("Memory agent: distillation complete (%d chars)", len(memory))
+
+    except Exception as e:
+        log.error("Memory agent: synthesis failed: %s", e)
+
+    # Writes directly to DB — no executor recommendations needed
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Backtest Agent — validates strategies against historical data before adopt
 # ---------------------------------------------------------------------------
 
@@ -1587,72 +1784,6 @@ def _evaluate_outcomes():
                 # Informational — always positive if it was recorded
                 outcome = "positive"
 
-            # --- Additional handlers to close remaining outcome gaps ---
-
-            elif action in ("gradual_recovery", "recovery_fallback"):
-                # Positive if at least some strategies are now enabled
-                enabled = sum(1 for v in STRATEGY_ENABLED.values() if v)
-                total = len(STRATEGY_ENABLED)
-                outcome = "positive" if enabled > 0 else "negative"
-
-            elif action == "revert_risk":
-                # Positive if drawdown stayed below tighten threshold after revert
-                outcome = "positive" if current_drawdown < get_threshold("drawdown_tighten_threshold") else "negative"
-
-            elif action in ("force_graduate", "relax_confluence"):
-                # Positive if portfolio drawdown has not worsened since graduating
-                outcome = "positive" if current_drawdown < get_threshold("drawdown_halt_threshold") else "negative"
-
-            elif action == "rehabilitate_strategy":
-                # Positive if the rehabilitated strategy has had any positive trades since
-                strat_trades = [t for t in trades if t.get("strategy") == target
-                                and t.get("timestamp", "") > rec.get("resolved_at", "")]
-                if strat_trades:
-                    strat_pnl = sum(t.get("pnl", 0) or 0 for t in strat_trades)
-                    outcome = "positive" if strat_pnl >= 0 else "negative"
-                else:
-                    outcome = "positive"  # No trades yet — strategy re-enabled, no harm done
-
-            elif action == "backtest_discard":
-                # Positive if the discarded strategy is still disabled (action stuck)
-                is_disabled = not STRATEGY_ENABLED.get(target, True)
-                outcome = "positive" if is_disabled else "negative"
-
-            elif action in ("volume_pattern", "re_evaluate_disabled",
-                            "coverage_gap", "research_finding"):
-                # Informational findings — always positive (they were recorded)
-                outcome = "positive"
-
-            elif action in ("dissent", "confirm"):
-                # Challenger agent peer review — always positive (audit trail)
-                outcome = "positive"
-
-            elif action == "memory_distilled":
-                # Memory agent ran — always positive
-                outcome = "positive"
-
-            elif action in ("thompson_budget", "adjust_budget"):
-                # Thompson budget allocation — verify the budget value matches
-                try:
-                    from trading.risk.portfolio import STRATEGY_BUDGETS
-                    expected_budget = data.get("new_budget") or data.get("budget_multiplier")
-                    actual_budget = STRATEGY_BUDGETS.get(target)
-                    if expected_budget and actual_budget:
-                        outcome = "positive" if abs(actual_budget - float(expected_budget)) < 0.01 else "negative"
-                    else:
-                        outcome = "positive"
-                except Exception:
-                    outcome = "positive"
-
-            elif action == "implement_strategy":
-                # Already handled above in the implement_strategy/coverage_gap block
-                pass
-
-            else:
-                # Catch-all: any unhandled action type → neutral (informational)
-                # This ensures no recommendation remains with outcome=NULL indefinitely
-                outcome = "neutral"
-
             if outcome:
                 update_recommendation_outcome(rec["id"], outcome)
                 log.debug("OUTCOME: rec #%d (%s on %s) → %s", rec["id"], action, target, outcome)
@@ -1922,10 +2053,14 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                 if enabled_count:
                     result = f"Recovery: re-enabled {enabled_count} strategies: {', '.join(recovery_details)}"
                 else:
-                    # No passing backtests — queue all disabled strategies for re-evaluation
-                    # so the backtest agent can clear them for re-enablement next cycle
+                    # No backtest-approved strategies — queue for re-evaluation AND
+                    # immediately re-enable up to max_per_cycle strategies anyway so
+                    # the system is not stuck idle waiting for 7-day backtest cooldowns.
+                    # Priority: strategies with any backtest result (inconclusive/stale)
+                    # before completely untested ones.
                     disabled_strats = [s for s, v in STRATEGY_ENABLED.items() if not v]
                     queued = 0
+                    fallback_enabled = []
                     for strat in disabled_strats:
                         try:
                             insert_backtest_result(
@@ -1936,9 +2071,29 @@ def _execute_safe_recommendations(recommendations: list[dict]) -> list[dict]:
                             queued += 1
                         except Exception:
                             pass
+
+                    # Fallback: re-enable up to max_per_cycle strategies without backtest gate
+                    for strat in sorted(disabled_strats):
+                        if len(fallback_enabled) >= max_per_cycle:
+                            break
+                        from trading.strategy.circuit_breaker import check_circuit_breaker
+                        if check_circuit_breaker(strat):
+                            continue  # Skip strategies still in 48h circuit-breaker cooldown
+                        STRATEGY_ENABLED[strat] = True
+                        try:
+                            set_setting(f"strategy_override_{strat}", "enabled")
+                        except Exception:
+                            pass
+                        fallback_enabled.append(strat)
+                        log.warning(
+                            "RECOVERY FALLBACK: Re-enabled '%s' without backtest gate "
+                            "(no approved strategies available)", strat
+                        )
+
                     result = (
-                        f"Recovery stalled: no backtest-approved strategies available. "
-                        f"Queued {queued} strategies for re-evaluation."
+                        f"Recovery fallback: re-enabled {len(fallback_enabled)} strategies "
+                        f"({', '.join(fallback_enabled) or 'none — all in circuit breaker'}). "
+                        f"Queued {queued} strategies for backtest re-evaluation."
                     )
                 log.warning("GRADUAL RECOVERY: %s", result)
                 insert_knowledge(
@@ -3042,6 +3197,7 @@ def run_autonomous_cycle() -> dict:
         ("news_interpretation", _news_agent_think),
         ("signal_filter", _signal_filter_agent_think),
         ("recovery", _recovery_agent_think),
+        ("memory", _memory_agent_think),
     ]
 
     for agent_name, think_fn in agents:

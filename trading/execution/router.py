@@ -66,12 +66,13 @@ def _to_aster(symbol: str) -> str:
     if symbol in _ALPACA_TO_ASTER:
         return _ALPACA_TO_ASTER[symbol]
 
-    # It should already be AsterDex format from the strategies
+    # Normalise any slash-separated format (e.g. "BNB/USD", "ETH/USDT") → "BNBUSDT"
     aster = symbol
-    if not aster.endswith("USDT") and not aster.endswith("USD"):
-        # Just in case some legacy signals slip through
-        base = symbol.replace("/USD", "").replace("/", "")
+    if "/" in aster:
+        base = aster.split("/")[0]
         aster = f"{base}USDT"
+    elif not aster.endswith("USDT"):
+        aster = f"{aster}USDT"
 
     # Warn if converted symbol is not in the validated set
     if _VALID_ASTER_SYMBOLS and aster not in _VALID_ASTER_SYMBOLS:
@@ -676,6 +677,28 @@ def submit_order(
             "aster_order_id": result.get("orderId"),
             "aster_symbol": aster_sym,
         }
+
+        # Record actual fill quality using exchange trade data
+        try:
+            mid_price_now = mid if "mid" in dir() else mark_price
+            if mid_price_now and mid_price_now > 0 and alpaca_status in ("filled", "accepted", "partially_filled"):
+                from trading.execution.aster_client import aster_get_trades as _aget_trades
+                from trading.db.store import insert_fill_quality
+                _fills = _aget_trades(symbol=aster_sym, limit=3)
+                if _fills:
+                    _f = _fills[0]
+                    _actual = float(_f.get("price", 0))
+                    if _actual > 0:
+                        _slip = abs(_actual - mid_price_now) / mid_price_now * 10_000
+                        insert_fill_quality(
+                            symbol=symbol, side=side,
+                            mid_price=mid_price_now, fill_price=_actual,
+                            slippage_bps=_slip,
+                            notional=_actual * float(_f.get("qty", qty or 0)),
+                        )
+                        log.debug("Fill quality recorded: %s slippage=%.1f bps", symbol, _slip)
+        except Exception as _fqe:
+            log.debug("Fill quality recording skipped: %s", _fqe)
 
         # Submit server-side stop-loss if provided
         if stop_loss_price and stop_loss_price > 0:

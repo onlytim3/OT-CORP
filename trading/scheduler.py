@@ -298,6 +298,38 @@ def run_trading_cycle():
             console.print(f"[yellow]Sync warning: {e}[/yellow]")
 
         # ---------------------------------------------------------------
+        # Phase 1.5a: Sync exchange income (realized P&L, funding fees, commissions)
+        # ---------------------------------------------------------------
+        try:
+            from trading.execution.aster_client import aster_get_income
+            from trading.db.store import insert_income_batch
+            for _itype in ("REALIZED_PNL", "FUNDING_FEE", "COMMISSION"):
+                _rows = aster_get_income(income_type=_itype, limit=100)
+                if _rows:
+                    _n = insert_income_batch(_rows)
+                    if _n:
+                        log.info("Income sync: %d new %s records", _n, _itype)
+        except Exception as _ie:
+            log.debug("Income sync skipped: %s", _ie)
+
+        # Phase 1.5b: Stale-order cleanup
+        try:
+            from trading.db.store import get_stale_pending_trades, update_trade_status
+            from trading.execution.aster_client import aster_get_open_orders
+            _stale = get_stale_pending_trades(max_age_minutes=15)
+            if _stale:
+                _open = {str(o["orderId"]): o for o in (aster_get_open_orders() or [])}
+                for _t in _stale:
+                    _oid = str(_t.get("alpaca_order_id", ""))
+                    if _oid and _oid not in _open:
+                        update_trade_status(_t["id"], "cancelled")
+                        log.info("Stale order %s gone from exchange — marked cancelled", _oid)
+                    elif _oid and _oid in _open:
+                        log.warning("Order %s still pending on exchange after 15min", _oid)
+        except Exception as _soe:
+            log.debug("Stale-order cleanup skipped: %s", _soe)
+
+        # ---------------------------------------------------------------
         # Phase 1.5: Market Intelligence Briefing
         # ---------------------------------------------------------------
         briefing = None
@@ -357,6 +389,19 @@ def run_trading_cycle():
                 console.print(f"\n[dim]-> {strategy.name} (skipped: regime '{current_regime}' not in {regime_reqs})[/dim]")
                 log.debug("Skipping %s: regime %s not in %s", strategy.name, current_regime, regime_reqs)
                 continue
+
+            # Learned regime restriction (written by Journal Agent)
+            import json as _json
+            learned_raw = get_setting(f"strategy_regime_learned_{strategy.name}")
+            if learned_raw and current_regime:
+                try:
+                    allowed_regimes = _json.loads(learned_raw)
+                    if current_regime not in allowed_regimes:
+                        console.print(f"\n[dim]-> {strategy.name} (skipped: learned regime block, allowed={allowed_regimes})[/dim]")
+                        log.debug("Skipping %s: learned regime block %s not in %s", strategy.name, current_regime, allowed_regimes)
+                        continue
+                except Exception:
+                    pass
 
             console.print(f"\n[cyan]-> {strategy.name}[/cyan]")
             try:
@@ -772,6 +817,7 @@ def run_trading_cycle():
                     take_profit_price=take_profit_price,
                     leverage=lev,
                     entry_reasoning=enriched_reasoning,
+                    regime=get_setting("current_regime"),
                 )
                 create_journal_entry(trade_id, signal, ctx, narration=narration)
                 executed_count += 1
@@ -1341,6 +1387,11 @@ def check_stop_losses():
                     close_matching_entry_trades(symbol, exit_price, action["qty"], exit_side=exit_side)
                 except Exception as cmt_err:
                     log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                try:
+                    from trading.execution.router import _paper_close_position
+                    _paper_close_position(symbol)
+                except Exception as pcp_err:
+                    log.warning("_paper_close_position failed for %s: %s", symbol, pcp_err)
                 log_action("trade", f"{action['action']}_{exit_side}", symbol=symbol, result=order["status"])
                 tracker.remove(symbol)
                 try:
@@ -1411,6 +1462,11 @@ def check_stop_losses():
                         close_matching_entry_trades(symbol, sl_price, pos["qty"], exit_side=exit_side)
                     except Exception as cmt_err:
                         log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                    try:
+                        from trading.execution.router import _paper_close_position
+                        _paper_close_position(symbol)
+                    except Exception as pcp_err:
+                        log.warning("_paper_close_position failed for %s: %s", symbol, pcp_err)
                     log_action("trade", f"stop_loss_{exit_side}", symbol=symbol, result=order["status"])
                     tracker.remove(symbol)
                     try:
@@ -1455,6 +1511,11 @@ def check_stop_losses():
                             try:
                                 from trading.db.store import close_matching_entry_trades
                                 close_matching_entry_trades(symbol, exit_price, alert["qty"], exit_side=exit_side)
+                            except Exception:
+                                pass
+                            try:
+                                from trading.execution.router import _paper_close_position
+                                _paper_close_position(symbol)
                             except Exception:
                                 pass
                             log_action("trade", "passive_loss_closed", symbol=symbol, result=order["status"])
@@ -1550,6 +1611,11 @@ def check_stop_losses():
                         close_matching_entry_trades(symbol, vol_exit_price, pos["qty"], exit_side=exit_side)
                     except Exception as cmt_err:
                         log.warning("close_matching_entry_trades failed for %s: %s", symbol, cmt_err)
+                    try:
+                        from trading.execution.router import _paper_close_position
+                        _paper_close_position(symbol)
+                    except Exception as pcp_err:
+                        log.warning("_paper_close_position failed for %s: %s", symbol, pcp_err)
                     log_action("trade", f"volume_exit_{exit_side}", symbol=symbol, result=order["status"])
                     try:
                         from trading.monitor.notifications import notify_volume_exit

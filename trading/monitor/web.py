@@ -417,18 +417,18 @@ def _add_position_ages(positions: list) -> list:
                 variants = symbol_variants(sym)
                 placeholders = ",".join("?" for _ in variants)
 
-                # Try 1: earliest open buy trade (not closed)
+                # Try 1: most recent open buy trade (not closed)
                 row = conn.execute(
-                    f"SELECT MIN(timestamp) as opened FROM trades "
+                    f"SELECT MAX(timestamp) as opened FROM trades "
                     f"WHERE symbol IN ({placeholders}) AND side='buy' "
                     f"AND (status IS NULL OR status != 'closed') AND closed_at IS NULL",
                     variants,
                 ).fetchone()
 
-                # Try 2: fall back to earliest unclosed buy trade
+                # Try 2: fall back to most recent unclosed buy trade
                 if not row or not row["opened"]:
                     row = conn.execute(
-                        f"SELECT MIN(timestamp) as opened FROM trades "
+                        f"SELECT MAX(timestamp) as opened FROM trades "
                         f"WHERE symbol IN ({placeholders}) AND side='buy' AND closed_at IS NULL",
                         variants,
                     ).fetchone()
@@ -655,6 +655,34 @@ def api_actions():
     return jsonify(actions[offset:])
 
 
+@app.route("/api/income")
+def api_income():
+    from trading.db.store import get_income_summary
+    summary = get_income_summary(days=30)
+    recent = []
+    try:
+        from trading.execution.aster_client import aster_get_income
+        recent = aster_get_income(limit=20) or []
+    except Exception as e:
+        log.debug("aster_get_income failed: %s", e)
+    return jsonify({"summary": summary, "recent": recent, "days": 30})
+
+
+@app.route("/api/pending-orders")
+def api_pending_orders():
+    from trading.db.store import get_stale_pending_trades
+    try:
+        from trading.execution.aster_client import aster_get_open_orders
+        live = aster_get_open_orders() or []
+    except Exception as e:
+        return jsonify({"error": str(e), "orders": [], "stale_count": 0})
+    stale = get_stale_pending_trades(max_age_minutes=15)
+    stale_ids = {str(t.get("alpaca_order_id", "")) for t in stale}
+    for o in live:
+        o["stale"] = str(o.get("orderId", "")) in stale_ids
+    return jsonify({"orders": live, "stale_count": len(stale)})
+
+
 @app.route("/api/trades")
 def api_trades():
     trades = get_trades(limit=50)
@@ -818,7 +846,7 @@ def api_position_detail(symbol):
     sl_pct = ((avg_cost - stop_loss_price) / avg_cost * 100) if avg_cost else 0
     tp_pct = ((take_profit_price - avg_cost) / avg_cost * 100) if avg_cost else 0
 
-    leverage = LEVERAGE_FACTORS.get(pos["symbol"], 1.0)
+    leverage = (latest_buy or {}).get("leverage") or 1
 
     # Find correlation group
     # Resolved symbol variants for mapping
@@ -1728,7 +1756,7 @@ def api_llm_status():
         return jsonify({"error": "LLM module not installed", "any_available": False})
 
 
-@app.route("/api/reset_trading", methods=["POST"])
+@app.route("/api/reset_trading", methods=["GET", "POST"])
 def api_reset_trading():
     """Full reset — clears ALL halt state and re-enables ALL strategies immediately.
 
@@ -1747,7 +1775,7 @@ def api_reset_trading():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/resume_trading", methods=["POST"])
+@app.route("/api/resume_trading", methods=["GET", "POST"])
 def api_resume_trading():
     """Resume trading after an emergency halt in conservative recovery mode.
 
@@ -2094,22 +2122,23 @@ def api_debug_llm():
     import os
     health = get_provider_health()
     configured = {
-        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "openai": bool(os.getenv("OPENAI_API_KEY")),
         "groq":   bool(os.getenv("GROQ_API_KEY")),
+        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
     }
     for name, info in health.items():
         info["key_configured"] = configured.get(name, False)
-    return jsonify({"providers": health, "hint": "POST /api/debug/llm/reset to clear circuit breakers"})
+    return jsonify({"providers": health, "hint": "GET /api/debug/llm/reset to clear circuit breakers"})
 
 
-@app.route("/api/debug/llm/reset", methods=["POST"])
+@app.route("/api/debug/llm/reset", methods=["GET", "POST"])
 def api_debug_llm_reset():
-    """Reset LLM circuit breakers — use when Claude/Groq is healthy but stuck in open state."""
+    """Reset LLM circuit breakers — use when a provider is healthy but stuck in open state."""
     from trading.llm.engine import reset_provider_circuit_breaker
-    providers = request.json.get("providers", ["claude", "groq"]) if request.is_json else ["claude", "groq"]
+    providers = request.json.get("providers", ["openai", "groq", "claude"]) if request.is_json else ["openai", "groq", "claude"]
     reset = []
     for name in providers:
-        if name in ("claude", "groq"):
+        if name in ("openai", "groq", "claude"):
             reset_provider_circuit_breaker(name)
             reset.append(name)
     return jsonify({"reset": reset, "message": f"Circuit breakers cleared for: {', '.join(reset)}"})

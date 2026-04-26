@@ -159,13 +159,12 @@ class MicrostructureCompositeStrategy(Strategy):
 
         for coin_id in self.coins:
             aster_sym = ASTER_SYMBOLS.get(coin_id)
-            aster_sym = ALPACA_SYMBOLS.get(coin_id)
-            if not aster_sym or not aster_sym:
+            if not aster_sym:
                 continue
 
             try:
                 signal = self._evaluate_coin(
-                    coin_id, aster_sym, aster_sym, funding_rates,
+                    coin_id, aster_sym, funding_rates,
                     get_taker_volume_ratio, get_orderbook_imbalance, get_basis_spread,
                     context_data,
                 )

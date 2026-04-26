@@ -102,25 +102,57 @@ def _detect_needs() -> list[dict]:
         if (t.get("pnl") or 0) > 0:
             strat_stats[s]["wins"] += 1
 
-    # Underperforming strategies → disable
+    # Per-regime stats for smarter enable/disable decisions
+    from trading.db.store import get_strategy_regime_stats
+    regime_stats: dict[str, dict] = {}
+    for row in get_strategy_regime_stats(min_trades=8):
+        s, r = row["strategy"], row["regime"]
+        regime_stats.setdefault(s, {})[r] = {
+            "trades": row["trades"],
+            "wins": row["wins"],
+            "win_rate": row["wins"] / row["trades"],
+            "total_pnl": row["total_pnl"],
+        }
+
+    # Underperforming strategies → restrict to good regimes, or fully disable
     for strat, st in strat_stats.items():
         if not STRATEGY_ENABLED.get(strat, False):
             continue  # Already disabled
         if st["count"] < 15:
             continue  # Not enough data
         win_rate = st["wins"] / st["count"]
-        if win_rate < 0.25:
+        is_poor = win_rate < 0.25 or (st["pnl"] < -200 and st["count"] >= 20)
+        if not is_poor:
+            continue
+
+        regime_data = regime_stats.get(strat, {})
+        good_regimes = [
+            r for r, rd in regime_data.items()
+            if rd["win_rate"] >= 0.45 and rd["trades"] >= 8
+        ]
+        bad_regimes = [
+            r for r, rd in regime_data.items()
+            if rd["win_rate"] < 0.30 and rd["trades"] >= 8
+        ]
+
+        if good_regimes and bad_regimes:
+            # Strategy is regime-dependent — restrict instead of disable
+            needs.append({
+                "action": "restrict_to_regimes",
+                "strategy": strat,
+                "allow_regimes": good_regimes,
+                "reason": (
+                    f"Flat win rate {win_rate:.0%} but performs well in {good_regimes} "
+                    f"(poorly in {bad_regimes})"
+                ),
+                "priority": "high",
+            })
+        else:
+            # Uniformly bad across all regimes — full disable
             needs.append({
                 "action": "disable_strategy",
                 "strategy": strat,
                 "reason": f"Win rate {win_rate:.0%} over {st['count']} trades (threshold: 25%)",
-                "priority": "high",
-            })
-        elif st["pnl"] < -200 and st["count"] >= 20:
-            needs.append({
-                "action": "disable_strategy",
-                "strategy": strat,
-                "reason": f"Down ${st['pnl']:,.2f} over {st['count']} trades",
                 "priority": "high",
             })
 
@@ -271,6 +303,18 @@ def _execute_action(action: dict) -> str:
         log_action("journal_agent", "set_risk_param",
                   details=f"{param}: {old_val} → {new_val} ({reason})")
         return f"set {param}: {old_val} → {new_val}"
+
+    elif atype == "restrict_to_regimes":
+        strategy = action.get("strategy") or target
+        allow = action.get("allow_regimes", [])
+        if not strategy:
+            return "skip: no strategy specified"
+        if not allow:
+            return "skip: no allow_regimes specified"
+        set_setting(f"strategy_regime_learned_{strategy}", json.dumps(allow))
+        log_action("journal_agent", "restrict_to_regimes",
+                   details=f"{strategy} restricted to regimes {allow}: {reason}")
+        return f"restricted {strategy} to regimes {allow}"
 
     elif atype == "log_insight":
         insert_knowledge(
