@@ -1,24 +1,17 @@
-"""Intraday Scalping Strategy — VWAP/RSI + orderbook pressure + funding context.
+"""Intraday Scalping Strategy — VWAP/RSI + orderbook + funding + MTF + cycle bias.
 
-Generates short-horizon signals on 5-minute candles for BTC/ETH/SOL perpetuals.
-Designed to run every 5 minutes via a dedicated scalping cycle, independently of
-the 4-hour swing cycle.
+Signal pipeline per coin:
+  1. 5m VWAP/RSI (0.50) — mean-reversion and momentum-continuation setups
+  2. Orderbook imbalance (0.30) — live bid/ask pressure
+  3. Funding rate (0.20) — extreme funding predicts unwind direction
+  4. 1h MTF multiplier — aligned 1h trend boosts (+35%), counter-trend suppresses (×0.25)
+  5. 4h cycle bias (+0.15 additive) — quality signal from swing cycle wired in
 
-Signal logic (three sub-signals combined):
-  1. VWAP RSI (weight 0.5): RSI extremes relative to VWAP anchor
-     - Oversold below VWAP → BUY (mean reversion)
-     - Overbought above VWAP → SELL (mean reversion)
-     - EMA9 > EMA21 AND price above VWAP → BUY (momentum continuation)
-  2. Orderbook imbalance (weight 0.3): bid vs ask pressure from live book
-  3. Funding rate (weight 0.2): extreme funding predicts unwind direction
-
-Each signal carries leverage=10, stop_pct=0.5%, take_profit_pct=1.5% for the
-scalp cycle executor to apply.
+Leverage adapts to conviction: 8x (weak) → 12x (moderate) → 18x (high).
+Stop 0.5%, take-profit 1.5% (3:1 R:R). Runs via a dedicated 5-minute cycle.
 """
 
 import logging
-
-import numpy as np
 
 from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
 from trading.strategy.base import Signal, Strategy
@@ -29,41 +22,33 @@ log = logging.getLogger(__name__)
 
 SCALP_COINS = ["bitcoin", "ethereum", "solana"]
 
-LEVERAGE = 10
-STOP_PCT = 0.005        # 0.5% stop → 5% margin loss at 10x
-TAKE_PROFIT_PCT = 0.015 # 1.5% target → 15% margin gain at 10x
+STOP_PCT = 0.005         # 0.5% stop → 5% margin loss at 10x
+TAKE_PROFIT_PCT = 0.015  # 1.5% target → 15% margin gain at 10x
 
-# Sub-signal thresholds
 RSI_OVERSOLD = 35
 RSI_OVERBOUGHT = 65
-OB_BUY_THRESHOLD = 0.15    # imbalance > 0.15 = net bid pressure (scale: -1 to +1)
-OB_SELL_THRESHOLD = -0.15
-FUNDING_BUY_THRESHOLD = -0.0003   # funding < -0.03% → shorts paying, buy bias
-FUNDING_SELL_THRESHOLD = 0.0003   # funding > +0.03% → longs paying, sell bias
-
-# Minimum combined score to emit a directional signal
+FUNDING_BUY_THRESHOLD = -0.0003
+FUNDING_SELL_THRESHOLD = 0.0003
 MIN_SIGNAL_SCORE = 0.28
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Data helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_5m_candles(aster_sym: str, limit: int = 78):
-    """Fetch 5-minute OHLCV from AsterDex (~6.5 hours of data)."""
+def _fetch_candles(aster_sym: str, interval: str, limit: int):
     try:
         from trading.data.aster import get_aster_ohlcv
-        df = get_aster_ohlcv(aster_sym, interval="5m", limit=limit)
+        df = get_aster_ohlcv(aster_sym, interval=interval, limit=limit)
         if df is not None and not df.empty and len(df) >= 20:
             return df
         return None
     except Exception as e:
-        log.debug("5m candle fetch failed for %s: %s", aster_sym, e)
+        log.debug("Candle fetch failed for %s %s: %s", aster_sym, interval, e)
         return None
 
 
 def _calc_vwap(df) -> float:
-    """Rolling VWAP over the candle window."""
     typical = (df["high"] + df["low"] + df["close"]) / 3
     vol_sum = float(df["volume"].sum())
     if vol_sum <= 0:
@@ -71,8 +56,12 @@ def _calc_vwap(df) -> float:
     return float((typical * df["volume"]).sum() / vol_sum)
 
 
+# ---------------------------------------------------------------------------
+# Sub-signal scorers
+# ---------------------------------------------------------------------------
+
 def _vwap_rsi_score(df) -> tuple[float, dict]:
-    """Return (score, debug_data). Score: -1 to +1, positive = buy bias."""
+    """5m VWAP+RSI score (-1 to +1) and debug fields."""
     closes = df["close"]
     rsi_val = float(rsi(closes, period=14).iloc[-1])
     ema9_val = float(ema(closes, 9).iloc[-1])
@@ -84,21 +73,17 @@ def _vwap_rsi_score(df) -> tuple[float, dict]:
     uptrend = ema9_val > ema21_val
 
     if rsi_val < RSI_OVERSOLD and not above_vwap:
-        # Oversold below VWAP — strong mean-reversion buy
         score = min((RSI_OVERSOLD - rsi_val) / RSI_OVERSOLD, 1.0)
     elif rsi_val > RSI_OVERBOUGHT and above_vwap:
-        # Overbought above VWAP — strong mean-reversion sell
         score = -min((rsi_val - RSI_OVERBOUGHT) / (100 - RSI_OVERBOUGHT), 1.0)
     elif 48 <= rsi_val <= 65 and above_vwap and uptrend:
-        # Momentum continuation up — moderate buy
         score = (rsi_val - 48) / 34 * 0.55
     elif 35 <= rsi_val <= 52 and not above_vwap and not uptrend:
-        # Momentum continuation down — moderate sell
         score = -(52 - rsi_val) / 34 * 0.55
     else:
         score = 0.0
 
-    debug = {
+    return round(score, 4), {
         "rsi": round(rsi_val, 1),
         "vwap": round(vwap, 2),
         "price": round(price, 2),
@@ -107,25 +92,21 @@ def _vwap_rsi_score(df) -> tuple[float, dict]:
         "above_vwap": above_vwap,
         "uptrend": uptrend,
     }
-    return round(score, 4), debug
 
 
 def _ob_score(aster_sym: str) -> float:
-    """Return orderbook imbalance score (-1 to +1). 0.0 on failure."""
+    """Orderbook imbalance score (-1 to +1). 0.0 on failure."""
     try:
         from trading.data.aster import get_orderbook_imbalance
         ob = get_orderbook_imbalance(aster_sym, depth=20)
-        if ob is None:
-            return 0.0
-        # imbalance field is already -1 to +1 (positive = more bids)
-        return float(ob["imbalance"])
+        return float(ob["imbalance"]) if ob else 0.0
     except Exception as e:
-        log.debug("OB imbalance fetch failed for %s: %s", aster_sym, e)
+        log.debug("OB score failed for %s: %s", aster_sym, e)
         return 0.0
 
 
 def _funding_score(aster_sym: str) -> tuple[float, float | None]:
-    """Return (score, avg_funding). Score: -1 to +1, positive = buy bias."""
+    """Funding rate score (-1 to +1) and average funding value."""
     try:
         from trading.data.aster import get_funding_rate_history
         hist = get_funding_rate_history(aster_sym, limit=5)
@@ -134,10 +115,8 @@ def _funding_score(aster_sym: str) -> tuple[float, float | None]:
         recent = hist[-3:] if len(hist) >= 3 else hist
         avg = sum(recent) / len(recent)
         if avg > FUNDING_SELL_THRESHOLD:
-            # Longs paying — expect unwind → SELL bias
             score = -min(avg / 0.001, 1.0)
         elif avg < FUNDING_BUY_THRESHOLD:
-            # Shorts paying — expect squeeze → BUY bias
             score = min(-avg / 0.001, 1.0)
         else:
             score = 0.0
@@ -147,13 +126,83 @@ def _funding_score(aster_sym: str) -> tuple[float, float | None]:
         return 0.0, None
 
 
+def _get_1h_bias(aster_sym: str) -> float:
+    """1h trend direction: +1 strongly bullish, -1 strongly bearish, 0 neutral.
+
+    Used as a multiplier gate — aligned 5m signals are boosted, counter-trend
+    signals are heavily suppressed (×0.25) to avoid fighting the larger trend.
+    """
+    try:
+        df = _fetch_candles(aster_sym, "1h", 50)
+        if df is None:
+            return 0.0
+        closes = df["close"]
+        rsi_1h = float(rsi(closes, period=14).iloc[-1])
+        ema9_1h = float(ema(closes, 9).iloc[-1])
+        ema21_1h = float(ema(closes, 21).iloc[-1])
+        if rsi_1h > 55 and ema9_1h > ema21_1h:
+            return round(min((rsi_1h - 55) / 45.0, 1.0), 3)
+        elif rsi_1h < 45 and ema9_1h < ema21_1h:
+            return round(-min((45 - rsi_1h) / 45.0, 1.0), 3)
+        return 0.0
+    except Exception as e:
+        log.debug("1h bias failed for %s: %s", aster_sym, e)
+        return 0.0
+
+
+def _get_cycle_bias(alpaca_sym: str) -> float:
+    """Directional bias published by the last 4h swing cycle. Range -1 to +1.
+
+    Returns 0.0 when the stored value is missing or older than 6 hours.
+    A 4h BUY on BTC with strength 0.8 contributes +0.12 to the scalp combined
+    score (cycle_bias × 0.15 weight), tipping borderline setups over threshold
+    and nudging aligned signals toward the 18x leverage tier.
+    """
+    try:
+        import json
+        import time
+        from trading.db.store import get_setting
+        raw = get_setting("scalp_cycle_bias", "{}")
+        data = json.loads(raw)
+        coin = alpaca_sym.split("/")[0]  # "BTC", "ETH", "SOL"
+        entry = data.get(coin)
+        if not entry:
+            return 0.0
+        if time.time() - entry.get("ts", 0) > 21600:  # expire after 6h
+            return 0.0
+        action = entry.get("action", "hold")
+        strength = float(entry.get("strength", 0.0))
+        if action == "buy":
+            return strength
+        if action == "sell":
+            return -strength
+        return 0.0
+    except Exception as e:
+        log.debug("Cycle bias read failed for %s: %s", alpaca_sym, e)
+        return 0.0
+
+
+def _adaptive_leverage(abs_score: float) -> int:
+    """Scale leverage with signal conviction.
+
+    Low conviction (0.28–0.50)  → 8x  (protect capital on weaker setups)
+    Moderate conviction (0.50–0.70) → 12x
+    High conviction (> 0.70)    → 18x  (press hard when edge is clear)
+    """
+    if abs_score >= 0.70:
+        return 18
+    elif abs_score >= 0.50:
+        return 12
+    return 8
+
+
 # ---------------------------------------------------------------------------
 # Strategy class
 # ---------------------------------------------------------------------------
 
 @register
 class IntradayScalpStrategy(Strategy):
-    """5-minute scalping using VWAP/RSI + orderbook imbalance + funding rate."""
+    """5m scalping: VWAP/RSI + orderbook + funding + 1h MTF + 4h cycle bias."""
 
     name = "intraday_scalp"
 
@@ -165,8 +214,7 @@ class IntradayScalpStrategy(Strategy):
             if not aster_sym or not alpaca_sym:
                 continue
             try:
-                sig = self._evaluate_coin(coin_id, aster_sym, alpaca_sym)
-                signals.append(sig)
+                signals.append(self._evaluate_coin(coin_id, aster_sym, alpaca_sym))
             except Exception as exc:
                 log.error("intraday_scalp error for %s: %s", coin_id, exc)
                 signals.append(Signal(
@@ -179,20 +227,31 @@ class IntradayScalpStrategy(Strategy):
         return {"strategy": self.name, "coins": SCALP_COINS}
 
     def _evaluate_coin(self, coin_id: str, aster_sym: str, alpaca_sym: str) -> Signal:
-        df = _fetch_5m_candles(aster_sym)
-        if df is None:
+        df_5m = _fetch_candles(aster_sym, "5m", 78)
+        if df_5m is None:
             return Signal(
                 strategy=self.name, symbol=alpaca_sym, action="hold",
                 strength=0.0, reason=f"{coin_id} 5m data unavailable",
                 data={"scalp": True, "error": "data_unavailable"},
             )
 
-        vr_score, vr_debug = _vwap_rsi_score(df)
+        # --- Step 1: 5m sub-signals ---
+        vr_score, vr_debug = _vwap_rsi_score(df_5m)
         ob = _ob_score(aster_sym)
         f_score, avg_funding = _funding_score(aster_sym)
+        combined = vr_score * 0.50 + ob * 0.30 + f_score * 0.20
 
-        combined = vr_score * 0.5 + ob * 0.3 + f_score * 0.2
+        # --- Step 2: 1h MTF multiplier ---
+        bias_1h = _get_1h_bias(aster_sym)
+        if bias_1h != 0.0:
+            same_dir = (combined >= 0) == (bias_1h >= 0)
+            combined *= (1.0 + abs(bias_1h) * 0.35) if same_dir else 0.25
 
+        # --- Step 3: 4h cycle bias (additive) ---
+        cycle_bias = _get_cycle_bias(alpaca_sym)
+        combined += cycle_bias * 0.15
+
+        # --- Step 4: gate and adaptive leverage ---
         if combined > MIN_SIGNAL_SCORE:
             action = "buy"
         elif combined < -MIN_SIGNAL_SCORE:
@@ -201,12 +260,17 @@ class IntradayScalpStrategy(Strategy):
             action = "hold"
 
         strength = round(min(abs(combined), 1.0), 3)
+        leverage = _adaptive_leverage(abs(combined))
 
+        # --- Reason string (shows all layers for easy log reading) ---
+        h1_label = "bull" if bias_1h > 0.1 else "bear" if bias_1h < -0.1 else "neut"
+        cyc_label = "↑" if cycle_bias > 0.05 else "↓" if cycle_bias < -0.05 else "~"
         funding_str = f"{avg_funding:.4%}" if avg_funding is not None else "n/a"
         reason = (
             f"{coin_id} scalp {action}: RSI={vr_debug['rsi']:.0f} "
             f"{'▲' if vr_debug['above_vwap'] else '▼'}VWAP "
-            f"OB={ob:+.2f} fund={funding_str} → score={combined:+.2f}"
+            f"1h={h1_label} cyc={cyc_label} OB={ob:+.2f} fund={funding_str} "
+            f"→ {combined:+.2f} @ {leverage}x"
         )
 
         return Signal(
@@ -216,13 +280,15 @@ class IntradayScalpStrategy(Strategy):
             strength=strength,
             reason=reason,
             data={
-                "leverage": LEVERAGE,
+                "leverage": leverage,
                 "stop_pct": STOP_PCT,
                 "take_profit_pct": TAKE_PROFIT_PCT,
                 "scalp": True,
                 **vr_debug,
                 "ob_imbalance": round(ob, 3),
                 "avg_funding": avg_funding,
+                "bias_1h": bias_1h,
+                "cycle_bias": round(cycle_bias, 3),
                 "vr_score": vr_score,
                 "ob_score": round(ob, 3),
                 "funding_score": f_score,

@@ -471,6 +471,29 @@ def run_trading_cycle():
             log.warning("Deferred signal replay failed: %s", e)
 
         # ---------------------------------------------------------------
+        # Phase 3.8: Publish directional bias for the scalping layer
+        # ---------------------------------------------------------------
+        try:
+            import json as _json
+            import time as _time
+            from trading.db.store import set_setting as _ss
+            _SCALP_MAP = {"BTC/USD": "BTC", "ETH/USD": "ETH", "SOL/USD": "SOL"}
+            _bias: dict = {}
+            for _sig in consolidated:
+                _coin = _SCALP_MAP.get(_sig.symbol)
+                if _coin and _sig.action in ("buy", "sell", "hold"):
+                    _bias[_coin] = {
+                        "action": _sig.action,
+                        "strength": round(_sig.strength, 3),
+                        "ts": _time.time(),
+                    }
+            if _bias:
+                _ss("scalp_cycle_bias", _json.dumps(_bias))
+                log.debug("Scalp bias published: %s", _bias)
+        except Exception as _e:
+            log.debug("Scalp bias publish failed (non-fatal): %s", _e)
+
+        # ---------------------------------------------------------------
         # Phase 4: Risk check + market hours gate + execute
         # ---------------------------------------------------------------
         risk_mgr = RiskManager(portfolio_value, account=account)
