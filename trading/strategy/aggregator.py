@@ -664,6 +664,14 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     # Phase 3.3: Apply signal decay before filtering
     all_signals = _apply_signal_decay(all_signals)
 
+    # Separate holds-with-conviction from pure no-view holds.
+    # Holds with strength > 0 explicitly say "maintain position" and participate
+    # in conflict resolution below to protect open positions from weak counter-signals.
+    conviction_holds = {
+        s.symbol: s for s in all_signals
+        if s.action == "hold" and (s.strength or 0) > 0.10
+    }
+
     actionable = [s for s in all_signals if s.is_actionable]
 
     if not actionable:
@@ -691,10 +699,11 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
     for symbol, signals in sorted(by_symbol.items()):
         buys = [s for s in signals if s.action == "buy"]
         sells = [s for s in signals if s.action == "sell"]
+        hold_sig = conviction_holds.get(symbol)
 
         if buys and sells:
             # Conflict: strategies disagree on direction
-            result = _resolve_conflict(buys, sells)
+            result = _resolve_conflict(buys, sells, hold_sig)
         else:
             # Agreement: all signals point the same way
             result = _merge_agreement(signals)
@@ -741,6 +750,7 @@ def aggregate_signals(all_signals: list[Signal]) -> list[Signal]:
 def _resolve_conflict(
     buy_signals: list[Signal],
     sell_signals: list[Signal],
+    hold_signal: "Signal | None" = None,
 ) -> Signal:
     """Resolve opposing buy and sell signals for the same symbol.
 
@@ -749,9 +759,14 @@ def _resolve_conflict(
     consolidated signal is returned with adjusted strength.  Otherwise a
     ``hold`` signal is emitted because the edge is too uncertain.
 
+    When a strategy explicitly holds with conviction (strength > 0.10), it adds
+    its strength to whichever side has fewer signals, acting as a position-
+    preservation vote that raises the bar for flipping an existing position.
+
     Args:
         buy_signals:  All buy signals for this symbol.
         sell_signals: All sell signals for this symbol.
+        hold_signal:  Optional hold-with-conviction signal for this symbol.
 
     Returns:
         A single consolidated Signal for the symbol.
@@ -764,6 +779,17 @@ def _resolve_conflict(
     total_sell_strength = sum(
         s.strength * _get_strategy_weight(s.strategy) for s in sell_signals
     )
+
+    # Conviction hold: count toward the weaker side to raise the margin required to flip.
+    # This means "I want to preserve the current state" rather than "take new action."
+    if hold_signal and hold_signal.strength > 0.10:
+        hold_weight = hold_signal.strength * 0.5  # half-weight — it's a veto, not a vote
+        if total_buy_strength < total_sell_strength:
+            total_buy_strength += hold_weight
+        else:
+            total_sell_strength += hold_weight
+        _log.debug("Hold-with-conviction on %s (str=%.2f) added %.2f to weaker side",
+                   symbol, hold_signal.strength, hold_weight)
 
     margin = abs(total_buy_strength - total_sell_strength)
 

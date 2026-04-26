@@ -204,11 +204,8 @@ class HMMRegimeStrategy(Strategy):
 
                 ohlc = get_ohlc(coin_id, self.training_days)
                 if ohlc.empty or len(ohlc) < HMM_REGIME["min_data_points"]:
-                    signals.append(Signal(
-                        strategy=self.name, symbol=aster_symbol, action="hold",
-                        strength=0.0,
-                        reason=f"{coin_id} insufficient data ({len(ohlc) if not ohlc.empty else 0} rows)",
-                    ))
+                    log.debug("hmm_regime: skipping %s — insufficient data (%d rows)",
+                              coin_id, len(ohlc) if not ohlc.empty else 0)
                     continue
 
                 price = round(float(ohlc["close"].iloc[-1]), 2)
@@ -235,22 +232,12 @@ class HMMRegimeStrategy(Strategy):
                         data={"regime": regime_label, "regime_prob": regime_prob, "coin": coin_id},
                     ))
                 else:
-                    # sideways or unknown — use scaled probability as strength
-                    signals.append(Signal(
-                        strategy=self.name,
-                        symbol=aster_symbol,
-                        action="hold",
-                        strength=round(regime_prob * 0.3, 3),  # 80% prob → 24% strength
-                        reason=f"{coin_id} HMM sideways regime (prob {regime_prob:.0%})",
-                        data={"regime": regime_label, "regime_prob": regime_prob, "coin": coin_id},
-                    ))
+                    # sideways/unknown — no directional view, abstain
+                    log.debug("hmm_regime: %s sideways regime (prob %.0f%%) — no signal",
+                              coin_id, regime_prob * 100)
 
             except Exception as e:
-                sym = ASTER_SYMBOLS.get(coin_id, "BTC/USD")
-                signals.append(Signal(
-                    strategy=self.name, symbol=sym, action="hold",
-                    strength=0.0, reason=f"{coin_id} HMM error: {e}",
-                ))
+                log.error("hmm_regime: error processing %s: %s", coin_id, e)
 
         self._last_context = context_data
         return signals

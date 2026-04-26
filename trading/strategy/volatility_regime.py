@@ -209,14 +209,8 @@ class VolatilityRegimeStrategy(Strategy):
                 df = get_aster_ohlcv(aster_sym, interval="1h", limit=long_w)
 
                 if df is None or df.empty or len(df) < min_pts:
-                    reason = (
-                        f"{coin}: insufficient data ({len(df) if df is not None and not df.empty else 0}"
-                        f"/{min_pts} candles)"
-                    )
-                    signals.append(Signal(
-                        strategy=self.name, symbol=symbol, action="hold",
-                        strength=0.0, reason=reason,
-                    ))
+                    log.debug("volatility_regime: skipping %s — insufficient data (%d/%d candles)",
+                              coin, len(df) if df is not None and not df.empty else 0, min_pts)
                     continue
 
                 closes = df["close"].values.astype(float)
@@ -225,11 +219,7 @@ class VolatilityRegimeStrategy(Strategy):
                 long_vol = _compute_realized_vol(closes, long_w, hpy)
 
                 if long_vol == 0:
-                    signals.append(Signal(
-                        strategy=self.name, symbol=symbol, action="hold",
-                        strength=0.0,
-                        reason=f"{coin}: long-window vol is zero — no regime signal",
-                    ))
+                    log.debug("volatility_regime: skipping %s — long-window vol is zero", coin)
                     continue
 
                 vol_ratio = short_vol / long_vol
@@ -261,6 +251,12 @@ class VolatilityRegimeStrategy(Strategy):
                         action = "hold"
                         strength = 0.1  # Nonzero: signal exists but conflicting
 
+                # Only emit a signal when there is a clear directional view (compression or expansion).
+                # In "normal" regime (no vol extreme), abstain — positions stay open by default.
+                if action == "hold" and strength == 0.0:
+                    log.debug("volatility_regime: %s normal regime (ratio=%.2f) — no signal", coin, vol_ratio)
+                    continue
+
                 signals.append(Signal(
                     strategy=self.name,
                     symbol=symbol,
@@ -277,13 +273,6 @@ class VolatilityRegimeStrategy(Strategy):
 
             except Exception as e:
                 log.error("volatility_regime: error processing %s: %s", coin, e)
-                signals.append(Signal(
-                    strategy=self.name,
-                    symbol=symbol if symbol else f"{coin}/USD",
-                    action="hold",
-                    strength=0.0,
-                    reason=f"{coin}: analysis failed — {e}",
-                ))
 
         # Cross-asset rotation check
         rotation = _check_rotation_signal(vol_data)
