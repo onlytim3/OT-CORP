@@ -1057,10 +1057,32 @@ def _paper_submit_order(
             pass
 
     if fill_price <= 0:
+        # Fallback 3: CoinGecko simple price API (fully independent of AsterDex)
+        try:
+            from trading.config import ASTER_SYMBOLS
+            _ASTER_TO_COIN = {v: k for k, v in ASTER_SYMBOLS.items()}
+            coin_id = _ASTER_TO_COIN.get(aster_sym)
+            if coin_id:
+                import requests as _req
+                _r = _req.get(
+                    "https://api.coingecko.com/api/v3/simple/price",
+                    params={"ids": coin_id, "vs_currencies": "usd"},
+                    timeout=5,
+                )
+                if _r.status_code == 200:
+                    cg_price = _r.json().get(coin_id, {}).get("usd", 0)
+                    if cg_price > 0:
+                        fill_price = float(cg_price)
+                        log.info("Paper: using CoinGecko price %.4f for %s (%s)",
+                                 fill_price, symbol, coin_id)
+        except Exception as _cg_err:
+            log.debug("Paper: CoinGecko fallback failed for %s: %s", symbol, _cg_err)
+
+    if fill_price <= 0:
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
-            "reason": f"No price available for {symbol} (mark price, quote, and last known all failed)",
+            "reason": f"No price available for {symbol} — all sources (AsterDex mark, book ticker, last known, CoinGecko) failed",
             "symbol": symbol, "side": side,
             "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
         }
