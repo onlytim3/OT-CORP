@@ -1041,12 +1041,14 @@ export function Analytics() {
                         })}
                       </div>
                       <div className="text-xs text-[#444] space-y-1">
-                        <p>Trained on {h.n_samples} samples · {h.n_components} states</p>
+                        {h.n_samples > 0
+                          ? <p>Trained on {h.n_samples} samples · {h.n_components} states</p>
+                          : <p className="text-[#555]">Model training pending — showing strategy signal state</p>}
                         {h.fitted_at && <p>Fitted {new Date(h.fitted_at).toLocaleString()}</p>}
                       </div>
                     </div>
                   );
-                })() : <p className="text-[#666] text-sm">No HMM data yet — waiting for first training cycle</p>}
+                })() : <p className="text-[#666] text-sm">No HMM signals yet — waiting for first trading cycle</p>}
               </CardContent>
             </Card>
           </div>

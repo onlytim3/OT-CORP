@@ -17,3 +17,7 @@ openai>=1.0.0
 # Data and NLP
 praw>=7.7.0
 vaderSentiment==3.3.2
+
+# ML / regime detection
+hmmlearn>=0.3.0
+scikit-learn>=1.4.0

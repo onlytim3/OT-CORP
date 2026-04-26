@@ -1653,20 +1653,21 @@ def api_regime_analysis():
     except Exception:
         result["current_regime"] = {"label": "unknown", "score": 0.0}
 
-    # HMM model state
+    # HMM model state — read from settings (model params) and signals table.
+    # Falls back to signals-only when hmmlearn hasn't fitted a model yet.
     try:
         hmm_raw = get_setting("hmm_model_params")
+        with get_read_db() as conn:
+            hmm_sig = conn.execute(
+                "SELECT data, timestamp FROM signals WHERE strategy='hmm_regime' "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+
         if hmm_raw:
             hmm_data = json.loads(hmm_raw)
             means = hmm_data.get("means", [])
             fitted_at = hmm_data.get("fitted_at", "")
             n_samples = hmm_data.get("n_samples", 0)
-            # Latest regime from most recent hmm_regime signal
-            with get_read_db() as conn:
-                hmm_sig = conn.execute(
-                    "SELECT data FROM signals WHERE strategy='hmm_regime' "
-                    "ORDER BY timestamp DESC LIMIT 1"
-                ).fetchone()
             # Prefer latest signal; fall back to last_regime saved in model params
             state = hmm_data.get("last_regime", "unknown")
             prob = float(hmm_data.get("last_regime_prob", 0.0))
@@ -1684,6 +1685,19 @@ def api_regime_analysis():
                 "n_samples": n_samples,
                 "fitted_at": fitted_at,
             }
+        elif hmm_sig and hmm_sig["data"]:
+            # Model not yet fitted (hmmlearn not installed or first cycle) — show signal state
+            try:
+                sd = json.loads(hmm_sig["data"])
+                result["hmm"] = {
+                    "state": sd.get("regime", "unknown"),
+                    "probability": float(sd.get("regime_prob", 0.0)),
+                    "n_components": 0,
+                    "n_samples": 0,
+                    "fitted_at": "",
+                }
+            except Exception:
+                result["hmm"] = None
         else:
             result["hmm"] = None
     except Exception:
