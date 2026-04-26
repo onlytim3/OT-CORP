@@ -1231,6 +1231,27 @@ def _backtest_agent_think() -> list[dict]:
             if get_strategy(strategy_name) is None:
                 continue
 
+            # Skip strategies that require live microstructure data (orderbook, OI,
+            # funding rates, taker flow) — OHLCV-only backtests produce meaningless results.
+            _MICROSTRUCTURE_STRATEGIES = {
+                "factor_crypto", "whale_flow", "microstructure_composite",
+                "funding_arb", "taker_divergence", "basis_zscore",
+                "oi_spike", "liquidation_cascade", "cross_exchange_arb",
+            }
+            if strategy_name in _MICROSTRUCTURE_STRATEGIES:
+                log.info(
+                    "BACKTEST: Skipping '%s' — requires live microstructure data "
+                    "(orderbook/OI/funding), OHLCV backtest would be invalid.",
+                    strategy_name,
+                )
+                insert_backtest_result(
+                    strategy_name,
+                    BACKTEST_LOOKBACK_DAYS,
+                    {"total_trades": 0, "win_rate": 0, "sharpe_ratio": 0, "max_drawdown": 0},
+                    "inconclusive",
+                )
+                continue
+
             log.info("BACKTEST: Running %d-day backtest for '%s'", BACKTEST_LOOKBACK_DAYS, strategy_name)
 
             historical_data = _fetch_historical_data(strategy_name, BACKTEST_LOOKBACK_DAYS)

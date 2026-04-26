@@ -462,6 +462,11 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
 
     # --- Read queries (operator handles directly, richer than chat.py) ---
 
+    # 9a. Portfolio analysis (LLM-powered synthesis — before briefing so it catches "analyze" first)
+    if re.search(r"\b(analyz|assess|review\s+my\s+portfolio|portfolio\s+analysis|"
+                 r"what\s+should\s+i\s+focus|give\s+me\s+insight|ai\s+review)\b", lower):
+        return _read_portfolio_analysis(msg, lower)
+
     # 9. Check-in / briefing
     if re.search(r"\b(briefing|check.?in|morning.?report|status.?report|what.?should.?i.?know|give.?me.?a.?briefing)\b", lower):
         return _read_briefing(msg, lower)
@@ -518,6 +523,18 @@ def handle_operator_message(message: str, confirmed_action_id: str | None = None
     # 19. Export / summary
     if re.search(r"\b(export|summarize|summary|weekly\s+report|csv)\b", lower):
         return _read_export_summary(msg, lower)
+
+    # 19b. Income / fees query
+    if re.search(r"\b(funding\s+fee|commission|income|realized\s+pnl|fees?\s+paid|how\s+much.*paid|cost\s+drag)\b", lower):
+        return _read_income_summary(msg, lower)
+
+    # 19c. Fill quality / slippage query
+    if re.search(r"\b(slippage|fill\s+quality|execution\s+quality|worst\s+fills?|fill\s+cost)\b", lower):
+        return _read_fill_quality(msg, lower)
+
+    # 19d. Pending / open orders query
+    if re.search(r"\b(pending\s+orders?|open\s+orders?|stuck\s+orders?|what\s+orders?)\b", lower):
+        return _read_pending_orders(msg, lower)
 
     # 20. Knowledge search
     if re.search(r"\b(search\s+knowledge|what\s+does\s+the\s+research|knowledge\s+base)\b", lower):
@@ -1192,6 +1209,24 @@ def _read_briefing(msg: str, lower: str) -> dict:
     except Exception:
         pass
 
+    # 8. Market regime
+    try:
+        regime = get_setting("current_regime") or "unknown"
+        score = float(get_setting("current_regime_score") or 0)
+        lines.append(f"\n**Market Regime**: {regime} (confidence: {score:.2f})")
+    except Exception:
+        pass
+
+    # 9. Income summary (7d)
+    try:
+        from trading.db.store import get_income_summary
+        income = get_income_summary(days=7)
+        if income:
+            parts = [f"{k}: ${v['total']:+.4f}" for k, v in income.items()]
+            lines.append(f"\n**7d Income**: {' | '.join(parts)}")
+    except Exception:
+        pass
+
     return {"answer": "\n".join(lines)}
 
 
@@ -1775,6 +1810,141 @@ def _read_export_summary(msg: str, lower: str) -> dict:
                     f"{t.get('status', '')} |")
 
     return {"answer": "\n".join(lines)}
+
+
+# ============================================================================
+# NEW READ HANDLERS: income, fill quality, pending orders, portfolio analysis
+# ============================================================================
+
+def _read_income_summary(msg: str, lower: str) -> dict:
+    """Show income breakdown: realized P&L, funding fees, commissions."""
+    from trading.db.store import get_income_summary, get_read_db
+    summary = get_income_summary(days=30)
+    lines = ["**Income Breakdown (last 30 days)**\n"]
+    for itype, data in summary.items():
+        lines.append(f"- **{itype}**: ${data['total']:+,.4f} ({data['count']} records)")
+    if not summary:
+        lines.append("No income records yet — accumulates as trades execute on AsterDex.")
+    try:
+        with get_read_db() as conn:
+            rows = conn.execute(
+                "SELECT symbol, income_type, income, fetched_at FROM income_history "
+                "ORDER BY fetched_at DESC LIMIT 5"
+            ).fetchall()
+            if rows:
+                lines.append("\n**Recent entries:**")
+                for r in rows:
+                    lines.append(f"  {r['fetched_at'][:10]} {r['symbol']} "
+                                 f"{r['income_type']}: ${float(r['income']):+.6f}")
+    except Exception:
+        pass
+    return {"answer": "\n".join(lines)}
+
+
+def _read_fill_quality(msg: str, lower: str) -> dict:
+    """Show fill quality and slippage by symbol."""
+    from trading.db.store import get_read_db
+    lines = ["**Fill Quality & Slippage**\n"]
+    try:
+        with get_read_db() as conn:
+            rows = conn.execute(
+                "SELECT symbol, AVG(slippage_bps) as avg_slip, COUNT(*) as fills, "
+                "SUM(notional) as volume FROM fill_quality "
+                "GROUP BY symbol ORDER BY avg_slip DESC"
+            ).fetchall()
+            if rows:
+                lines.append("By symbol (worst slippage first):")
+                for r in rows:
+                    lines.append(f"  **{r['symbol']}**: {r['avg_slip']:.1f} bps avg "
+                                 f"({r['fills']} fills, ${r['volume']:,.0f} volume)")
+            else:
+                lines.append("No fill quality data yet — accumulates after live order executions.")
+    except Exception as e:
+        lines.append(f"Could not fetch fill quality: {e}")
+    return {"answer": "\n".join(lines)}
+
+
+def _read_pending_orders(msg: str, lower: str) -> dict:
+    """Show open orders on the exchange and any stuck pending trades."""
+    from trading.db.store import get_stale_pending_trades
+    lines = ["**Pending Orders**\n"]
+    try:
+        from trading.execution.aster_client import aster_get_open_orders
+        live = aster_get_open_orders() or []
+        stale = get_stale_pending_trades(max_age_minutes=15)
+        stale_ids = {str(t.get("alpaca_order_id", "")) for t in stale}
+        if live:
+            for o in live:
+                flag = " ⚠️ STALE (>15min)" if str(o.get("orderId", "")) in stale_ids else ""
+                price = float(o.get("price", 0))
+                lines.append(f"- **{o.get('symbol')}** {o.get('side')} "
+                             f"qty={o.get('origQty')}"
+                             f"{f' @ ${price:,.4f}' if price else ''}{flag}")
+        else:
+            lines.append("No open orders on exchange.")
+        if stale:
+            lines.append(f"\n⚠️ {len(stale)} trade(s) stuck pending in local DB for >15 min.")
+    except Exception as e:
+        lines.append(f"Could not fetch orders from exchange: {e}")
+    return {"answer": "\n".join(lines)}
+
+
+def _read_portfolio_analysis(msg: str, lower: str) -> dict:
+    """LLM-powered full portfolio analysis using all available system data."""
+    import json
+    from trading.llm.engine import ask_llm
+    from trading.db.store import get_daily_pnl, get_trades, get_income_summary, get_setting
+    from trading.config import STRATEGY_ENABLED, RISK
+
+    data: dict = {}
+    try:
+        from trading.execution.router import get_account, get_positions_from_aster
+        data["account"] = get_account()
+        data["positions"] = get_positions_from_aster() or []
+    except Exception:
+        pass
+    try:
+        data["pnl_7d"] = get_daily_pnl(limit=7)
+    except Exception:
+        pass
+    try:
+        data["recent_trades"] = get_trades(limit=20)
+    except Exception:
+        pass
+    try:
+        data["income_30d"] = get_income_summary(days=30)
+    except Exception:
+        pass
+    try:
+        data["regime"] = get_setting("current_regime")
+        data["regime_score"] = get_setting("current_regime_score")
+    except Exception:
+        pass
+    data["active_strategies"] = [s for s, v in STRATEGY_ENABLED.items() if v]
+    data["risk_params"] = {k: v for k, v in RISK.items()
+                           if k in ("stop_loss_pct", "max_position_pct",
+                                    "max_daily_loss_pct", "max_drawdown_pct")}
+
+    system = (
+        "You are the AI analyst for OT-CORP, an autonomous crypto trading system. "
+        "Analyse the system state below and give a concise, actionable report covering:\n"
+        "1. Portfolio health (P&L trend, drawdown risk)\n"
+        "2. Position risk (any concerning open positions?)\n"
+        "3. Cost drag (funding fees and commissions vs realized P&L)\n"
+        "4. Strategy coverage gaps or over-concentration\n"
+        "5. One specific recommended action the operator should take now\n\n"
+        "Be direct and specific. Use numbers. Max 250 words."
+    )
+    try:
+        response = ask_llm(
+            prompt=f"System state:\n{json.dumps(data, default=str, indent=2)}",
+            system=system,
+            max_tokens=400,
+            call_type="agent_synthesis",
+        )
+        return {"answer": f"**Portfolio Analysis**\n\n{response}"}
+    except Exception as e:
+        return {"answer": f"Analysis unavailable: {e}"}
 
 
 # ============================================================================
@@ -2632,6 +2802,37 @@ def _intent_llm_universal(msg: str, lower: str) -> dict:
     mode = get_recovery_mode()
     recovery_note = " [CONSERVATIVE MODE ACTIVE — 50% position sizes]" if mode.get("active") else ""
 
+    # Build rich system context for the LLM
+    context_lines = [recovery_note or "Normal trading mode"]
+    try:
+        from trading.db.store import get_daily_pnl, get_income_summary, get_setting
+        from trading.execution.router import get_account, get_positions_from_aster
+        acc = get_account()
+        context_lines.append(
+            f"Portfolio: ${acc.get('portfolio_value', 0):,.2f} | "
+            f"Cash: ${acc.get('cash', 0):,.2f} | "
+            f"Mode: {'PAPER' if acc.get('paper') else 'LIVE'}"
+        )
+        positions = get_positions_from_aster() or []
+        if positions:
+            pos_strs = [f"{p['symbol']} {p.get('side','?')} P&L ${p.get('unrealized_pnl',0):+.2f}"
+                        for p in positions[:4]]
+            context_lines.append(f"Open positions: {', '.join(pos_strs)}")
+        pnl = get_daily_pnl(limit=1)
+        if pnl:
+            context_lines.append(f"Today P&L: {pnl[0].get('daily_return', 0):+.2f}%")
+        regime = get_setting("current_regime") or "unknown"
+        context_lines.append(f"Market regime: {regime}")
+        income = get_income_summary(days=30)
+        if income:
+            parts = [f"{k}: ${v['total']:+.2f}" for k, v in income.items()]
+            context_lines.append(f"30d income: {' | '.join(parts)}")
+    except Exception:
+        pass
+    context_lines.append(
+        f"Active strategies: {sum(1 for v in STRATEGY_ENABLED.values() if v)}/{len(STRATEGY_ENABLED)}"
+    )
+
     system = (
         "You are the operator console for an autonomous crypto trading system. "
         "The operator has given you a command you must interpret and act on.\n\n"
@@ -2643,8 +2844,7 @@ def _intent_llm_universal(msg: str, lower: str) -> dict:
         "- Leverage: 'switch to aggressive/conservative/moderate/greedy'\n"
         "- Recovery: 'graduate from recovery mode', 'exit conservative mode'\n"
         "- Analysis: 'backtest STRATEGY 30 days', 'briefing', 'compare X vs Y', 'what happened last cycle'\n\n"
-        f"System state: {recovery_note or 'Normal trading mode'}\n"
-        f"Active strategies: {sum(1 for v in STRATEGY_ENABLED.values() if v)}/{len(STRATEGY_ENABLED)}\n\n"
+        f"Current system state:\n" + "\n".join(f"  {l}" for l in context_lines) + "\n\n"
         "Be direct and brief (2-3 sentences max). If you can determine the exact command "
         "the operator meant, state it clearly. If the command cannot be executed, say why."
     )
