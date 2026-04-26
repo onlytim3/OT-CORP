@@ -1024,25 +1024,43 @@ def _paper_submit_order(
     aster_sym = _to_aster(symbol)
     side_lower = side.lower()
 
-    # Get real market price
+    # Get real market price — cascade through fallbacks before rejecting
+    fill_price = 0.0
     try:
         mark_data = get_aster_mark_prices(aster_sym)
         fill_price = mark_data.get("markPrice", 0)
     except Exception as e:
         log.warning("Paper: could not get mark price for %s: %s", aster_sym, e)
-        return {
-            "id": str(uuid.uuid4()),
-            "status": "rejected",
-            "reason": f"Could not get market price for {symbol}",
-            "symbol": symbol, "side": side,
-            "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
-        }
+
+    if fill_price <= 0:
+        # Fallback 1: crypto quote (bid/ask midpoint)
+        try:
+            q = get_crypto_quote(symbol)
+            fill_price = q.get("mid", 0) or q.get("ask", 0) or q.get("bid", 0)
+            if fill_price > 0:
+                log.info("Paper: using quote price %.4f for %s", fill_price, symbol)
+        except Exception:
+            pass
+
+    if fill_price <= 0:
+        # Fallback 2: last known paper position avg_cost
+        try:
+            _sym_key = symbol.replace("/", "")
+            with get_db() as _conn:
+                _row = _conn.execute(
+                    "SELECT avg_cost FROM paper_positions WHERE symbol = ?", (_sym_key,)
+                ).fetchone()
+                if _row and _row["avg_cost"] > 0:
+                    fill_price = _row["avg_cost"]
+                    log.info("Paper: using last known price %.4f for %s", fill_price, symbol)
+        except Exception:
+            pass
 
     if fill_price <= 0:
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
-            "reason": f"Invalid mark price for {symbol}",
+            "reason": f"No price available for {symbol} (mark price, quote, and last known all failed)",
             "symbol": symbol, "side": side,
             "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
         }
