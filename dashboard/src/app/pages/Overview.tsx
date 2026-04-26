@@ -14,6 +14,19 @@ interface RiskBudget {
   strategies: { name: string; score: number; tier: string }[];
 }
 
+interface ScalpStats {
+  total_trades: number;
+  closed_trades: number;
+  open_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl: number;
+  best_trade: { symbol: string; pnl: number; timestamp: string } | null;
+  worst_trade: { symbol: string; pnl: number; timestamp: string } | null;
+}
+
 function formatQty(qty: number): string {
   if (qty === 0) return '0';
   const abs = Math.abs(qty);
@@ -230,6 +243,15 @@ export function Overview() {
   const [selectedActivity, setSelectedActivity] = useState<ActionItem | null>(null);
   const [positionAnalyses, setPositionAnalyses] = useState<TradeAnalysis[]>([]);
   const [loadingAnalyses, setLoadingAnalyses] = useState(false);
+  const [scalpStats, setScalpStats] = useState<ScalpStats | null>(null);
+
+  useEffect(() => {
+    fetch('/api/scalp-stats').then(r => r.json()).then(setScalpStats).catch(() => {});
+    const id = setInterval(() => {
+      fetch('/api/scalp-stats').then(r => r.json()).then(setScalpStats).catch(() => {});
+    }, 30000);
+    return () => clearInterval(id);
+  }, []);
 
   const account = status?.account;
   const positions = status?.positions || [];
@@ -391,6 +413,71 @@ export function Overview() {
           iconColor="text-[#c0c0c0]"
         />
       </div>
+
+      {/* Scalp Performance Panel */}
+      {scalpStats !== null && (
+        <Card className="border-l-2 border-l-[#ffa500]">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Activity className="size-4 text-[#ffa500]" />
+              Scalp Performance
+              <span className="ml-auto text-xs font-normal text-[#555555] font-mono">primary strategy</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                <p className="text-xs text-[#888888] mb-1">Win Rate</p>
+                <p className={`text-lg font-bold font-mono ${scalpStats.win_rate >= 50 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                  {scalpStats.win_rate.toFixed(1)}%
+                </p>
+              </div>
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                <p className="text-xs text-[#888888] mb-1">Total P&L</p>
+                <p className={`text-lg font-bold font-mono ${scalpStats.total_pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                  {scalpStats.total_pnl >= 0 ? '+' : ''}${scalpStats.total_pnl.toFixed(2)}
+                </p>
+              </div>
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                <p className="text-xs text-[#888888] mb-1">Avg P&L</p>
+                <p className={`text-lg font-bold font-mono ${scalpStats.avg_pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                  {scalpStats.avg_pnl >= 0 ? '+' : ''}${scalpStats.avg_pnl.toFixed(2)}
+                </p>
+              </div>
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                <p className="text-xs text-[#888888] mb-1">Open</p>
+                <p className="text-lg font-bold font-mono text-[#4a9eff]">{scalpStats.open_trades}</p>
+              </div>
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                <p className="text-xs text-[#888888] mb-1">Closed</p>
+                <p className="text-lg font-bold font-mono text-[#e8e8e8]">{scalpStats.closed_trades}</p>
+              </div>
+              <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                <p className="text-xs text-[#888888] mb-1">W / L</p>
+                <p className="text-lg font-bold font-mono">
+                  <span className="text-[#00d4aa]">{scalpStats.wins}</span>
+                  <span className="text-[#555555]"> / </span>
+                  <span className="text-[#ff4466]">{scalpStats.losses}</span>
+                </p>
+              </div>
+              {scalpStats.best_trade && (
+                <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                  <p className="text-xs text-[#888888] mb-1">Best Trade</p>
+                  <p className="text-sm font-bold text-[#00d4aa] font-mono">+${(scalpStats.best_trade.pnl ?? 0).toFixed(2)}</p>
+                  <p className="text-xs text-[#555555] truncate">{scalpStats.best_trade.symbol}</p>
+                </div>
+              )}
+              {scalpStats.worst_trade && (
+                <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                  <p className="text-xs text-[#888888] mb-1">Worst Trade</p>
+                  <p className="text-sm font-bold text-[#ff4466] font-mono">${(scalpStats.worst_trade.pnl ?? 0).toFixed(2)}</p>
+                  <p className="text-xs text-[#555555] truncate">{scalpStats.worst_trade.symbol}</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Aggregate Leverage & Sector Exposure */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

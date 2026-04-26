@@ -739,6 +739,33 @@ def api_trades():
     return jsonify(trades)
 
 
+@app.route("/api/scalp-stats")
+def api_scalp_stats():
+    from trading.db.store import get_trades
+    all_scalps = get_trades(limit=500, strategy="intraday_scalp")
+    closed = [t for t in all_scalps if t.get("status") == "closed" or t.get("closed_at")]
+    open_trades = [t for t in all_scalps if t.get("closed_at") is None and t.get("status") != "closed"]
+    wins = [t for t in closed if (t.get("pnl") or 0) > 0]
+    losses = [t for t in closed if (t.get("pnl") or 0) <= 0]
+    total_pnl = sum(t.get("pnl") or 0 for t in closed)
+    avg_pnl = total_pnl / len(closed) if closed else 0
+    win_rate = len(wins) / len(closed) if closed else 0
+    best = max(closed, key=lambda t: t.get("pnl") or 0, default=None)
+    worst = min(closed, key=lambda t: t.get("pnl") or 0, default=None)
+    return jsonify({
+        "total_trades": len(all_scalps),
+        "closed_trades": len(closed),
+        "open_trades": len(open_trades),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(win_rate * 100, 1),
+        "total_pnl": round(total_pnl, 2),
+        "avg_pnl": round(avg_pnl, 2),
+        "best_trade": {"symbol": best["symbol"], "pnl": best.get("pnl"), "timestamp": best.get("timestamp")} if best else None,
+        "worst_trade": {"symbol": worst["symbol"], "pnl": worst.get("pnl"), "timestamp": worst.get("timestamp")} if worst else None,
+    })
+
+
 @app.route("/api/position/<symbol>")
 def api_position_detail(symbol):
     """Detailed breakdown for a single position — strategies, reasoning, risk."""

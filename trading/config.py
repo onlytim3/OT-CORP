@@ -89,9 +89,9 @@ SCALP_RISK = {
     "leverage": 10,
     "stop_loss_pct": 0.005,           # 0.5% stop → 5% margin loss at 10x
     "take_profit_pct": 0.015,         # 1.5% target → 15% margin gain at 10x (3:1 R:R)
-    "max_notional_per_trade": 30.0,   # $30 max per scalp (small, leveraged)
-    "max_open_positions": 8,          # Max 8 concurrent scalp positions (expanded from 3 for 21-market coverage)
-    "portfolio_allocation_pct": 0.10, # 10% of portfolio for scalping pool
+    "max_notional_per_trade": 100.0,  # $100 max per scalp (primary strategy — meaningful size)
+    "max_open_positions": 15,         # Up to 15 concurrent scalp positions
+    "portfolio_allocation_pct": 0.70, # 70% of portfolio for scalping (primary style)
 }
 
 # --- Short Selling ---

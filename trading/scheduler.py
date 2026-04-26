@@ -1571,7 +1571,7 @@ def run_scalping_cycle():
             notional = min(
                 SCALP_RISK["max_notional_per_trade"],
                 available_budget / max(len(by_symbol), 1),
-                portfolio_value * 0.03,
+                portfolio_value * 0.08,   # 8% per-position cap (was 3%)
             )
             if notional < 5:
                 continue
