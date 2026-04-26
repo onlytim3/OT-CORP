@@ -927,8 +927,9 @@ def _round_qty(aster_symbol: str, qty: float) -> float:
 
         return qty
 
-    # Fallback: round to 2 decimals
-    return round(qty, 2)
+    # Fallback: 6 decimal places keeps sub-cent crypto quantities (e.g. 0.0000556 BTC)
+    # intact when exchange filters fail to load. round(qty, 2) would zero them.
+    return round(qty, 6)
 
 
 # ---------------------------------------------------------------------------
@@ -1182,10 +1183,16 @@ def _paper_submit_order(
 
         elif side_lower == "sell":
             if pos_row and existing_side == "long" and existing_qty > 0:
-                # Selling a long position — realize P&L
+                # Selling a long position — realize P&L.
+                # Return only the margin that was locked (notional / leverage) plus the
+                # realized PnL, not the full notional — otherwise leveraged longs produce
+                # phantom gains equal to (leverage - 1) × margin on close.
                 sell_qty = min(qty, existing_qty)
                 pnl = sell_qty * (fill_price - existing_cost)
-                _set_paper_cash(_get_paper_cash() + sell_qty * fill_price)
+                leverage_used = float(pos_row["leverage"] or 1) if pos_row else 1.0
+                leverage_used = max(leverage_used, 1.0)
+                margin_returned = sell_qty * existing_cost / leverage_used
+                _set_paper_cash(_get_paper_cash() + margin_returned + pnl)
 
                 remaining = existing_qty - sell_qty
                 if remaining > 1e-10:

@@ -574,10 +574,12 @@ def calculate_order_size(
 
     # Minimum order size (AsterDex hard floor: $5.00)
     if order_value < 5.0:
-        # SMALL ACCOUNT FLOOR: If portfolio is small (< $1500) and strength is high (> 0.6),
-        # nudge up to $5.01 to allow execution instead of returning 0.0.
-        if portfolio_value < 1500 and signal.strength > 0.6 and order_value > 2.0:
-            log.info("SMALL ACCOUNT FLOOR: Nudging $%.2f up to $5.01 for %s", order_value, signal.symbol)
+        # SMALL ACCOUNT FLOOR: nudge to $5.01 rather than silently drop the order.
+        # Threshold aligns with confluence gate (>= 0.40) so we never filter signals
+        # that the risk layer already approved.
+        if portfolio_value < 2000 and signal.strength >= 0.40 and order_value > 0.50:
+            log.info("SMALL ACCOUNT FLOOR: Nudging $%.2f → $5.01 for %s (str=%.2f)",
+                     order_value, signal.symbol, signal.strength)
             order_value = 5.01
         else:
             return 0.0
