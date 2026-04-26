@@ -66,11 +66,15 @@ def _to_aster(symbol: str) -> str:
     if symbol in _ALPACA_TO_ASTER:
         return _ALPACA_TO_ASTER[symbol]
 
-    # Normalise any slash-separated format (e.g. "BNB/USD", "ETH/USDT") → "BNBUSDT"
+    # Normalise any symbol format to AsterDex XYZUSDT form.
+    # Handles: "BNB/USD" (slash), "BTCUSD" (slash-stripped USD suffix), "BTCUSDT" (already correct)
     aster = symbol
     if "/" in aster:
         base = aster.split("/")[0]
         aster = f"{base}USDT"
+    elif aster.endswith("USD") and not aster.endswith("USDT"):
+        # "BTCUSD" → "BTCUSDT" — slash-stripped Alpaca format stored in paper_positions
+        aster = aster[:-3] + "USDT"
     elif not aster.endswith("USDT"):
         aster = f"{aster}USDT"
 
