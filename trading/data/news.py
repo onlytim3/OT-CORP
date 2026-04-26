@@ -54,8 +54,9 @@ _RSS_FEEDS = {
         "https://www.cnbc.com/id/20910258/device/rss/rss.html",
     ],
     "global": [
-        "https://www.cnbc.com/id/100727362/device/rss/rss.html",
-        "https://feeds.marketwatch.com/marketwatch/marketpulse/",
+        # Reuters global business/markets (English, no geo-redirect)
+        "https://news.google.com/rss/search?q=global+financial+markets+economy+GDP&hl=en-US&gl=US&ceid=US:en",
+        "https://news.google.com/rss/search?q=US+economy+recession+inflation+federal+reserve&hl=en-US&gl=US&ceid=US:en",
     ],
 }
 
@@ -888,8 +889,8 @@ def fetch_all_headlines(max_per_source: int = 10) -> list[dict]:
     except Exception:
         pass
 
-    # Finnhub (if configured)
-    for cat in ["general", "crypto", "forex"]:
+    # Finnhub — skip "general" (returns CNBC lifestyle/parenting content)
+    for cat in ["crypto", "forex", "merger"]:
         try:
             all_headlines.extend(fetch_finnhub_news(cat))
         except Exception:
@@ -901,14 +902,22 @@ def fetch_all_headlines(max_per_source: int = 10) -> list[dict]:
     except Exception:
         pass
 
-    # Deduplicate by title (case-insensitive)
+    # Deduplicate by title and filter non-English headlines
     seen = set()
     unique = []
     for h in all_headlines:
-        key = h.get("title", "").lower().strip()
-        if key and key not in seen:
-            seen.add(key)
-            unique.append(h)
+        title = h.get("title", "").strip()
+        if not title:
+            continue
+        key = title.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        # Reject headlines where >15% of chars are non-ASCII (indicates non-English)
+        non_ascii = sum(1 for c in title if ord(c) > 127)
+        if len(title) > 0 and non_ascii / len(title) > 0.15:
+            continue
+        unique.append(h)
 
     return unique
 

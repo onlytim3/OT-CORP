@@ -955,7 +955,7 @@ def analyze_news_impact(headlines: list[dict], positions: list[dict],
                 dt = datetime.fromisoformat(ts)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
-                cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
                 if dt >= cutoff:
                     fresh_headlines.append(h)
                 else:

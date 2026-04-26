@@ -1396,39 +1396,12 @@ def api_intelligence():
             regime_sigs.append(d)
         result["regime_signals"] = regime_sigs
 
-        # News analysis — latest LLM interpretation from news agent
-        try:
-            news_rows = conn.execute(
-                "SELECT * FROM action_log WHERE "
-                "(action = 'news_analysis' OR action LIKE '%news_interpretation%') "
-                "ORDER BY timestamp DESC LIMIT 1"
-            ).fetchall()
-            if news_rows:
-                news_data = dict(news_rows[0])
-                if isinstance(news_data.get("data"), str):
-                    try:
-                        news_data["data"] = json.loads(news_data["data"])
-                    except Exception:
-                        pass
-                data = news_data.get("data", {})
-                if isinstance(data, dict):
-                    interp = data.get("full_analysis") or news_data.get("details", "")
-                    result["news_analysis"] = {
-                        "timestamp": news_data.get("timestamp", ""),
-                        "interpretation": str(interp)[:5000] if interp else "",
-                        "headline_count": data.get("headline_count", 0),
-                        "source_count": data.get("source_count", 0),
-                        "regime": data.get("regime", ""),
-                    }
-        except Exception:
-            pass
-
-        # Asset impacts from latest briefing or news analysis
+        # News analysis + asset impacts — read from latest briefing data column
+        # The briefing's data dict contains news_analysis (structured) and asset_impacts
         try:
             briefing_rows = conn.execute(
-                "SELECT data FROM action_log WHERE "
-                "(action LIKE '%briefing%' OR action = 'news_analysis') "
-                "AND data IS NOT NULL "
+                "SELECT data, timestamp FROM action_log WHERE "
+                "action LIKE '%briefing%' AND data IS NOT NULL "
                 "ORDER BY timestamp DESC LIMIT 3"
             ).fetchall()
             for brow in briefing_rows:
@@ -1438,13 +1411,107 @@ def api_intelligence():
                         bdata = json.loads(bdata)
                     except Exception:
                         continue
-                if isinstance(bdata, dict):
-                    if bdata.get("asset_impacts") and "asset_impacts" not in result:
-                        result["asset_impacts"] = bdata["asset_impacts"]
-                    if bdata.get("news_interpretation") and "news_interpretation" not in result:
-                        result["news_interpretation"] = str(bdata["news_interpretation"])[:5000]
+                if not isinstance(bdata, dict):
+                    continue
+
+                # Asset impacts
+                if bdata.get("asset_impacts") and "asset_impacts" not in result:
+                    result["asset_impacts"] = bdata["asset_impacts"]
+
+                # News interpretation (plain text built by engine.py from key_events/risk_alerts)
+                if bdata.get("news_interpretation") and "news_interpretation" not in result:
+                    result["news_interpretation"] = str(bdata["news_interpretation"])[:5000]
+
+                # Full structured news analysis → build human-readable interpretation
+                na = bdata.get("news_analysis")
+                if na and isinstance(na, dict) and "news_analysis" not in result:
+                    parts = []
+                    key_events = na.get("key_events") or []
+                    signals = na.get("signals") or []
+                    risk_alerts = na.get("risk_alerts") or []
+
+                    if key_events:
+                        parts.append("## Key Events")
+                        for e in key_events[:5]:
+                            if isinstance(e, dict):
+                                headline = e.get("headline", "")
+                                impact = e.get("impact", "")
+                                assets = ", ".join(e.get("assets", [])) if e.get("assets") else ""
+                                line = f"- {headline}"
+                                if impact:
+                                    line += f" ({impact})"
+                                if assets:
+                                    line += f" → {assets}"
+                                parts.append(line)
+
+                    if signals:
+                        parts.append("\n## Trading Signals")
+                        for s in signals[:5]:
+                            if isinstance(s, dict):
+                                direction = s.get("direction", "")
+                                asset = s.get("asset", "")
+                                strength = s.get("strength", 0)
+                                reason = s.get("reason", "")
+                                parts.append(f"- {direction.upper()} {asset} (strength {strength:.1f}): {reason}")
+
+                    if risk_alerts:
+                        parts.append("\n## Risk Alerts")
+                        for a in risk_alerts[:3]:
+                            if isinstance(a, dict):
+                                parts.append(f"- {a.get('alert', str(a))}")
+
+                    if not parts:
+                        parts.append("Analysis complete — no material market-moving events detected in current headlines.")
+
+                    regime = bdata.get("overall_regime", "")
+                    headline_count = na.get("headline_count_used", na.get("headline_count", 0))
+                    stale = na.get("stale_excluded", 0)
+
+                    result["news_analysis"] = {
+                        "timestamp": brow["timestamp"],
+                        "interpretation": "\n".join(parts),
+                        "headline_count": headline_count,
+                        "source_count": stale + headline_count,
+                        "regime": regime,
+                    }
+                    break
         except Exception:
             pass
+
+        # Fallback: check for separate news_analysis action_log entries (legacy)
+        if "news_analysis" not in result:
+            try:
+                news_rows = conn.execute(
+                    "SELECT * FROM action_log WHERE "
+                    "(action = 'news_analysis' OR action LIKE '%news_interpretation%') "
+                    "ORDER BY timestamp DESC LIMIT 1"
+                ).fetchall()
+                if news_rows:
+                    news_data = dict(news_rows[0])
+                    if isinstance(news_data.get("data"), str):
+                        try:
+                            news_data["data"] = json.loads(news_data["data"])
+                        except Exception:
+                            pass
+                    ndata = news_data.get("data") or {}
+                    if isinstance(ndata, dict) and ndata.get("key_events") is not None:
+                        # Structured data — format it
+                        parts = []
+                        for e in (ndata.get("key_events") or [])[:3]:
+                            if isinstance(e, dict) and e.get("headline"):
+                                parts.append(f"- {e['headline']}")
+                        for a in (ndata.get("risk_alerts") or [])[:2]:
+                            if isinstance(a, dict) and a.get("alert"):
+                                parts.append(f"RISK: {a['alert']}")
+                        result["news_analysis"] = {
+                            "timestamp": news_data.get("timestamp", ""),
+                            "interpretation": "\n".join(parts) if parts else "No significant events detected.",
+                            "headline_count": ndata.get("headline_count_used", 0),
+                            "source_count": ndata.get("stale_excluded", 0) + ndata.get("headline_count_used", 0),
+                            "regime": ndata.get("regime", ""),
+                        }
+            except Exception:
+                pass
 
         # Live headlines — fetch current headlines for display
         try:
