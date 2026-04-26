@@ -586,6 +586,16 @@ def calculate_order_size(
                      order_value, signal.symbol, signal.strength)
             order_value = 5.01
         else:
+            log.info(
+                "Order size ZERO %s %s: risk_size=$%.0f × confluence=%.1f × regime=%.2f "
+                "× perf=%.2f × volume=%.2f × corr=%.2f × dd=%.2f × strength=%.2f → $%.2f "
+                "(floor=$5.00, portfolio=$%.0f, nudge_eligible=%s)",
+                signal.action, signal.symbol, risk_based_size,
+                confluence_mult, regime_mult, perf_mult, volume_mult,
+                corr_mult, dd_mult, signal.strength, order_value,
+                portfolio_value,
+                "no — pv≥2000" if portfolio_value >= 2000 else f"no — str={signal.strength:.2f}<0.25" if signal.strength < 0.25 else f"no — val=${order_value:.2f}≤0.50",
+            )
             return 0.0
 
     log.info(

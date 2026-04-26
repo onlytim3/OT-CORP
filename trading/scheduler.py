@@ -1082,6 +1082,20 @@ def run_trading_cycle():
         except Exception as _funnel_err:
             log.debug("Funnel tracking failed: %s", _funnel_err)
 
+        # Post-funnel: surface risk block reasons so they appear in cycle logs
+        if blocked_count > 0 or order_size_zero_count > 0:
+            try:
+                from trading.db.store import get_action_log
+                recent_blocks = get_action_log(category="risk_block", limit=blocked_count + order_size_zero_count + 2)
+                if recent_blocks:
+                    console.print(f"\n[bold red]Risk gate blocked {blocked_count} trade(s) — reasons:[/bold red]")
+                    for b in recent_blocks[:blocked_count + order_size_zero_count]:
+                        sym = b.get("symbol", "?")
+                        reason = b.get("details", b.get("action", "unknown"))
+                        console.print(f"  [red]✗ {sym}: {reason}[/red]")
+            except Exception as _diag_err:
+                log.debug("Risk block diagnosis failed: %s", _diag_err)
+
         # ---------------------------------------------------------------
         # Phase 7: Autonomous improvement cycle
         # ---------------------------------------------------------------
