@@ -4,12 +4,13 @@ Signal pipeline per coin:
   1. 5m VWAP/RSI (0.50) — mean-reversion and momentum-continuation setups
   2. Orderbook imbalance (0.30) — live bid/ask pressure
   3. Funding rate (0.20) — extreme funding predicts unwind direction
-  4. 1h MTF multiplier — aligned 1h trend boosts (+35%), counter-trend suppresses (×0.25)
+  4. 1h MTF multiplier — aligned 1h trend boosts (+35%); counter-trend scales
+     by bias strength (×0.45–0.70), allowing strong mean-reversion to still fire
   5. 4h cycle bias (+0.15 additive) — quality signal from swing cycle wired in
 
 Covers all 21 configured markets (20 crypto + GOLD). Tier-based leverage caps:
   T1 BTC/ETH/SOL → up to 18x | T2 major alts → up to 12x | T3 small alts/gold → 8x.
-Stop 0.5%, take-profit 1.5% (3:1 R:R). Runs via a dedicated 5-minute cycle.
+Stop 0.5%, take-profit 1.5% (3:1 R:R). Threshold 0.18. Runs via 5-minute cycle.
 """
 
 import logging
@@ -30,7 +31,7 @@ RSI_OVERSOLD = 35
 RSI_OVERBOUGHT = 65
 FUNDING_BUY_THRESHOLD = -0.0003
 FUNDING_SELL_THRESHOLD = 0.0003
-MIN_SIGNAL_SCORE = 0.28
+MIN_SIGNAL_SCORE = 0.18
 
 # Tier-based leverage caps: deeper liquidity → higher max leverage allowed
 _LEVERAGE_TIERS: dict[str, int] = {
@@ -257,7 +258,14 @@ class IntradayScalpStrategy(Strategy):
         bias_1h = _get_1h_bias(aster_sym)
         if bias_1h != 0.0:
             same_dir = (combined >= 0) == (bias_1h >= 0)
-            combined *= (1.0 + abs(bias_1h) * 0.35) if same_dir else 0.25
+            # Aligned: boost up to +35% | Counter-trend: scale by strength of bias
+            # 0.25× was too aggressive — even RSI=20 couldn't clear threshold against a 1h trend.
+            # Now: mild counter-trend (|bias|=0.2) = 0.60×, strong (|bias|=1.0) = 0.45×
+            if same_dir:
+                combined *= 1.0 + abs(bias_1h) * 0.35
+            else:
+                counter_factor = max(0.45, 0.70 - abs(bias_1h) * 0.25)
+                combined *= counter_factor
 
         # --- Step 3: 4h cycle bias (additive) ---
         cycle_bias = _get_cycle_bias(alpaca_sym)

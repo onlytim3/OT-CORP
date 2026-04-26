@@ -692,7 +692,9 @@ def run_trading_cycle():
             # Execute (with error handling for insufficient funds, etc.)
             try:
                 order = _execute_order(signal.symbol, signal.action, notional=order_value,
-                                       stop_loss_price=stop_loss_price, leverage=lev)
+                                       stop_loss_price=stop_loss_price,
+                                       take_profit_price=take_profit_price,
+                                       leverage=lev, strategy=signal.strategy)
             except Exception as exec_err:
                 execution_failed_count += 1
                 log_action(
@@ -1480,8 +1482,10 @@ def run_scalping_cycle():
         account = _get_account()
         portfolio_value = account.get("portfolio_value", 0)
         if portfolio_value <= 0:
+            log.warning("Scalp: portfolio_value=%.2f, skipping cycle", portfolio_value)
             return
         if account.get("trading_blocked"):
+            log.warning("Scalp: trading_blocked, skipping cycle")
             return
 
         positions = _get_positions()
@@ -1495,14 +1499,22 @@ def run_scalping_cycle():
             scalp_positions = [p for p in positions if p.get("strategy", "").startswith("intraday_scalp")]
 
         # --- Phase 2: Entry ---
-        if len(scalp_positions) >= SCALP_RISK["max_open_positions"]:
-            log.debug("Scalp: max positions (%d) reached, no new entries", SCALP_RISK["max_open_positions"])
-            return
-
         scalp_budget = portfolio_value * SCALP_RISK["portfolio_allocation_pct"]
         deployed = sum(abs(p.get("market_value", 0)) for p in scalp_positions)
         available_budget = max(scalp_budget - deployed, 0)
+
+        console.print(
+            f"\n[dim cyan]Scalp cycle: pv=${portfolio_value:.0f} "
+            f"budget=${scalp_budget:.0f} deployed=${deployed:.0f} "
+            f"available=${available_budget:.0f} open={len(scalp_positions)}/{SCALP_RISK['max_open_positions']}[/dim cyan]"
+        )
+
+        if len(scalp_positions) >= SCALP_RISK["max_open_positions"]:
+            log.info("Scalp: max positions (%d) reached, no new entries", SCALP_RISK["max_open_positions"])
+            return
+
         if available_budget < 5:
+            log.info("Scalp: insufficient budget ($%.2f), skipping entries", available_budget)
             return
 
         # Symbols already in a scalp position — don't add to them
@@ -1512,9 +1524,11 @@ def run_scalping_cycle():
         strat = IntradayScalpStrategy()
         raw_signals = strat.generate_signals()
 
+        hold_reasons = {}
         by_symbol: dict = {}
         for sig in raw_signals:
             if not sig.is_actionable:
+                hold_reasons[sig.symbol] = sig.reason
                 continue
             # Skip if we already hold this coin in a scalp
             sym_key = sig.symbol.replace("/", "")
@@ -1523,6 +1537,16 @@ def run_scalping_cycle():
             prev = by_symbol.get(sig.symbol)
             if prev is None or sig.strength > prev.strength:
                 by_symbol[sig.symbol] = sig
+
+        data_unavail = sum(1 for r in hold_reasons.values() if "unavailable" in r.lower())
+        log.info(
+            "Scalp signals: %d evaluated, %d actionable, %d data_unavailable",
+            len(raw_signals), len(by_symbol), data_unavail,
+        )
+        if not by_symbol:
+            sample = list(hold_reasons.items())[:3]
+            sample_str = " | ".join(f"{s}: {r[:50]}" for s, r in sample)
+            console.print(f"  [dim]Scalp: no signals — {sample_str}[/dim]")
 
         executed = 0
         for signal in by_symbol.values():
