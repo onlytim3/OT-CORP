@@ -29,6 +29,58 @@ try:
 except ImportError:
     get_aster_ohlcv = None
 
+
+def _fetch_hourly_closes(coin_id: str, aster_sym: str, hours: int) -> "np.ndarray | None":
+    """Fetch hourly close prices, falling back to CoinGecko market chart if AsterDex fails."""
+    # 1. AsterDex — primary source
+    if get_aster_ohlcv is not None:
+        try:
+            df = get_aster_ohlcv(aster_sym, interval="1h", limit=hours + 10)
+            if df is not None and not df.empty and len(df) >= hours // 4:
+                return df["close"].values.astype(float)
+        except Exception:
+            pass
+
+    # 2. CoinGecko market_chart — hourly granularity for ≤ 90 days
+    try:
+        import requests as _req
+        days = max((hours // 24) + 1, 7)
+        r = _req.get(
+            f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
+            params={"vs_currency": "usd", "days": days, "interval": "hourly"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            prices = r.json().get("prices", [])
+            if prices:
+                closes = np.array([p[1] for p in prices], dtype=float)
+                if len(closes) >= hours // 4:
+                    log.info("volatility_regime: CoinGecko fallback for %s (%d pts)", coin_id, len(closes))
+                    return closes
+    except Exception as _cg_err:
+        log.debug("volatility_regime: CoinGecko fallback failed for %s: %s", coin_id, _cg_err)
+
+    # 3. yfinance — 1h interval, 7-day window (already a project dependency)
+    _YFINANCE_TICKERS = {
+        "bitcoin": "BTC-USD", "ethereum": "ETH-USD", "solana": "SOL-USD",
+        "avalanche-2": "AVAX-USD", "polkadot": "DOT-USD",
+    }
+    try:
+        import yfinance as _yf
+        ticker = _YFINANCE_TICKERS.get(coin_id)
+        if ticker:
+            hist = _yf.download(ticker, period="8d", interval="1h",
+                                progress=False, auto_adjust=True)
+            if hist is not None and not hist.empty:
+                closes = hist["Close"].dropna().values.astype(float)
+                if len(closes) >= hours // 4:
+                    log.info("volatility_regime: yfinance fallback for %s (%d pts)", coin_id, len(closes))
+                    return closes
+    except Exception as _yf_err:
+        log.debug("volatility_regime: yfinance fallback failed for %s: %s", coin_id, _yf_err)
+
+    return None
+
 log = logging.getLogger(__name__)
 
 # --- Strategy parameters ---------------------------------------------------
@@ -206,14 +258,11 @@ class VolatilityRegimeStrategy(Strategy):
                 continue
 
             try:
-                df = get_aster_ohlcv(aster_sym, interval="1h", limit=long_w)
+                closes = _fetch_hourly_closes(coin, aster_sym, long_w)
 
-                if df is None or df.empty or len(df) < min_pts:
-                    log.debug("volatility_regime: skipping %s — insufficient data (%d/%d candles)",
-                              coin, len(df) if df is not None and not df.empty else 0, min_pts)
+                if closes is None or len(closes) < min_pts // 4:
+                    log.debug("volatility_regime: skipping %s — insufficient data from all sources", coin)
                     continue
-
-                closes = df["close"].values.astype(float)
 
                 short_vol = _compute_realized_vol(closes, short_w, hpy)
                 long_vol = _compute_realized_vol(closes, long_w, hpy)
