@@ -47,9 +47,10 @@ INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", str(PAPER_BALANCE) if TRADI
 _DATA_DIR = Path(os.getenv("DATA_DIR", ""))
 if _DATA_DIR and _DATA_DIR.exists():
     DB_PATH = _DATA_DIR / "trading.db"
-    # Load persisted mode override (set via dashboard toggle)
+    # Load persisted mode override (set via dashboard toggle).
+    # Env var wins if explicitly provided (e.g. TRADING_MODE=paper in render.yaml).
     _mode_file = _DATA_DIR / ".env.mode"
-    if _mode_file.exists():
+    if _mode_file.exists() and "TRADING_MODE" not in os.environ:
         for line in _mode_file.read_text().strip().splitlines():
             if line.startswith("TRADING_MODE="):
                 TRADING_MODE = line.split("=", 1)[1].strip()
