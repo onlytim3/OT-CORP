@@ -958,6 +958,54 @@ def api_trade_analyses(trade_id):
         return jsonify([])
 
 
+@app.route("/api/trade/<int:trade_id>/analyze", methods=["POST"])
+def api_trade_analyze(trade_id):
+    """On-demand LLM analysis of a single trade."""
+    try:
+        with get_read_db() as conn:
+            trade = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+            if not trade:
+                return jsonify({"error": f"Trade #{trade_id} not found"}), 404
+            trade = dict(trade)
+            journal = [dict(r) for r in conn.execute(
+                "SELECT * FROM journal WHERE trade_id=? ORDER BY timestamp DESC LIMIT 5", (trade_id,)
+            ).fetchall()]
+
+        from trading.llm.engine import ask_llm
+        from trading.db.store import insert_trade_analysis
+
+        side = trade.get("side", "?").upper()
+        symbol = trade.get("symbol", "?")
+        pnl = trade.get("pnl")
+        outcome = f"P&L ${pnl:+.2f}" if pnl is not None else "still open"
+        strategy = trade.get("strategy", "unknown")
+        entry = trade.get("price", 0)
+        close = trade.get("close_price") or "N/A"
+        reasoning = trade.get("entry_reasoning") or "Not recorded"
+        lessons = "; ".join(j.get("lesson", "") for j in journal if j.get("lesson")) or "None"
+
+        prompt = (
+            f"Analyze this trade for the OT-CORP crypto trading system:\n\n"
+            f"Symbol: {symbol} | Side: {side} | Strategy: {strategy}\n"
+            f"Entry: ${entry} | Close: {close} | Outcome: {outcome}\n"
+            f"Entry reasoning: {reasoning}\n"
+            f"Journal lessons: {lessons}\n\n"
+            f"Provide: (1) What went right or wrong, (2) Whether the strategy logic was sound "
+            f"given the outcome, (3) One specific improvement for future trades of this type. "
+            f"Be concise — max 150 words."
+        )
+        system = (
+            "You are the post-trade analyst for OT-CORP, an autonomous crypto trading fund. "
+            "Be direct, specific, and use numbers where available."
+        )
+        analysis = ask_llm(prompt=prompt, system=system, max_tokens=250, call_type="trade_analysis")
+        insert_trade_analysis(trade_id, analysis, source="on-demand")
+        return jsonify({"analysis": analysis})
+    except Exception as e:
+        log.exception("Trade analysis failed for #%d", trade_id)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/signal/<int:signal_id>")
 def api_signal_detail(signal_id):
     """Full detail for a single signal."""

@@ -2244,7 +2244,55 @@ function renderTradeDetail(data) {
         html += '</div>';
     }
 
+    // Entry reasoning (LLM rationale stored at trade time)
+    if (t.entry_reasoning) {
+        html += '<div class="detail-section"><h3>Entry Reasoning</h3>';
+        html += '<div class="journal-entry"><div class="je-rationale">' + t.entry_reasoning + '</div></div>';
+        html += '</div>';
+    }
+
+    // AI analyses (periodic or on-demand LLM evaluations from trade_analyses table)
+    if (data.analyses && data.analyses.length > 0) {
+        html += '<div class="detail-section"><h3>AI Analysis</h3>';
+        for (const a of data.analyses) {
+            html += '<div class="journal-entry">';
+            html += '<div class="je-rationale" style="white-space:pre-wrap;">' + (a.analysis || '') + '</div>';
+            const src = a.source ? ' &bull; ' + a.source : '';
+            html += '<div class="je-meta">' + (a.timestamp || '').replace('T', ' ').substring(0, 19) + src + '</div>';
+            html += '</div>';
+        }
+        html += '</div>';
+    }
+
+    // On-demand analysis button
+    const tradeId = t.id;
+    html += '<div class="detail-section" id="analyzeSection_' + tradeId + '">';
+    html += '<button class="btn" style="width:100%;background:var(--bg-input);border:1px solid var(--border-color);color:var(--text-primary);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;" ';
+    html += 'onclick="analyzeTradeOnDemand(' + tradeId + ')">&#9881; Analyze This Trade</button>';
+    html += '<div id="analyzeResult_' + tradeId + '" style="margin-top:12px;"></div>';
+    html += '</div>';
+
     return html;
+}
+
+function analyzeTradeOnDemand(tradeId) {
+    const btn = document.querySelector('#analyzeSection_' + tradeId + ' button');
+    const resultEl = document.getElementById('analyzeResult_' + tradeId);
+    if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
+    fetch('/api/trade/' + tradeId + '/analyze', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.analysis) {
+                resultEl.innerHTML = '<div class="journal-entry"><div class="je-rationale" style="white-space:pre-wrap;">' + data.analysis + '</div><div class="je-meta">Just now &bull; on-demand</div></div>';
+            } else {
+                resultEl.innerHTML = '<div class="dim" style="font-size:12px;">' + (data.error || 'No analysis returned') + '</div>';
+            }
+            if (btn) { btn.disabled = false; btn.textContent = '&#9881; Analyze This Trade'; }
+        })
+        .catch(e => {
+            if (resultEl) resultEl.innerHTML = '<div class="red" style="font-size:12px;">Request failed: ' + e + '</div>';
+            if (btn) { btn.disabled = false; btn.textContent = '&#9881; Analyze This Trade'; }
+        });
 }
 
 // ---- Signal Detail ----
