@@ -429,6 +429,7 @@ def submit_order(
     order_type: str = "MARKET",
     leverage: int = 1,
     stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
     limit_price: Optional[float] = None,
     time_in_force: str = "GTC",
     strategy: str = "",
@@ -455,8 +456,9 @@ def submit_order(
     if mode != "live":
         log.debug("Paper mode order: %s %s notional=%s leverage=%dx", side, symbol, notional, leverage)
         return _paper_submit_order(symbol, side, notional=notional, qty=qty,
-                                   stop_loss_price=stop_loss_price, leverage=leverage,
-                                   strategy=strategy)
+                                   stop_loss_price=stop_loss_price,
+                                   take_profit_price=take_profit_price,
+                                   leverage=leverage, strategy=strategy)
 
     # -------------------------------------------------------------------
     # Smart execution: TWAP for large orders, limit orders when enabled
@@ -970,6 +972,15 @@ def _init_paper_tables():
             conn.execute("ALTER TABLE paper_positions ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass  # Column already exists
+        # Migration: add stop/TP price columns for per-position enforcement
+        try:
+            conn.execute("ALTER TABLE paper_positions ADD COLUMN stop_loss_price REAL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE paper_positions ADD COLUMN take_profit_price REAL DEFAULT 0")
+        except Exception:
+            pass
 
 
 def _get_paper_cash() -> float:
@@ -1010,6 +1021,7 @@ def _paper_submit_order(
     notional: Optional[float] = None,
     qty: Optional[float] = None,
     stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
     leverage: int = 1,
     strategy: str = "",
 ) -> dict:
@@ -1181,10 +1193,13 @@ def _paper_submit_order(
                     _set_paper_cash(_get_paper_cash() + pnl + qty * fill_price)
             else:
                 # New long position
+                sl = stop_loss_price or 0.0
+                tp = take_profit_price or 0.0
                 conn.execute(
-                    "INSERT INTO paper_positions (symbol, side, qty, avg_cost, strategy, leverage, opened_at, updated_at) "
-                    "VALUES (?, 'long', ?, ?, ?, ?, ?, ?)",
-                    (sym_key, qty, fill_price, strategy, leverage, now, now),
+                    "INSERT INTO paper_positions "
+                    "(symbol, side, qty, avg_cost, strategy, leverage, stop_loss_price, take_profit_price, opened_at, updated_at) "
+                    "VALUES (?, 'long', ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (sym_key, qty, fill_price, strategy, leverage, sl, tp, now, now),
                 )
 
         elif side_lower == "sell":
@@ -1228,10 +1243,13 @@ def _paper_submit_order(
                         (new_qty, new_avg, now, sym_key),
                     )
                 else:
+                    sl = stop_loss_price or 0.0
+                    tp = take_profit_price or 0.0
                     conn.execute(
-                        "INSERT OR REPLACE INTO paper_positions (symbol, side, qty, avg_cost, strategy, leverage, opened_at, updated_at) "
-                        "VALUES (?, 'short', ?, ?, ?, ?, ?, ?)",
-                        (sym_key, qty, fill_price, strategy, leverage, now, now),
+                        "INSERT OR REPLACE INTO paper_positions "
+                        "(symbol, side, qty, avg_cost, strategy, leverage, stop_loss_price, take_profit_price, opened_at, updated_at) "
+                        "VALUES (?, 'short', ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (sym_key, qty, fill_price, strategy, leverage, sl, tp, now, now),
                     )
 
     log.info("PAPER FILL: %s %s %.6f %s @ $%.4f ($%.2f)",
@@ -1316,6 +1334,8 @@ def _paper_get_positions() -> list[dict]:
             "strategy": row.get("strategy", ""),
             "aster_symbol": aster_sym,
             "leverage": row.get("leverage", 1) or 1,
+            "stop_loss_price": float(row.get("stop_loss_price") or 0),
+            "take_profit_price": float(row.get("take_profit_price") or 0),
             "liquidation_price": 0,
             "paper": True,
         })

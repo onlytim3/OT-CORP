@@ -128,7 +128,8 @@ def _get_positions():
     return get_positions_from_aster()
 
 
-def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None, leverage=1, strategy=""):
+def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None,
+                   take_profit_price=None, leverage=1, strategy=""):
     """Execute order via AsterDex perpetual futures."""
     if leverage > 1:
         try:
@@ -138,7 +139,8 @@ def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None, 
             log.warning("Failed to set leverage %dx for %s: %s", leverage, symbol, e)
     from trading.execution.router import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty,
-                        stop_loss_price=stop_loss_price, leverage=leverage, strategy=strategy)
+                        stop_loss_price=stop_loss_price, take_profit_price=take_profit_price,
+                        leverage=leverage, strategy=strategy)
 
 
 def _notify_safe(func, *args, **kwargs):
@@ -1387,11 +1389,88 @@ def _check_scale_in_winners(positions, portfolio_value):
 # Intraday scalping cycle (runs every 5 minutes, independent of 4h swing cycle)
 # ---------------------------------------------------------------------------
 
-def run_scalping_cycle():
-    """5-minute scalping cycle — generates and executes intraday scalp signals.
+def _check_scalp_exits(scalp_positions: list) -> list:
+    """Check open scalp positions for SL or TP hits. Returns list of symbols closed."""
+    from trading.config import SCALP_RISK
+    from trading.db.store import log_action, insert_trade
 
-    Completely separate from the 4-hour swing cycle. Uses IntradayScalpStrategy
-    on 5m candles with 10x leverage, 0.5% stops, 1.5% take-profit targets.
+    closed = []
+    for pos in scalp_positions:
+        symbol = pos["symbol"]
+        side = pos.get("side", "long")
+        avg_cost = pos.get("avg_cost", 0)
+        current = pos.get("current_price", 0)
+        qty = pos.get("qty", 0)
+        leverage = pos.get("leverage", 1) or 1
+
+        if avg_cost <= 0 or current <= 0 or qty <= 0:
+            continue
+
+        raw_pct = (current - avg_cost) / avg_cost
+        gain_pct = -raw_pct if side == "short" else raw_pct
+
+        sl_price = pos.get("stop_loss_price", 0) or 0
+        tp_price = pos.get("take_profit_price", 0) or 0
+        sl_pct = SCALP_RISK["stop_loss_pct"]
+        tp_pct = SCALP_RISK["take_profit_pct"]
+
+        trigger = None
+        close_side = "buy" if side == "short" else "sell"
+
+        # Check stop-loss (price-level first, then %)
+        if sl_price > 0:
+            hit = (side == "long" and current <= sl_price) or (side == "short" and current >= sl_price)
+            if hit:
+                trigger = ("stop_loss", f"SCALP SL hit @ ${current:.2f} (sl=${sl_price:.2f}, {gain_pct*100:.1f}%)")
+        if trigger is None and gain_pct <= -sl_pct:
+            trigger = ("stop_loss", f"SCALP SL: {gain_pct*100:.1f}% loss (threshold -{sl_pct*100:.1f}%)")
+
+        # Check take-profit (price-level first, then %)
+        if trigger is None and tp_price > 0:
+            hit = (side == "long" and current >= tp_price) or (side == "short" and current <= tp_price)
+            if hit:
+                trigger = ("take_profit", f"SCALP TP hit @ ${current:.2f} (tp=${tp_price:.2f}, +{gain_pct*100:.1f}%)")
+        if trigger is None and gain_pct >= tp_pct:
+            trigger = ("take_profit", f"SCALP TP: +{gain_pct*100:.1f}% gain (threshold +{tp_pct*100:.1f}%)")
+
+        if trigger:
+            action_type, reason = trigger
+            color = "red" if action_type == "stop_loss" else "green"
+            console.print(
+                f"  [bold {color}]SCALP EXIT ({action_type.upper().replace('_', ' ')}) "
+                f"{symbol} {side}[/bold {color}] {reason}"
+            )
+            try:
+                order = _execute_order(symbol, close_side, qty=qty, leverage=leverage, strategy="intraday_scalp")
+                if order.get("status") in ("filled", "accepted", "new", "pending_new"):
+                    closed.append(symbol)
+                    exit_price = float(order.get("filled_avg_price") or current)
+                    pnl = qty * (exit_price - avg_cost) * (1 if side == "long" else -1)
+                    insert_trade(
+                        symbol=symbol, side=close_side, qty=qty,
+                        price=exit_price, total=qty * exit_price,
+                        strategy="intraday_scalp",
+                        data={
+                            "action": action_type, "pnl": round(pnl, 4),
+                            "pnl_pct": round(gain_pct * 100, 2),
+                            "leverage": leverage, "avg_cost": avg_cost,
+                        },
+                    )
+                    log_action("scalp_cycle", action_type, symbol=symbol, result="closed", details=reason,
+                               data={"pnl": round(pnl, 4), "gain_pct": round(gain_pct * 100, 2)})
+            except Exception as e:
+                log.error("Scalp exit failed for %s: %s", symbol, e)
+
+    return closed
+
+
+def run_scalping_cycle():
+    """5-minute scalping cycle: monitor open scalp positions, then enter new ones.
+
+    Phase 1 — Exit management: check every open scalp position for SL/TP hits.
+    Phase 2 — Entry: generate new scalp signals, skip coins already in a position,
+               execute with per-position stop_loss_price and take_profit_price stored
+               in the DB for continuous enforcement every cycle.
     """
     from trading.config import SCALP_RISK
     from trading.db.store import log_action
@@ -1401,64 +1480,90 @@ def run_scalping_cycle():
         portfolio_value = account.get("portfolio_value", 0)
         if portfolio_value <= 0:
             return
-
         if account.get("trading_blocked"):
             return
 
         positions = _get_positions()
         scalp_positions = [p for p in positions if p.get("strategy", "").startswith("intraday_scalp")]
+
+        # --- Phase 1: Exit management (runs every cycle regardless of new signals) ---
+        closed_symbols = _check_scalp_exits(scalp_positions)
+        # Refresh after closes
+        if closed_symbols:
+            positions = _get_positions()
+            scalp_positions = [p for p in positions if p.get("strategy", "").startswith("intraday_scalp")]
+
+        # --- Phase 2: Entry ---
         if len(scalp_positions) >= SCALP_RISK["max_open_positions"]:
-            log.debug("Scalp: max positions (%d) reached, skipping cycle", SCALP_RISK["max_open_positions"])
+            log.debug("Scalp: max positions (%d) reached, no new entries", SCALP_RISK["max_open_positions"])
             return
 
         scalp_budget = portfolio_value * SCALP_RISK["portfolio_allocation_pct"]
         deployed = sum(abs(p.get("market_value", 0)) for p in scalp_positions)
         available_budget = max(scalp_budget - deployed, 0)
         if available_budget < 5:
-            log.debug("Scalp: budget exhausted (deployed=$%.0f / $%.0f)", deployed, scalp_budget)
             return
 
-        from trading.strategy.intraday_scalp import IntradayScalpStrategy
-        strategy = IntradayScalpStrategy()
-        raw_signals = strategy.generate_signals()
+        # Symbols already in a scalp position — don't add to them
+        held_scalp_symbols = {p["symbol"].replace("/", "") for p in scalp_positions}
 
-        # Dedup: one signal per symbol, keep strongest actionable
+        from trading.strategy.intraday_scalp import IntradayScalpStrategy
+        strat = IntradayScalpStrategy()
+        raw_signals = strat.generate_signals()
+
         by_symbol: dict = {}
         for sig in raw_signals:
-            if sig.is_actionable:
-                prev = by_symbol.get(sig.symbol)
-                if prev is None or sig.strength > prev.strength:
-                    by_symbol[sig.symbol] = sig
+            if not sig.is_actionable:
+                continue
+            # Skip if we already hold this coin in a scalp
+            sym_key = sig.symbol.replace("/", "")
+            if sym_key in held_scalp_symbols:
+                continue
+            prev = by_symbol.get(sig.symbol)
+            if prev is None or sig.strength > prev.strength:
+                by_symbol[sig.symbol] = sig
 
         executed = 0
         for signal in by_symbol.values():
             if len(scalp_positions) + executed >= SCALP_RISK["max_open_positions"]:
                 break
 
-            notional = min(SCALP_RISK["max_notional_per_trade"], available_budget / max(len(by_symbol), 1))
-            notional = min(notional, portfolio_value * 0.03)  # never > 3% per scalp
+            notional = min(
+                SCALP_RISK["max_notional_per_trade"],
+                available_budget / max(len(by_symbol), 1),
+                portfolio_value * 0.03,
+            )
             if notional < 5:
                 continue
 
             leverage = signal.data.get("leverage", SCALP_RISK["leverage"])
             stop_pct = signal.data.get("stop_pct", SCALP_RISK["stop_loss_pct"])
+            tp_pct = signal.data.get("take_profit_pct", SCALP_RISK["take_profit_pct"])
             price = signal.data.get("price", 0)
 
             if price > 0:
-                stop_price = price * (1 - stop_pct) if signal.action == "buy" else price * (1 + stop_pct)
+                if signal.action == "buy":
+                    sl_price = price * (1 - stop_pct)
+                    tp_price = price * (1 + tp_pct)
+                else:
+                    sl_price = price * (1 + stop_pct)
+                    tp_price = price * (1 - tp_pct)
             else:
-                stop_price = None
+                sl_price = None
+                tp_price = None
 
             console.print(
                 f"  [bold cyan]SCALP {signal.action.upper()} {signal.symbol}[/bold cyan] "
-                f"${notional:.0f} {leverage}x | {signal.reason}"
+                f"${notional:.0f} @ {leverage}x | SL=${sl_price:.2f if sl_price else 0:.2f} "
+                f"TP=${tp_price:.2f if tp_price else 0:.2f} | {signal.reason}"
             )
 
             try:
                 order = _execute_order(
                     signal.symbol, signal.action,
                     notional=notional,
-                    stop_loss_price=stop_price,
+                    stop_loss_price=sl_price,
+                    take_profit_price=tp_price,
                     leverage=leverage,
                     strategy="intraday_scalp",
                 )
@@ -1467,24 +1572,24 @@ def run_scalping_cycle():
                     executed += 1
                     log_action(
                         "scalp_cycle", "scalp_trade",
-                        symbol=signal.symbol,
-                        result="executed",
+                        symbol=signal.symbol, result="executed",
                         details=signal.reason,
                         data={
                             "notional": notional, "leverage": leverage,
-                            "stop_price": stop_price, "strength": signal.strength,
+                            "sl_price": sl_price, "tp_price": tp_price,
+                            "strength": signal.strength,
                             **{k: v for k, v in (signal.data or {}).items()
                                if k in ("rsi", "vwap", "price", "ob_imbalance",
-                                        "avg_funding", "combined_score")},
+                                        "avg_funding", "combined_score", "bias_1h", "cycle_bias")},
                         },
                     )
                 else:
-                    log.warning("Scalp order rejected for %s: %s", signal.symbol, order.get("reason", status))
+                    log.warning("Scalp entry rejected for %s: %s", signal.symbol, order.get("reason", status))
             except Exception as e:
-                log.error("Scalp execution failed for %s: %s", signal.symbol, e)
+                log.error("Scalp entry failed for %s: %s", signal.symbol, e)
 
         if executed:
-            console.print(f"  [cyan]Scalp cycle complete: {executed} trades executed[/cyan]")
+            console.print(f"  [cyan]Scalp cycle: {executed} new position(s) opened[/cyan]")
 
     except Exception as e:
         log.error("Scalping cycle error: %s", e, exc_info=True)
