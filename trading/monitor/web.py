@@ -1582,12 +1582,26 @@ def api_regime_analysis():
     """Comprehensive regime analysis: current state, category scores, HMM, volatility, history, P&L."""
     result = {}
 
-    # Current regime from settings
+    # Read latest briefing once — used for current_regime and category_scores
+    latest_briefing: dict = {}
     try:
-        label = get_setting("current_regime") or "unknown"
-        score_raw = get_setting("current_regime_score")
-        score = float(score_raw) if score_raw else 0.0
-        result["current_regime"] = {"label": label, "score": score}
+        with get_read_db() as conn:
+            brow = conn.execute(
+                "SELECT data FROM action_log WHERE action LIKE '%briefing%' "
+                "AND data IS NOT NULL ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+        if brow and brow["data"]:
+            latest_briefing = json.loads(brow["data"]) if isinstance(brow["data"], str) else brow["data"]
+            if not isinstance(latest_briefing, dict):
+                latest_briefing = {}
+    except Exception:
+        pass
+
+    # Current regime — prefer briefing data over settings (settings may be unset)
+    try:
+        label = latest_briefing.get("overall_regime") or get_setting("current_regime") or "unknown"
+        score = float(latest_briefing.get("overall_score", 0.0)) or float(get_setting("current_regime_score") or 0)
+        result["current_regime"] = {"label": label, "score": round(score, 3)}
     except Exception:
         result["current_regime"] = {"label": "unknown", "score": 0.0}
 
@@ -1626,50 +1640,47 @@ def api_regime_analysis():
     except Exception:
         result["hmm"] = None
 
-    # Category scores from latest briefing
+    # Category scores from latest briefing (reuse already-fetched data)
     try:
-        with get_read_db() as conn:
-            brow = conn.execute(
-                "SELECT data FROM action_log WHERE action LIKE '%briefing%' "
-                "AND data IS NOT NULL ORDER BY timestamp DESC LIMIT 1"
-            ).fetchone()
-        if brow and brow["data"]:
-            bd = json.loads(brow["data"]) if isinstance(brow["data"], str) else brow["data"]
-            cats = bd.get("categories", {})
-            result["category_scores"] = {
-                k: round(float(v.get("score", 0.0) if isinstance(v, dict) else v), 3)
-                for k, v in cats.items()
-            }
-            result["event_risk"] = bd.get("event_risk", [])
-        else:
-            result["category_scores"] = {}
-            result["event_risk"] = []
+        cats = latest_briefing.get("categories", {})
+        result["category_scores"] = {
+            k: round(float(v.get("score", 0.0) if isinstance(v, dict) else v), 3)
+            for k, v in cats.items()
+        }
+        result["event_risk"] = latest_briefing.get("event_risk", [])
     except Exception:
         result["category_scores"] = {}
         result["event_risk"] = []
 
-    # Volatility regime — latest signals per symbol
+    # Volatility regime — latest signal per symbol with real vol data.
+    # Fetch more rows than needed so we can skip stale/zeroed entries (old signals
+    # from before the strategy fix had no vol data in their data field).
     try:
         with get_read_db() as conn:
             vol_rows = conn.execute(
                 "SELECT symbol, data, timestamp FROM signals "
-                "WHERE strategy='volatility_regime' "
-                "ORDER BY timestamp DESC LIMIT 10"
+                "WHERE strategy='volatility_regime' AND data IS NOT NULL "
+                "ORDER BY timestamp DESC LIMIT 50"
             ).fetchall()
-        seen_syms = set()
+        seen_syms: set = set()
         vol_list = []
         for r in vol_rows:
             if r["symbol"] in seen_syms:
                 continue
-            seen_syms.add(r["symbol"])
             try:
                 d = json.loads(r["data"]) if r["data"] else {}
+                long_vol = float(d.get("long_vol", 0.0))
+                short_vol = float(d.get("short_vol", 0.0))
+                # Skip signals with no real vol data (zeroed placeholder entries)
+                if long_vol == 0.0 and short_vol == 0.0:
+                    continue
+                seen_syms.add(r["symbol"])
                 vol_list.append({
                     "symbol": r["symbol"],
                     "regime": d.get("regime", "unknown"),
-                    "vol_ratio": d.get("vol_ratio", 0.0),
-                    "short_vol": d.get("short_vol", 0.0),
-                    "long_vol": d.get("long_vol", 0.0),
+                    "vol_ratio": round(float(d.get("vol_ratio", 0.0)), 4),
+                    "short_vol": round(short_vol, 4),
+                    "long_vol": round(long_vol, 4),
                     "timestamp": r["timestamp"],
                 })
             except Exception:
