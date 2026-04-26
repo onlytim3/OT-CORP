@@ -255,13 +255,8 @@ class WhaleFlowStrategy(Strategy):
                 # Fetch deep order book (50 levels)
                 book = _fetch_deep_orderbook(aster_symbol)
                 if book is None:
-                    signals.append(Signal(
-                        strategy=self.name,
-                        symbol=ASTER_SYMBOLS.get(coin_id, aster_symbol),
-                        action="hold",
-                        strength=0.0,
-                        reason=f"{coin_id} whale_flow: no orderbook data",
-                    ))
+                    # Abstain rather than veto — other strategies can still act on this symbol
+                    log.warning("whale_flow: skipping %s — no orderbook data", coin_id)
                     continue
 
                 bids = book["bids"]

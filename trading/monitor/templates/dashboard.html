@@ -1726,7 +1726,14 @@ th.text-right, td.text-right {
 
         <!-- Market Intelligence (AJAX) -->
         <div class="card">
-            <div class="card-header">Market Intelligence</div>
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <span>Market Intelligence</span>
+                <button id="refreshBriefingBtn" onclick="refreshBriefing()"
+                        style="font-size:11px;padding:2px 10px;background:transparent;border:1px solid #555;
+                               color:#aaa;border-radius:4px;cursor:pointer;">
+                    ↻ Refresh
+                </button>
+            </div>
             <div class="card-body" id="marketIntelligence">
                 <div class="skeleton" style="height:140px;margin:12px 20px;"></div>
             </div>
@@ -2926,6 +2933,23 @@ function loadStrategyPerformance() {
         .catch(() => {
             el.innerHTML = '<div class="card-empty">Failed to load strategy data.</div>';
         });
+}
+
+function refreshBriefing() {
+    const btn = document.getElementById('refreshBriefingBtn');
+    if (btn) { btn.textContent = '↻ Refreshing…'; btn.disabled = true; }
+    fetch('/api/intelligence/refresh', {method: 'POST'})
+        .then(r => r.json())
+        .then(d => {
+            if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+            if (d.success) {
+                loadMarketIntelligence();
+            } else {
+                if (btn) btn.style.color = 'var(--color-red)';
+                setTimeout(() => { if (btn) btn.style.color = ''; }, 3000);
+            }
+        })
+        .catch(() => { if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; } });
 }
 
 function loadMarketIntelligence() {

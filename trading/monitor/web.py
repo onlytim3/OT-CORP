@@ -1461,6 +1461,100 @@ def api_intelligence():
     return jsonify(result)
 
 
+@app.route("/api/intelligence/refresh", methods=["POST"])
+def api_intelligence_refresh():
+    """Force-generate a fresh intelligence briefing and persist it."""
+    try:
+        from trading.intelligence.engine import generate_briefing
+        from trading.db.store import log_action
+        briefing = generate_briefing()
+        log_action("intelligence", "briefing", details=briefing.summary(), data=briefing.to_dict())
+        return jsonify({
+            "success": True,
+            "regime": briefing.overall_regime,
+            "score": briefing.overall_score,
+            "summary": briefing.summary(),
+        })
+    except Exception as e:
+        log.error("Intelligence refresh failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/debug-sources")
+def api_debug_sources():
+    """Data source health check — tests each source and returns status dict."""
+    results = {}
+
+    # FRED
+    try:
+        from trading.config import FRED_API_KEY
+        results["fred_key_set"] = bool(FRED_API_KEY)
+        if FRED_API_KEY:
+            from trading.data.commodities import get_fred_series
+            df = get_fred_series("FEDFUNDS", limit=1)
+            results["fred_fedfunds"] = "ok" if df is not None and not df.empty else "empty"
+        else:
+            results["fred_fedfunds"] = "no key"
+    except Exception as e:
+        results["fred_fedfunds"] = f"error: {e}"
+
+    # Finnhub
+    try:
+        finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
+        results["finnhub_key_set"] = bool(finnhub_key)
+        if finnhub_key:
+            from trading.data.news import fetch_finnhub_news
+            news = fetch_finnhub_news(category="general")
+            results["finnhub_news"] = f"ok ({len(news)} articles)"
+        else:
+            results["finnhub_news"] = "no key"
+    except Exception as e:
+        results["finnhub_news"] = f"error: {e}"
+
+    # Fear & Greed
+    try:
+        from trading.data.sentiment import get_fear_greed
+        fg = get_fear_greed(limit=1)
+        val = fg.get("current", {}).get("value", "?") if fg else None
+        results["fear_greed"] = f"ok ({val})" if val else "empty"
+    except Exception as e:
+        results["fear_greed"] = f"error: {e}"
+
+    # CoinGecko
+    try:
+        from trading.data.news import fetch_coingecko_global
+        cg = fetch_coingecko_global()
+        results["coingecko"] = "ok" if cg else "empty"
+    except Exception as e:
+        results["coingecko"] = f"error: {e}"
+
+    # BLS CPI
+    try:
+        from trading.data.news import fetch_bls_series
+        bls = fetch_bls_series("CUUR0000SA0")
+        results["bls_cpi"] = "ok" if bls else "empty"
+    except Exception as e:
+        results["bls_cpi"] = f"error: {e}"
+
+    # Treasury yields
+    try:
+        from trading.data.news import fetch_treasury_yields
+        yields = fetch_treasury_yields()
+        results["treasury_yields"] = "ok" if yields else "empty"
+    except Exception as e:
+        results["treasury_yields"] = f"error: {e}"
+
+    # RSS headlines
+    try:
+        from trading.data.news import fetch_rss_headlines
+        hl = fetch_rss_headlines("crypto")
+        results["rss_crypto"] = f"ok ({len(hl)} articles)"
+    except Exception as e:
+        results["rss_crypto"] = f"error: {e}"
+
+    return jsonify(results)
+
+
 @app.route("/api/agents")
 def api_agents():
     """Autonomous agent recommendations and activity."""

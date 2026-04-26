@@ -69,7 +69,7 @@ _CONFLICT_MARGIN_THRESHOLD: float = 0.15
 required to declare a winner when signals conflict. Below this the
 aggregator emits a 'hold' signal for the symbol."""
 
-MIN_CONFLUENCE_STRENGTH: float = 0.55
+MIN_CONFLUENCE_STRENGTH: float = 0.40
 """Minimum strength required when only ONE strategy votes for a trade.
 
 This is the PRIMARY gate that prevents the March 25 scenario:
@@ -78,7 +78,8 @@ This is the PRIMARY gate that prevents the March 25 scenario:
   - Violent altcoin rally wiped -30.45% in one cycle
 
 With this gate:
-  - 1 strategy + strength < 0.55 → hold (high-conviction required)
+  - 1 strategy + strength < 0.40 → hold (weak signal, insufficient conviction)
+  - 1 strategy + strength ≥ 0.40 → proceed (high-conviction single-strategy)
   - 2+ strategies → proceed as normal
   - Recovery mode → requires 2+ strategies regardless of strength
 """
