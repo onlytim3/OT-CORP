@@ -377,11 +377,13 @@ def _drawdown_multiplier(portfolio_value):
         if peak <= 0:
             return 1.0
         drawdown = (peak - portfolio_value) / peak
-        if drawdown <= 0.05: return 1.0
-        elif drawdown <= 0.10: return 0.75
-        elif drawdown <= 0.15: return 0.5
-        elif drawdown <= 0.20: return 0.25
-        else: return 0.0  # halt
+        max_dd = RISK.get("max_drawdown_pct", 0.50)
+        if drawdown <= max_dd * 0.10:   return 1.0
+        elif drawdown <= max_dd * 0.20: return 0.75
+        elif drawdown <= max_dd * 0.30: return 0.50
+        elif drawdown <= max_dd * 0.40: return 0.25
+        elif drawdown <= max_dd:        return 0.10
+        else: return 0.0  # beyond configured max — circuit breaker handles full halt
     except Exception:
         return 1.0
 

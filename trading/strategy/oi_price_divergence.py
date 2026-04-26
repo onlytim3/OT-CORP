@@ -33,7 +33,6 @@ log = logging.getLogger(__name__)
 COINS = ["bitcoin", "ethereum", "solana"]
 
 ASTER_SYMBOL_MAP = {c: ASTER_SYMBOLS[c] for c in COINS}
-ASTER_SYMBOL_MAP = {c: ASTER_SYMBOLS[c] for c in COINS}
 
 # ---------------------------------------------------------------------------
 # Thresholds
@@ -216,12 +215,11 @@ class OIPriceDivergenceStrategy(Strategy):
 
         for coin_id in COINS:
             aster_sym = ASTER_SYMBOL_MAP.get(coin_id)
-            aster_sym = ASTER_SYMBOL_MAP.get(coin_id)
-            if not aster_sym or not aster_sym:
+            if not aster_sym:
                 continue
 
             try:
-                signal = self._evaluate_coin(coin_id, aster_sym, aster_sym, context_data)
+                signal = self._evaluate_coin(coin_id, aster_sym, context_data)
                 signals.append(signal)
             except Exception as exc:
                 log.error("oi_price_divergence error for %s: %s", coin_id, exc)
