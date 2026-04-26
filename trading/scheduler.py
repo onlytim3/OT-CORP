@@ -479,7 +479,8 @@ def run_trading_cycle():
             import json as _json
             import time as _time
             from trading.db.store import set_setting as _ss
-            _SCALP_MAP = {"BTC/USD": "BTC", "ETH/USD": "ETH", "SOL/USD": "SOL"}
+            from trading.config import CRYPTO_SYMBOLS as _CS
+            _SCALP_MAP = {v: v.split("/")[0] for v in _CS.values()}
             _bias: dict = {}
             for _sig in consolidated:
                 _coin = _SCALP_MAP.get(_sig.symbol)

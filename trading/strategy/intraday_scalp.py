@@ -7,7 +7,8 @@ Signal pipeline per coin:
   4. 1h MTF multiplier — aligned 1h trend boosts (+35%), counter-trend suppresses (×0.25)
   5. 4h cycle bias (+0.15 additive) — quality signal from swing cycle wired in
 
-Leverage adapts to conviction: 8x (weak) → 12x (moderate) → 18x (high).
+Covers all 21 configured markets (20 crypto + GOLD). Tier-based leverage caps:
+  T1 BTC/ETH/SOL → up to 18x | T2 major alts → up to 12x | T3 small alts/gold → 8x.
 Stop 0.5%, take-profit 1.5% (3:1 R:R). Runs via a dedicated 5-minute cycle.
 """
 
@@ -20,7 +21,7 @@ from trading.strategy.registry import register
 
 log = logging.getLogger(__name__)
 
-SCALP_COINS = ["bitcoin", "ethereum", "solana"]
+SCALP_COINS = list(ASTER_SYMBOLS.keys())  # All 21 configured markets
 
 STOP_PCT = 0.005         # 0.5% stop → 5% margin loss at 10x
 TAKE_PROFIT_PCT = 0.015  # 1.5% target → 15% margin gain at 10x
@@ -30,6 +31,13 @@ RSI_OVERBOUGHT = 65
 FUNDING_BUY_THRESHOLD = -0.0003
 FUNDING_SELL_THRESHOLD = 0.0003
 MIN_SIGNAL_SCORE = 0.28
+
+# Tier-based leverage caps: deeper liquidity → higher max leverage allowed
+_LEVERAGE_TIERS: dict[str, int] = {
+    "bitcoin": 18, "ethereum": 18, "solana": 18,
+    "bnb": 12, "xrp": 12, "avalanche-2": 12, "polkadot": 12,
+    "chainlink": 12, "dogecoin": 12, "litecoin": 12, "bitcoin-cash": 12,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -182,18 +190,22 @@ def _get_cycle_bias(alpaca_sym: str) -> float:
         return 0.0
 
 
-def _adaptive_leverage(abs_score: float) -> int:
-    """Scale leverage with signal conviction.
+def _adaptive_leverage(abs_score: float, coin_id: str = "") -> int:
+    """Scale leverage with signal conviction, capped by per-coin liquidity tier.
 
     Low conviction (0.28–0.50)  → 8x  (protect capital on weaker setups)
     Moderate conviction (0.50–0.70) → 12x
     High conviction (> 0.70)    → 18x  (press hard when edge is clear)
+
+    Tier caps (from _LEVERAGE_TIERS): T1 BTC/ETH/SOL → 18x, T2 majors → 12x,
+    T3 small alts + commodities → 8x max.
     """
+    tier_max = _LEVERAGE_TIERS.get(coin_id, 8)
     if abs_score >= 0.70:
-        return 18
+        return min(18, tier_max)
     elif abs_score >= 0.50:
-        return 12
-    return 8
+        return min(12, tier_max)
+    return min(8, tier_max)
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +272,7 @@ class IntradayScalpStrategy(Strategy):
             action = "hold"
 
         strength = round(min(abs(combined), 1.0), 3)
-        leverage = _adaptive_leverage(abs(combined))
+        leverage = _adaptive_leverage(abs(combined), coin_id)
 
         # --- Reason string (shows all layers for easy log reading) ---
         h1_label = "bull" if bias_1h > 0.1 else "bear" if bias_1h < -0.1 else "neut"
