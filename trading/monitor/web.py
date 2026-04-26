@@ -656,7 +656,6 @@ def api_actions():
 
 
 @app.route("/api/income")
-@_require_pin
 def api_income():
     from trading.db.store import get_income_summary
     summary = get_income_summary(days=30)
@@ -670,7 +669,6 @@ def api_income():
 
 
 @app.route("/api/pending-orders")
-@_require_pin
 def api_pending_orders():
     from trading.db.store import get_stale_pending_trades
     try:
