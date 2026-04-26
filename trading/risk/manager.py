@@ -133,8 +133,17 @@ for group_name, symbols in CORRELATION_GROUPS.items():
 
 
 def _is_crypto(symbol: str) -> bool:
-    """Check if a symbol is crypto (contains '/')."""
-    return "/" in symbol
+    """Return True if symbol is a cryptocurrency (not a commodity, index, forex, or equity)."""
+    from trading.config import ALL_NON_CRYPTO_BASES
+    # Normalise to bare base asset: "BTC/USD" → "BTC", "BTCUSD" → "BTC", "BTCUSDT" → "BTC"
+    base = symbol.upper()
+    for suffix in ("/USD", "USDT", "USD", "/"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    if "/" in base:
+        base = base.split("/")[0]
+    return base not in ALL_NON_CRYPTO_BASES
 
 
 @dataclass

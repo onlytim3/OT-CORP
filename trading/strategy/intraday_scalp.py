@@ -8,8 +8,9 @@ Signal pipeline per coin:
      by bias strength (×0.45–0.70), allowing strong mean-reversion to still fire
   5. 4h cycle bias (+0.15 additive) — quality signal from swing cycle wired in
 
-Covers all 21 configured markets (20 crypto + GOLD). Tier-based leverage caps:
-  T1 BTC/ETH/SOL → up to 18x | T2 major alts → up to 12x | T3 small alts/gold → 8x.
+Covers all AsterDex markets discovered at startup. Tier-based leverage caps:
+  T1 BTC/ETH/SOL → up to 18x | T2 major alts → up to 12x
+  T3 small crypto/forex → 8x | T4 commodities/indices/equities → 5x.
 Stop 0.5%, take-profit 1.5% (3:1 R:R). Threshold 0.18. Runs via 5-minute cycle.
 """
 
@@ -22,7 +23,11 @@ from trading.strategy.registry import register
 
 log = logging.getLogger(__name__)
 
-SCALP_COINS = list(ASTER_SYMBOLS.keys())  # All 21 configured markets
+def _build_scalp_coins() -> list[str]:
+    """Return all coin IDs from current ASTER_SYMBOLS — refreshed at import time."""
+    return list(ASTER_SYMBOLS.keys())
+
+SCALP_COINS = _build_scalp_coins()  # populated at startup; includes all discovered markets
 
 STOP_PCT = 0.005         # 0.5% stop → 5% margin loss at 10x
 TAKE_PROFIT_PCT = 0.015  # 1.5% target → 15% margin gain at 10x
@@ -33,11 +38,26 @@ FUNDING_BUY_THRESHOLD = -0.0003
 FUNDING_SELL_THRESHOLD = 0.0003
 MIN_SIGNAL_SCORE = 0.18
 
-# Tier-based leverage caps: deeper liquidity → higher max leverage allowed
+# Tier-based leverage caps — ordered by asset class + liquidity depth
+# T1: deepest crypto liquidity
+# T2: major liquid alts
+# T3: smaller crypto (default 8x below)
+# T4: non-crypto perps (commodities, indices, forex, equities) — lower vol, lower leverage
 _LEVERAGE_TIERS: dict[str, int] = {
+    # T1
     "bitcoin": 18, "ethereum": 18, "solana": 18,
+    # T2
     "bnb": 12, "xrp": 12, "avalanche-2": 12, "polkadot": 12,
     "chainlink": 12, "dogecoin": 12, "litecoin": 12, "bitcoin-cash": 12,
+    # T4 — commodities (lower vol, tighter leverage)
+    "gold": 5, "silver": 5, "oil": 5, "copper": 5, "natgas": 5,
+    # T4 — indices (gap risk, keep leverage conservative)
+    "spx": 5, "ndx": 5, "dji": 5, "nikkei": 5, "dax": 5, "ftse": 5,
+    "us30": 5, "us100": 5, "us500": 5, "ger40": 5, "uk100": 5,
+    # T4 — forex (low vol, tight spreads, 8x is safe but cap at 8)
+    "eur": 8, "gbp": 8, "jpy": 8, "aud": 8, "chf": 8, "cad": 8,
+    # T4 — equity perps
+    "aapl": 5, "tsla": 5, "nvda": 5, "googl": 5, "msft": 5, "amzn": 5, "meta": 5,
 }
 
 
@@ -220,8 +240,10 @@ class IntradayScalpStrategy(Strategy):
     name = "intraday_scalp"
 
     def generate_signals(self) -> list[Signal]:
+        # Rebuild coin list each run so newly discovered markets are included
+        coins = list(ASTER_SYMBOLS.keys())
         signals = []
-        for coin_id in SCALP_COINS:
+        for coin_id in coins:
             aster_sym = ASTER_SYMBOLS.get(coin_id)
             alpaca_sym = CRYPTO_SYMBOLS.get(coin_id)
             if not aster_sym or not alpaca_sym:

@@ -1,8 +1,11 @@
 """Central configuration for the trading system."""
 
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+
+_log = logging.getLogger(__name__)
 
 # Load .env from project root
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -462,4 +465,85 @@ AUTONOMOUS = {
     "auto_defensive_posture": True,      # Auto-reduce long bias in bearish regimes
     "log_conversations": True,           # Log all agent-to-agent conversations
 }
+
+# ---------------------------------------------------------------------------
+# Non-crypto base assets for market categorisation (used by discovery + risk)
+# ---------------------------------------------------------------------------
+COMMODITY_BASES = frozenset({
+    "GOLD", "SILVER", "OIL", "COPPER", "NATGAS", "BRENT", "WTI",
+    "WHEAT", "CORN", "SOYBEAN", "COFFEE", "SUGAR", "COTTON",
+    "PLATINUM", "PALLADIUM", "ALUMINUM", "NICKEL", "ZINC",
+})
+INDEX_BASES = frozenset({
+    "SPX", "NASDAQ", "NDX", "DJI", "NIKKEI", "DAX", "FTSE", "VIX",
+    "KOSPI", "HSI", "CAC", "IBEX", "STOXX", "RUT", "SP500",
+    "US30", "US100", "US500", "GER40", "UK100", "JP225",
+})
+FOREX_BASES = frozenset({
+    "EUR", "GBP", "JPY", "AUD", "CHF", "CAD", "NZD",
+    "KRW", "SGD", "TRY", "BRL", "MXN", "INR", "CNH", "RUB",
+})
+EQUITY_BASES = frozenset({
+    "AAPL", "TSLA", "NVDA", "GOOGL", "MSFT", "AMZN", "META",
+    "NFLX", "SNAP", "COIN", "AMD", "INTC", "BABA", "V", "JPM",
+    "PYPL", "UBER", "ABNB", "PLTR", "RBLX", "SQ",
+})
+ALL_NON_CRYPTO_BASES = COMMODITY_BASES | INDEX_BASES | FOREX_BASES | EQUITY_BASES
+
+
+def discover_aster_markets() -> int:
+    """Fetch all available AsterDex markets and merge into ASTER_SYMBOLS / CRYPTO_SYMBOLS.
+
+    Queries the exchange info endpoint, filters to TRADING-status perpetuals,
+    and adds any symbol not already configured. Uses the base asset (lowercase)
+    as the coin_id key for newly discovered markets.
+
+    Returns the number of *new* markets added beyond the static config.
+    Fails silently — static config is always the fallback.
+    """
+    try:
+        from trading.execution.aster_client import get_aster_exchange_info
+        info = get_aster_exchange_info()
+    except Exception as exc:
+        _log.warning("AsterDex market discovery failed: %s", exc)
+        return 0
+
+    existing_aster = set(ASTER_SYMBOLS.values())
+    added = 0
+
+    for sym_info in info.get("symbols", []):
+        if sym_info.get("status") != "TRADING":
+            continue
+        aster_sym = sym_info.get("symbol", "")
+        if not aster_sym.endswith("USDT"):
+            continue
+        if aster_sym in existing_aster:
+            continue
+
+        base = aster_sym[:-4]  # strip USDT suffix
+        coin_id = base.lower()
+
+        # Build the Alpaca-style internal symbol
+        alpaca_sym = f"{base}/USD"
+
+        ASTER_SYMBOLS[coin_id] = aster_sym
+        CRYPTO_SYMBOLS[coin_id] = alpaca_sym
+
+        # Populate category lists for non-crypto assets
+        base_up = base.upper()
+        if base_up in COMMODITY_BASES and coin_id not in COMMODITY_PERPS:
+            COMMODITY_PERPS.append(coin_id)
+        elif base_up in INDEX_BASES and coin_id not in INDEX_PERPS:
+            INDEX_PERPS.append(coin_id)
+        elif base_up in EQUITY_BASES and coin_id not in STOCK_PERPS:
+            STOCK_PERPS.append(coin_id)
+
+        existing_aster.add(aster_sym)
+        added += 1
+
+    _log.info(
+        "AsterDex discovery: %d new markets added, %d total configured",
+        added, len(ASTER_SYMBOLS),
+    )
+    return added
 

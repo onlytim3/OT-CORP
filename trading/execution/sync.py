@@ -95,6 +95,7 @@ def sync_positions() -> int:
                 avg_cost=pos["avg_cost"],
                 current_price=pos["current_price"],
                 strategy=strategy,
+                side=pos.get("side", "long"),
             )
             synced += 1
         except Exception as exc:

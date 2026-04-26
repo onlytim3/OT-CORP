@@ -185,6 +185,7 @@ def init_db():
                 current_price REAL,
                 unrealized_pnl REAL,
                 strategy TEXT,
+                side TEXT DEFAULT 'long',
                 updated_at TEXT NOT NULL
             );
 
@@ -465,6 +466,12 @@ def init_db():
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
+        # --- Migrate positions table ---
+        try:
+            conn.execute("ALTER TABLE positions ADD COLUMN side TEXT DEFAULT 'long'")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # --- Performance Indexes ---
         conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);
@@ -701,15 +708,15 @@ def get_open_trades():
 # --- Position Operations ---
 
 @_retry_on_locked
-def upsert_position(symbol, qty, avg_cost, current_price, strategy):
+def upsert_position(symbol, qty, avg_cost, current_price, strategy, side="long"):
     unrealized_pnl = (current_price - avg_cost) * qty if current_price and avg_cost else 0
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO positions (symbol, qty, avg_cost, current_price, unrealized_pnl, strategy, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(symbol) DO UPDATE SET qty=?, avg_cost=?, current_price=?, unrealized_pnl=?, strategy=?, updated_at=?",
-            (symbol, qty, avg_cost, current_price, unrealized_pnl, strategy, _now(),
-             qty, avg_cost, current_price, unrealized_pnl, strategy, _now()),
+            "INSERT INTO positions (symbol, qty, avg_cost, current_price, unrealized_pnl, strategy, side, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(symbol) DO UPDATE SET qty=?, avg_cost=?, current_price=?, unrealized_pnl=?, strategy=?, side=?, updated_at=?",
+            (symbol, qty, avg_cost, current_price, unrealized_pnl, strategy, side, _now(),
+             qty, avg_cost, current_price, unrealized_pnl, strategy, side, _now()),
         )
 
 

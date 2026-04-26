@@ -47,6 +47,24 @@ def aster_to_alpaca(symbol: str) -> str | None:
     return _ASTER_TO_ALPACA.get(symbol)
 
 
+def refresh_symbol_maps() -> None:
+    """Rebuild translation maps from the current ASTER_SYMBOLS/CRYPTO_SYMBOLS.
+
+    Call after discover_aster_markets() expands the symbol universe so that
+    alpaca_to_aster() and aster_to_alpaca() cover all newly added markets.
+    """
+    from trading.config import ASTER_SYMBOLS as _AS, CRYPTO_SYMBOLS as _CS
+    global _ASTER_TO_COIN, _ALPACA_TO_ASTER, _ASTER_TO_ALPACA
+    _ASTER_TO_COIN = {v: k for k, v in _AS.items()}
+    _ALPACA_TO_ASTER.clear()
+    _ASTER_TO_ALPACA.clear()
+    for coin_id, aster_sym in _AS.items():
+        alpaca_sym = _CS.get(coin_id)
+        if alpaca_sym:
+            _ALPACA_TO_ASTER[alpaca_sym] = aster_sym
+            _ASTER_TO_ALPACA[aster_sym] = alpaca_sym
+
+
 def coin_to_aster(coin_id: str) -> str | None:
     """Convert CoinGecko coin ID to AsterDex symbol."""
     return ASTER_SYMBOLS.get(coin_id)

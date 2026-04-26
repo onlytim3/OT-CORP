@@ -2181,6 +2181,24 @@ def start_daemon(interval_hours=4, paper=False):
 
     init_db()
 
+    # Discover all available AsterDex markets and refresh symbol translation maps.
+    # Expands beyond the 21 static symbols to all TRADING-status perpetuals on the exchange.
+    try:
+        from trading.config import discover_aster_markets
+        from trading.data.aster import refresh_symbol_maps
+        new_markets = discover_aster_markets()
+        refresh_symbol_maps()
+        from trading.config import ASTER_SYMBOLS as _AS
+        console.print(
+            f"  [cyan]Markets: {len(_AS)} AsterDex perpetuals loaded"
+            + (f" (+{new_markets} discovered)" if new_markets else "")
+            + "[/cyan]"
+        )
+    except Exception as _disc_err:
+        log.warning("Market discovery failed, using static config (%d markets): %s",
+                    len(__import__("trading.config", fromlist=["ASTER_SYMBOLS"]).ASTER_SYMBOLS),
+                    _disc_err)
+
     # Restore autonomous agent state (strategy enables, thresholds, budgets, risk)
     # so changes from previous cycles survive process restarts / deploys
     try:
