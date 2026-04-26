@@ -161,51 +161,93 @@ def login_page():
     if check_dashboard_auth():
         return redirect("/")
         
-    html = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AsterDex | Authenticate</title>
-        <style>
-            body { margin: 0; padding: 0; background: #0D1117; color: #E6EDF3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; }
-            .lock-card { background: rgba(22, 27, 34, 0.65); padding: 40px; border-radius: 16px; border: 1px solid rgba(148, 163, 184, 0.12); text-align: center; max-width: 400px; width: 90%; }
-            h2 { margin-top: 0; font-weight: 500; letter-spacing: 2px; }
-            input { background: rgba(139, 148, 158, 0.12); border: 1px solid rgba(148, 163, 184, 0.15); color: #FFF; font-size: 24px; letter-spacing: 12px; padding: 16px; border-radius: 8px; width: 100%; text-align: center; margin: 24px 0; outline: none; }
-            input:focus { border-color: #58A6FF; }
-            .err { color: #F85149; margin-top: -12px; margin-bottom: 24px; font-size: 14px; display: none; }
-            button { background: #58A6FF; color: #FFF; border: none; padding: 12px 24px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: 500; }
-            button:hover { background: #79C0FF; }
-        </style>
-    </head>
-    <body>
-        <div class="lock-card">
-            <h2>SYSTEM LOCKED</h2>
-            <div style="font-size: 14px; color: #8C9BAF;">Enter your 4-digit PIN to access the terminal.</div>
-            <input type="password" id="pin" maxlength="4" placeholder="••••" autofocus>
-            <div id="err" class="err">Invalid PIN</div>
-            <button onclick="submitPin()">UNLOCK</button>
-        </div>
-        <script>
-            function submitPin() {
-                const pin = document.getElementById('pin').value;
-                fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({pin: pin})
-                }).then(r => {
-                    if (r.ok) { window.location.href = '/'; }
-                    else { document.getElementById('err').style.display = 'block'; document.getElementById('pin').value = ''; }
-                });
-            }
-            document.getElementById('pin').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') submitPin();
-            });
-        </script>
-    </body>
-    </html>
-    """
+    html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OT•CORP | Authenticate</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(ellipse at center,#0f0f0f 0%,#000 70%);min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:'SF Mono','Fira Code','Monaco',monospace}
+.lock-wrap{display:flex;flex-direction:column;align-items:center;gap:32px;user-select:none}
+.brand-name{font-size:22px;font-weight:600;letter-spacing:8px;color:#d0d0d0;text-align:center}
+.brand-sub{font-size:11px;letter-spacing:4px;color:#444;text-transform:uppercase;margin-top:6px;text-align:center}
+.pin-dots{display:flex;gap:16px;justify-content:center}
+.dot{width:16px;height:16px;border-radius:50%;border:2px solid rgba(180,180,180,0.25);background:transparent;transition:all 0.15s ease}
+.dot.filled{background:#d0d0d0;border-color:#d0d0d0;box-shadow:0 0 10px rgba(200,200,200,0.5)}
+.dot.error{background:#ff4455;border-color:#ff4455;box-shadow:0 0 10px rgba(255,68,85,0.5)}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
+.pin-dots.shake{animation:shake 0.5s ease}
+.numpad{display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(4,72px);gap:10px}
+.key{width:72px;height:72px;border-radius:14px;border:1px solid rgba(255,255,255,0.07);background:linear-gradient(145deg,#252525,#181818);box-shadow:3px 3px 8px #080808,-1px -1px 4px rgba(255,255,255,0.04);color:#c0c0c0;font-size:22px;font-weight:400;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.08s ease;outline:none;-webkit-tap-highlight-color:transparent}
+.key:hover{background:linear-gradient(145deg,#2e2e2e,#202020);color:#e0e0e0;border-color:rgba(255,255,255,0.12)}
+.key:active{background:linear-gradient(145deg,#181818,#222);box-shadow:inset 2px 2px 5px #060606,inset -1px -1px 3px rgba(255,255,255,0.04);transform:scale(0.96)}
+.key.action{color:#777;font-size:18px}
+.status-msg{font-size:11px;letter-spacing:2px;color:#333;text-transform:uppercase;height:16px;text-align:center;transition:color 0.2s}
+.status-msg.error{color:#ff4455}
+#pin-hidden{position:absolute;opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+<div class="lock-wrap">
+  <div>
+    <div class="brand-name">OT&bull;CORP</div>
+    <div class="brand-sub">Authentication Required</div>
+  </div>
+  <div class="pin-dots" id="pin-dots">
+    <div class="dot" id="d0"></div>
+    <div class="dot" id="d1"></div>
+    <div class="dot" id="d2"></div>
+    <div class="dot" id="d3"></div>
+  </div>
+  <div class="status-msg" id="status-msg">&nbsp;</div>
+  <div class="numpad">
+    <button class="key" onclick="pressDigit('1')">1</button>
+    <button class="key" onclick="pressDigit('2')">2</button>
+    <button class="key" onclick="pressDigit('3')">3</button>
+    <button class="key" onclick="pressDigit('4')">4</button>
+    <button class="key" onclick="pressDigit('5')">5</button>
+    <button class="key" onclick="pressDigit('6')">6</button>
+    <button class="key" onclick="pressDigit('7')">7</button>
+    <button class="key" onclick="pressDigit('8')">8</button>
+    <button class="key" onclick="pressDigit('9')">9</button>
+    <button class="key action" onclick="pressBack()">&#x232B;</button>
+    <button class="key" onclick="pressDigit('0')">0</button>
+    <button class="key action" id="submit-btn" onclick="submitPin()">&#x21B5;</button>
+  </div>
+</div>
+<input id="pin-hidden" type="tel" maxlength="4" autocomplete="off">
+<script>
+var pin='';
+function updateDots(){for(var i=0;i<4;i++){var d=document.getElementById('d'+i);d.classList.toggle('filled',i<pin.length);d.classList.remove('error');}}
+function pressDigit(d){if(pin.length>=4)return;pin+=d;updateDots();if(pin.length===4)setTimeout(submitPin,80);}
+function pressBack(){if(pin.length>0){pin=pin.slice(0,-1);updateDots();}}
+function showError(msg){
+  var dots=document.getElementById('pin-dots');
+  var st=document.getElementById('status-msg');
+  for(var i=0;i<4;i++)document.getElementById('d'+i).classList.add('error');
+  dots.classList.add('shake');
+  st.textContent=msg||'Invalid PIN';st.classList.add('error');
+  setTimeout(function(){dots.classList.remove('shake');pin='';updateDots();st.textContent=' ';st.classList.remove('error');},700);
+}
+function submitPin(){
+  if(pin.length<4)return;
+  var btn=document.getElementById('submit-btn');btn.disabled=true;
+  fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin})})
+  .then(function(r){
+    if(r.ok){window.location.href='/';}
+    else{r.json().then(function(d){showError(d.error||'Invalid PIN');btn.disabled=false;}).catch(function(){showError('Invalid PIN');btn.disabled=false;});}
+  }).catch(function(){showError('Connection error');btn.disabled=false;});
+}
+document.addEventListener('keydown',function(e){
+  if(e.key>='0'&&e.key<='9')pressDigit(e.key);
+  else if(e.key==='Backspace')pressBack();
+  else if(e.key==='Enter')submitPin();
+});
+</script>
+</body>
+</html>"""
     return html
 
 
@@ -1513,17 +1555,166 @@ def api_intelligence():
             except Exception:
                 pass
 
-        # Live headlines — fetch current headlines for display
+        # Headlines — serve from DB (accumulated indefinitely); live fetch as fallback
         try:
-            from trading.data.news import fetch_all_headlines
-            headlines = fetch_all_headlines(max_per_source=3)
-            result["headlines"] = [
-                {"title": h.get("title", ""), "source": h.get("source", ""),
-                 "category": h.get("category", ""), "published": h.get("published", "")}
-                for h in headlines[:15]
-            ]
+            from trading.db.store import get_recent_headlines
+            db_headlines = get_recent_headlines(limit=500)
+            if db_headlines:
+                result["headlines"] = db_headlines
+            else:
+                # DB empty (first run before any briefing) — fetch live, no cap
+                from trading.data.news import fetch_all_headlines
+                live = fetch_all_headlines(max_per_source=100)
+                result["headlines"] = [
+                    {"title": h.get("title", ""), "source": h.get("source", ""),
+                     "category": h.get("category", ""), "published": h.get("published", ""),
+                     "url": h.get("url", "")}
+                    for h in live
+                ]
         except Exception:
             result["headlines"] = []
+
+    return jsonify(result)
+
+
+@app.route("/api/regime-analysis")
+def api_regime_analysis():
+    """Comprehensive regime analysis: current state, category scores, HMM, volatility, history, P&L."""
+    result = {}
+
+    # Current regime from settings
+    try:
+        label = get_setting("current_regime") or "unknown"
+        score_raw = get_setting("current_regime_score")
+        score = float(score_raw) if score_raw else 0.0
+        result["current_regime"] = {"label": label, "score": score}
+    except Exception:
+        result["current_regime"] = {"label": "unknown", "score": 0.0}
+
+    # HMM model state
+    try:
+        hmm_raw = get_setting("hmm_model_params")
+        if hmm_raw:
+            hmm_data = json.loads(hmm_raw)
+            means = hmm_data.get("means", [])
+            fitted_at = hmm_data.get("fitted_at", "")
+            n_samples = hmm_data.get("n_samples", 0)
+            # Latest regime from most recent hmm_regime signal
+            with get_read_db() as conn:
+                hmm_sig = conn.execute(
+                    "SELECT data FROM signals WHERE strategy='hmm_regime' "
+                    "ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+            state = "unknown"
+            prob = 0.0
+            if hmm_sig and hmm_sig["data"]:
+                try:
+                    sd = json.loads(hmm_sig["data"])
+                    state = sd.get("regime", "unknown")
+                    prob = float(sd.get("regime_prob", 0.0))
+                except Exception:
+                    pass
+            result["hmm"] = {
+                "state": state,
+                "probability": prob,
+                "n_components": len(means),
+                "n_samples": n_samples,
+                "fitted_at": fitted_at,
+            }
+        else:
+            result["hmm"] = None
+    except Exception:
+        result["hmm"] = None
+
+    # Category scores from latest briefing
+    try:
+        with get_read_db() as conn:
+            brow = conn.execute(
+                "SELECT data FROM action_log WHERE action LIKE '%briefing%' "
+                "AND data IS NOT NULL ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+        if brow and brow["data"]:
+            bd = json.loads(brow["data"]) if isinstance(brow["data"], str) else brow["data"]
+            cats = bd.get("categories", {})
+            result["category_scores"] = {
+                k: round(float(v.get("score", 0.0) if isinstance(v, dict) else v), 3)
+                for k, v in cats.items()
+            }
+            result["event_risk"] = bd.get("event_risk", [])
+        else:
+            result["category_scores"] = {}
+            result["event_risk"] = []
+    except Exception:
+        result["category_scores"] = {}
+        result["event_risk"] = []
+
+    # Volatility regime — latest signals per symbol
+    try:
+        with get_read_db() as conn:
+            vol_rows = conn.execute(
+                "SELECT symbol, data, timestamp FROM signals "
+                "WHERE strategy='volatility_regime' "
+                "ORDER BY timestamp DESC LIMIT 10"
+            ).fetchall()
+        seen_syms = set()
+        vol_list = []
+        for r in vol_rows:
+            if r["symbol"] in seen_syms:
+                continue
+            seen_syms.add(r["symbol"])
+            try:
+                d = json.loads(r["data"]) if r["data"] else {}
+                vol_list.append({
+                    "symbol": r["symbol"],
+                    "regime": d.get("regime", "unknown"),
+                    "vol_ratio": d.get("vol_ratio", 0.0),
+                    "short_vol": d.get("short_vol", 0.0),
+                    "long_vol": d.get("long_vol", 0.0),
+                    "timestamp": r["timestamp"],
+                })
+            except Exception:
+                pass
+        result["volatility"] = vol_list
+    except Exception:
+        result["volatility"] = []
+
+    # Regime history — last 50 briefings with overall_regime + category scores
+    try:
+        with get_read_db() as conn:
+            hist_rows = conn.execute(
+                "SELECT timestamp, data FROM action_log "
+                "WHERE action LIKE '%briefing%' AND data IS NOT NULL "
+                "ORDER BY timestamp DESC LIMIT 50"
+            ).fetchall()
+        history = []
+        for r in hist_rows:
+            try:
+                d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+                if not isinstance(d, dict):
+                    continue
+                cats = d.get("categories", {})
+                history.append({
+                    "timestamp": r["timestamp"],
+                    "regime": d.get("overall_regime", ""),
+                    "score": round(float(d.get("overall_score", 0.0)), 3),
+                    "categories": {
+                        k: round(float(v.get("score", 0.0) if isinstance(v, dict) else v), 3)
+                        for k, v in cats.items()
+                    },
+                })
+            except Exception:
+                pass
+        result["history"] = list(reversed(history))  # chronological order
+    except Exception:
+        result["history"] = []
+
+    # Strategy-regime P&L stats
+    try:
+        from trading.db.store import get_strategy_regime_stats
+        stats = get_strategy_regime_stats()
+        result["strategy_stats"] = stats if stats else []
+    except Exception:
+        result["strategy_stats"] = []
 
     return jsonify(result)
 

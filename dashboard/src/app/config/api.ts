@@ -66,6 +66,7 @@ export const api = {
   riskBudget: `${API_BASE_URL}/api/risk-budget`,
   priceChart: (symbol: string, interval = '1h', limit = 48) =>
     `${API_BASE_URL}/api/price-chart/${symbol}?interval=${interval}&limit=${limit}`,
+  regimeAnalysis: `${API_BASE_URL}/api/regime-analysis`,
 };
 
 // --- Types ---
@@ -178,6 +179,16 @@ export interface Intelligence {
   asset_impacts?: Record<string, number>;
   news_interpretation?: string;
   headlines?: { title: string; source: string; category: string; published: string }[];
+}
+
+export interface RegimeAnalysis {
+  current_regime: { label: string; score: number };
+  category_scores: Record<string, number>;
+  event_risk: string[];
+  hmm: { state: string; probability: number; n_components: number; n_samples: number; fitted_at: string } | null;
+  volatility: { symbol: string; regime: string; vol_ratio: number; short_vol: number; long_vol: number; timestamp: string }[];
+  history: { timestamp: string; regime: string; score: number; categories: Record<string, number> }[];
+  strategy_stats: { strategy: string; regime: string; win_rate: number; total_pnl: number; trade_count: number }[];
 }
 
 export interface AgentStats {

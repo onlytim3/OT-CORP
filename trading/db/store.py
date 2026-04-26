@@ -418,6 +418,20 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_counterfactual_symbol
                 ON counterfactual_signals(symbol);
 
+            CREATE TABLE IF NOT EXISTS headlines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                title TEXT NOT NULL,
+                source TEXT,
+                category TEXT,
+                url TEXT,
+                published TEXT,
+                UNIQUE(title)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_headlines_timestamp ON headlines(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_headlines_category ON headlines(category);
+
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                 title, content, key_rules, category,
                 content='knowledge',
@@ -1491,3 +1505,53 @@ def get_recent_action_lessons(limit: int = 20) -> list:
         except Exception:
             pass
     return list(dict.fromkeys(all_lessons))[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Headlines persistence
+# ---------------------------------------------------------------------------
+
+def save_headlines(headlines: list[dict]) -> int:
+    """Persist headlines to DB. Deduplicates by title (UNIQUE constraint).
+
+    Returns the number of new rows inserted.
+    """
+    if not headlines:
+        return 0
+    now = _now()
+    inserted = 0
+    with get_db() as conn:
+        for h in headlines:
+            title = (h.get("title") or "").strip()
+            if not title:
+                continue
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO headlines "
+                    "(timestamp, title, source, category, url, published) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        now,
+                        title,
+                        h.get("source") or "",
+                        h.get("category") or "",
+                        h.get("url") or "",
+                        h.get("published") or "",
+                    ),
+                )
+                if conn.execute("SELECT changes()").fetchone()[0]:
+                    inserted += 1
+            except Exception:
+                pass
+    return inserted
+
+
+def get_recent_headlines(limit: int = 500) -> list[dict]:
+    """Return the most recent persisted headlines, newest first."""
+    with get_read_db() as conn:
+        rows = conn.execute(
+            "SELECT title, source, category, url, published, timestamp "
+            "FROM headlines ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
