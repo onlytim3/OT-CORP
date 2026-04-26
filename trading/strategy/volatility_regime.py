@@ -251,10 +251,22 @@ class VolatilityRegimeStrategy(Strategy):
                         action = "hold"
                         strength = 0.1  # Nonzero: signal exists but conflicting
 
-                # Only emit a signal when there is a clear directional view (compression or expansion).
-                # In "normal" regime (no vol extreme), abstain — positions stay open by default.
+                # In "normal" regime, abstain from trading but record vol data for Regime tab.
                 if action == "hold" and strength == 0.0:
-                    log.debug("volatility_regime: %s normal regime (ratio=%.2f) — no signal", coin, vol_ratio)
+                    log.debug("volatility_regime: %s normal regime (ratio=%.2f)", coin, vol_ratio)
+                    signals.append(Signal(
+                        strategy=self.name,
+                        symbol=symbol,
+                        action="hold",
+                        strength=0.0,
+                        reason=f"{coin} vol normal: short={short_vol:.4f}, long={long_vol:.4f}, ratio={vol_ratio:.2f}",
+                        data={
+                            "short_vol": round(short_vol, 4),
+                            "long_vol": round(long_vol, 4),
+                            "vol_ratio": round(vol_ratio, 4),
+                            "regime": regime,
+                        },
+                    ))
                     continue
 
                 signals.append(Signal(

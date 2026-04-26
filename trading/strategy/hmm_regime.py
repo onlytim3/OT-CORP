@@ -161,13 +161,15 @@ def _fit_hmm(features: np.ndarray):
         regime_label = _REGIME_LABELS[regime_rank]
         regime_prob = float(current_probs[current_state])
 
-        # Persist fitted model parameters for caching
+        # Persist fitted model parameters for caching + current regime for cross-strategy reads
         model_data = {
             "means": model.means_.tolist(),
             "covars": model.covars_.tolist(),
             "transmat": model.transmat_.tolist(),
             "n_samples": len(features),
             "fitted_at": datetime.now(timezone.utc).isoformat(),
+            "last_regime": regime_label,
+            "last_regime_prob": regime_prob,
         }
         set_setting("hmm_model_params", json.dumps(model_data))
 
@@ -232,9 +234,15 @@ class HMMRegimeStrategy(Strategy):
                         data={"regime": regime_label, "regime_prob": regime_prob, "coin": coin_id},
                     ))
                 else:
-                    # sideways/unknown — no directional view, abstain
-                    log.debug("hmm_regime: %s sideways regime (prob %.0f%%) — no signal",
-                              coin_id, regime_prob * 100)
+                    # sideways — abstain from trading but record regime state for Regime tab
+                    signals.append(Signal(
+                        strategy=self.name,
+                        symbol=aster_symbol,
+                        action="hold",
+                        strength=regime_prob,
+                        reason=f"{coin_id} HMM sideways regime (prob {regime_prob:.0%})",
+                        data={"regime": regime_label, "regime_prob": regime_prob, "coin": coin_id},
+                    ))
 
             except Exception as e:
                 log.error("hmm_regime: error processing %s: %s", coin_id, e)

@@ -1667,13 +1667,14 @@ def api_regime_analysis():
                     "SELECT data FROM signals WHERE strategy='hmm_regime' "
                     "ORDER BY timestamp DESC LIMIT 1"
                 ).fetchone()
-            state = "unknown"
-            prob = 0.0
+            # Prefer latest signal; fall back to last_regime saved in model params
+            state = hmm_data.get("last_regime", "unknown")
+            prob = float(hmm_data.get("last_regime_prob", 0.0))
             if hmm_sig and hmm_sig["data"]:
                 try:
                     sd = json.loads(hmm_sig["data"])
-                    state = sd.get("regime", "unknown")
-                    prob = float(sd.get("regime_prob", 0.0))
+                    state = sd.get("regime", state)
+                    prob = float(sd.get("regime_prob", prob))
                 except Exception:
                     pass
             result["hmm"] = {
