@@ -430,6 +430,7 @@ def init_db():
             ("risk_reward_ratio", "REAL"),
             ("leverage", "INTEGER"),
             ("entry_reasoning", "TEXT"),
+            ("regime", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {coltype}")
@@ -516,15 +517,15 @@ def get_intelligence_briefing() -> dict:
 @_retry_on_locked
 def insert_trade(symbol, side, qty, price, total, strategy, status="pending", alpaca_order_id=None,
                   stop_loss_price=None, take_profit_price=None, trailing_stop_activate=None,
-                  risk_reward_ratio=None, leverage=None, entry_reasoning=None):
+                  risk_reward_ratio=None, leverage=None, entry_reasoning=None, regime=None):
     with get_db() as conn:
         cur = conn.execute(
             "INSERT INTO trades (timestamp, symbol, side, qty, price, total, strategy, status, alpaca_order_id, "
-            "stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio, leverage, entry_reasoning) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio, leverage, entry_reasoning, regime) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (_now(), symbol, side, qty, price, total, strategy, status, alpaca_order_id,
              stop_loss_price, take_profit_price, trailing_stop_activate, risk_reward_ratio,
-             leverage, entry_reasoning),
+             leverage, entry_reasoning, regime),
         )
         return cur.lastrowid
 
@@ -714,6 +715,28 @@ def get_daily_pnl(limit=30):
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM daily_pnl ORDER BY date DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_strategy_regime_stats(min_trades: int = 10) -> list[dict]:
+    """Return win rate and P&L per (strategy, regime) pair for closed trades."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT strategy,
+                   COALESCE(regime, 'unknown') AS regime,
+                   COUNT(*) AS trades,
+                   SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(pnl) AS total_pnl
+            FROM trades
+            WHERE status = 'closed'
+              AND strategy IS NOT NULL
+            GROUP BY strategy, regime
+            HAVING COUNT(*) >= ?
+            ORDER BY strategy, regime
+            """,
+            (min_trades,),
         ).fetchall()
         return [dict(r) for r in rows]
 

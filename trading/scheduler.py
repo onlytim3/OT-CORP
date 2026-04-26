@@ -358,6 +358,19 @@ def run_trading_cycle():
                 log.debug("Skipping %s: regime %s not in %s", strategy.name, current_regime, regime_reqs)
                 continue
 
+            # Learned regime restriction (written by Journal Agent)
+            import json as _json
+            learned_raw = get_setting(f"strategy_regime_learned_{strategy.name}")
+            if learned_raw and current_regime:
+                try:
+                    allowed_regimes = _json.loads(learned_raw)
+                    if current_regime not in allowed_regimes:
+                        console.print(f"\n[dim]-> {strategy.name} (skipped: learned regime block, allowed={allowed_regimes})[/dim]")
+                        log.debug("Skipping %s: learned regime block %s not in %s", strategy.name, current_regime, allowed_regimes)
+                        continue
+                except Exception:
+                    pass
+
             console.print(f"\n[cyan]-> {strategy.name}[/cyan]")
             try:
                 signals = strategy.generate_signals()
@@ -772,6 +785,7 @@ def run_trading_cycle():
                     take_profit_price=take_profit_price,
                     leverage=lev,
                     entry_reasoning=enriched_reasoning,
+                    regime=get_setting("current_regime"),
                 )
                 create_journal_entry(trade_id, signal, ctx, narration=narration)
                 executed_count += 1

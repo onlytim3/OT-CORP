@@ -66,12 +66,13 @@ def _to_aster(symbol: str) -> str:
     if symbol in _ALPACA_TO_ASTER:
         return _ALPACA_TO_ASTER[symbol]
 
-    # It should already be AsterDex format from the strategies
+    # Normalise any slash-separated format (e.g. "BNB/USD", "ETH/USDT") → "BNBUSDT"
     aster = symbol
-    if not aster.endswith("USDT") and not aster.endswith("USD"):
-        # Just in case some legacy signals slip through
-        base = symbol.replace("/USD", "").replace("/", "")
+    if "/" in aster:
+        base = aster.split("/")[0]
         aster = f"{base}USDT"
+    elif not aster.endswith("USDT"):
+        aster = f"{aster}USDT"
 
     # Warn if converted symbol is not in the validated set
     if _VALID_ASTER_SYMBOLS and aster not in _VALID_ASTER_SYMBOLS:
