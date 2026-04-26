@@ -431,6 +431,7 @@ def submit_order(
     stop_loss_price: Optional[float] = None,
     limit_price: Optional[float] = None,
     time_in_force: str = "GTC",
+    strategy: str = "",
 ) -> dict:
     """Submit an order -- paper mode simulates locally, live mode hits AsterDex.
 
@@ -454,7 +455,8 @@ def submit_order(
     if mode != "live":
         log.debug("Paper mode order: %s %s notional=%s leverage=%dx", side, symbol, notional, leverage)
         return _paper_submit_order(symbol, side, notional=notional, qty=qty,
-                                   stop_loss_price=stop_loss_price, leverage=leverage)
+                                   stop_loss_price=stop_loss_price, leverage=leverage,
+                                   strategy=strategy)
 
     # -------------------------------------------------------------------
     # Smart execution: TWAP for large orders, limit orders when enabled
@@ -1009,6 +1011,7 @@ def _paper_submit_order(
     qty: Optional[float] = None,
     stop_loss_price: Optional[float] = None,
     leverage: int = 1,
+    strategy: str = "",
 ) -> dict:
     """Simulate an order using real market prices, no exchange interaction.
 
@@ -1181,7 +1184,7 @@ def _paper_submit_order(
                 conn.execute(
                     "INSERT INTO paper_positions (symbol, side, qty, avg_cost, strategy, leverage, opened_at, updated_at) "
                     "VALUES (?, 'long', ?, ?, ?, ?, ?, ?)",
-                    (sym_key, qty, fill_price, "", leverage, now, now),
+                    (sym_key, qty, fill_price, strategy, leverage, now, now),
                 )
 
         elif side_lower == "sell":
@@ -1228,7 +1231,7 @@ def _paper_submit_order(
                     conn.execute(
                         "INSERT OR REPLACE INTO paper_positions (symbol, side, qty, avg_cost, strategy, leverage, opened_at, updated_at) "
                         "VALUES (?, 'short', ?, ?, ?, ?, ?, ?)",
-                        (sym_key, qty, fill_price, "", leverage, now, now),
+                        (sym_key, qty, fill_price, strategy, leverage, now, now),
                     )
 
     log.info("PAPER FILL: %s %s %.6f %s @ $%.4f ($%.2f)",

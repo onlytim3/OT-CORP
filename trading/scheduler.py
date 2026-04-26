@@ -128,7 +128,7 @@ def _get_positions():
     return get_positions_from_aster()
 
 
-def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None, leverage=1):
+def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None, leverage=1, strategy=""):
     """Execute order via AsterDex perpetual futures."""
     if leverage > 1:
         try:
@@ -138,7 +138,7 @@ def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None, 
             log.warning("Failed to set leverage %dx for %s: %s", leverage, symbol, e)
     from trading.execution.router import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty,
-                        stop_loss_price=stop_loss_price, leverage=leverage)
+                        stop_loss_price=stop_loss_price, leverage=leverage, strategy=strategy)
 
 
 def _notify_safe(func, *args, **kwargs):
@@ -1361,6 +1361,113 @@ def _check_scale_in_winners(positions, portfolio_value):
 
 
 # ---------------------------------------------------------------------------
+# Intraday scalping cycle (runs every 5 minutes, independent of 4h swing cycle)
+# ---------------------------------------------------------------------------
+
+def run_scalping_cycle():
+    """5-minute scalping cycle — generates and executes intraday scalp signals.
+
+    Completely separate from the 4-hour swing cycle. Uses IntradayScalpStrategy
+    on 5m candles with 10x leverage, 0.5% stops, 1.5% take-profit targets.
+    """
+    from trading.config import SCALP_RISK
+    from trading.db.store import log_action
+
+    try:
+        account = _get_account()
+        portfolio_value = account.get("portfolio_value", 0)
+        if portfolio_value <= 0:
+            return
+
+        if account.get("trading_blocked"):
+            return
+
+        positions = _get_positions()
+        scalp_positions = [p for p in positions if p.get("strategy", "").startswith("intraday_scalp")]
+        if len(scalp_positions) >= SCALP_RISK["max_open_positions"]:
+            log.debug("Scalp: max positions (%d) reached, skipping cycle", SCALP_RISK["max_open_positions"])
+            return
+
+        scalp_budget = portfolio_value * SCALP_RISK["portfolio_allocation_pct"]
+        deployed = sum(abs(p.get("market_value", 0)) for p in scalp_positions)
+        available_budget = max(scalp_budget - deployed, 0)
+        if available_budget < 5:
+            log.debug("Scalp: budget exhausted (deployed=$%.0f / $%.0f)", deployed, scalp_budget)
+            return
+
+        from trading.strategy.intraday_scalp import IntradayScalpStrategy
+        strategy = IntradayScalpStrategy()
+        raw_signals = strategy.generate_signals()
+
+        # Dedup: one signal per symbol, keep strongest actionable
+        by_symbol: dict = {}
+        for sig in raw_signals:
+            if sig.is_actionable:
+                prev = by_symbol.get(sig.symbol)
+                if prev is None or sig.strength > prev.strength:
+                    by_symbol[sig.symbol] = sig
+
+        executed = 0
+        for signal in by_symbol.values():
+            if len(scalp_positions) + executed >= SCALP_RISK["max_open_positions"]:
+                break
+
+            notional = min(SCALP_RISK["max_notional_per_trade"], available_budget / max(len(by_symbol), 1))
+            notional = min(notional, portfolio_value * 0.03)  # never > 3% per scalp
+            if notional < 5:
+                continue
+
+            leverage = signal.data.get("leverage", SCALP_RISK["leverage"])
+            stop_pct = signal.data.get("stop_pct", SCALP_RISK["stop_loss_pct"])
+            price = signal.data.get("price", 0)
+
+            if price > 0:
+                stop_price = price * (1 - stop_pct) if signal.action == "buy" else price * (1 + stop_pct)
+            else:
+                stop_price = None
+
+            console.print(
+                f"  [bold cyan]SCALP {signal.action.upper()} {signal.symbol}[/bold cyan] "
+                f"${notional:.0f} {leverage}x | {signal.reason}"
+            )
+
+            try:
+                order = _execute_order(
+                    signal.symbol, signal.action,
+                    notional=notional,
+                    stop_loss_price=stop_price,
+                    leverage=leverage,
+                    strategy="intraday_scalp",
+                )
+                status = order.get("status", "unknown")
+                if status in ("filled", "accepted", "new", "pending_new"):
+                    executed += 1
+                    log_action(
+                        "scalp_cycle", "scalp_trade",
+                        symbol=signal.symbol,
+                        result="executed",
+                        details=signal.reason,
+                        data={
+                            "notional": notional, "leverage": leverage,
+                            "stop_price": stop_price, "strength": signal.strength,
+                            **{k: v for k, v in (signal.data or {}).items()
+                               if k in ("rsi", "vwap", "price", "ob_imbalance",
+                                        "avg_funding", "combined_score")},
+                        },
+                    )
+                else:
+                    log.warning("Scalp order rejected for %s: %s", signal.symbol, order.get("reason", status))
+            except Exception as e:
+                log.error("Scalp execution failed for %s: %s", signal.symbol, e)
+
+        if executed:
+            console.print(f"  [cyan]Scalp cycle complete: {executed} trades executed[/cyan]")
+
+    except Exception as e:
+        log.error("Scalping cycle error: %s", e, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Stop-loss + take-profit checker (runs every 15 minutes)
 # ---------------------------------------------------------------------------
 
@@ -1924,6 +2031,7 @@ def start_daemon(interval_hours=4, paper=False):
     console.print(f"[bold green]  Execution: AsterDex Perpetual Futures[/bold green]")
     console.print(f"[bold green]{'='*60}[/]")
     console.print(f"  Trading cycle:       every {interval_hours} hours")
+    console.print(f"  Scalping cycle:      every 5 minutes (10x leverage, 0.5% stop, 1.5% TP)")
     console.print(f"  Stop/profit check:   every 15 minutes")
     console.print(f"  Signal aggregation:  enabled (dedup + conflict resolution)")
     console.print(f"  Dynamic allocation:  confluence + regime + performance tilt")
@@ -2139,6 +2247,7 @@ def start_daemon(interval_hours=4, paper=False):
 
     # Schedule recurring tasks
     schedule.every(interval_hours).hours.do(run_trading_cycle).tag("trading")
+    schedule.every(5).minutes.do(run_scalping_cycle).tag("scalping")
     schedule.every(15).minutes.do(check_stop_losses)
     schedule.every(5).minutes.do(process_pending_approvals)
     schedule.every().day.at("23:55").do(run_daily_journal)

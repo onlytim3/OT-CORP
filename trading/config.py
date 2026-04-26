@@ -81,6 +81,16 @@ RISK = {
     "max_market_impact_pct": 0.02,         # Block entries when order > 2% of recent 4h volume (was 1%)
 }
 
+# --- Intraday Scalping ---
+SCALP_RISK = {
+    "leverage": 10,
+    "stop_loss_pct": 0.005,           # 0.5% stop → 5% margin loss at 10x
+    "take_profit_pct": 0.015,         # 1.5% target → 15% margin gain at 10x (3:1 R:R)
+    "max_notional_per_trade": 30.0,   # $30 max per scalp (small, leveraged)
+    "max_open_positions": 3,          # Max 3 concurrent scalp positions
+    "portfolio_allocation_pct": 0.10, # 10% of portfolio for scalping pool
+}
+
 # --- Short Selling ---
 ALLOW_SHORT_SELLING = os.getenv("ALLOW_SHORT_SELLING", "true").lower() == "true"
 SHORT_ALLOWED_STRATEGIES = {"cross_basis_rv", "multi_factor_rank", "pairs_trading"}

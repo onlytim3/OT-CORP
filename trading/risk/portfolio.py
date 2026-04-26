@@ -54,6 +54,7 @@ STRATEGY_BUDGETS: dict[str, float] = {
     "multi_factor_rank": 0.03,
     "volatility_regime": 0.03,
     "meme_momentum": 0.02,
+    "intraday_scalp": 0.10,
 }
 
 DEFAULT_BUDGET = 0.03  # Fallback for unknown strategies
