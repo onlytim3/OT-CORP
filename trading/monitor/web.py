@@ -1574,6 +1574,54 @@ def api_intelligence():
         except Exception:
             result["headlines"] = []
 
+        # Headline stats from the persistent DB (total accumulated, by category, recent 24h)
+        try:
+            total_hl = conn.execute("SELECT COUNT(*) as c FROM headlines").fetchone()["c"]
+            recent_24h = conn.execute(
+                "SELECT COUNT(*) as c FROM headlines WHERE timestamp >= datetime('now', '-1 day')"
+            ).fetchone()["c"]
+            by_cat = conn.execute(
+                "SELECT category, COUNT(*) as c FROM headlines GROUP BY category ORDER BY c DESC LIMIT 20"
+            ).fetchall()
+            result["headline_stats"] = {
+                "total": total_hl,
+                "new_24h": recent_24h,
+                "by_category": {r["category"] or "other": r["c"] for r in by_cat},
+            }
+        except Exception:
+            result["headline_stats"] = {}
+
+        # Structured news analysis — raw key_events, signals, risk_alerts from latest briefing
+        try:
+            na_rows = conn.execute(
+                "SELECT data, timestamp FROM action_log WHERE "
+                "action LIKE '%briefing%' AND data IS NOT NULL "
+                "ORDER BY timestamp DESC LIMIT 3"
+            ).fetchall()
+            for na_row in na_rows:
+                try:
+                    bd = json.loads(na_row["data"]) if isinstance(na_row["data"], str) else na_row["data"]
+                    if not isinstance(bd, dict):
+                        continue
+                    na = bd.get("news_analysis") or {}
+                    if na and isinstance(na, dict):
+                        result["structured_analysis"] = {
+                            "timestamp": na_row["timestamp"],
+                            "regime": bd.get("overall_regime", ""),
+                            "overall_score": bd.get("overall_score", 0.0),
+                            "key_events": (na.get("key_events") or [])[:10],
+                            "signals": (na.get("signals") or [])[:10],
+                            "risk_alerts": (na.get("risk_alerts") or [])[:5],
+                            "asset_impacts": na.get("asset_impacts") or {},
+                            "headline_count": na.get("headline_count_used", na.get("headline_count", 0)),
+                            "model_used": na.get("model_used", ""),
+                        }
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
     return jsonify(result)
 
 

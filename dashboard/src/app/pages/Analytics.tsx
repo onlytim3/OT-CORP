@@ -413,91 +413,170 @@ export function Analytics() {
         </TabsContent>
 
         <TabsContent value="intelligence" className="space-y-6">
-          {/* News Analysis — LLM interpretation */}
-          {intelligence?.news_analysis && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <span className="size-2 rounded-full bg-[#00d4aa] animate-pulse" />
-                  News Analysis
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-4 text-xs text-[#888888] mb-3">
-                    <span>{intelligence.news_analysis.headline_count ?? 0} headlines analyzed</span>
-                    <span>{intelligence.news_analysis.source_count ?? 0} sources</span>
-                    <span>Regime: {intelligence.news_analysis.regime ?? "unknown"}</span>
-                  </div>
-                  <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                    <div className="text-sm text-[#c0c0c0] whitespace-pre-wrap leading-relaxed">
-                      {String(intelligence.news_analysis.interpretation ?? "").split('\n').map((line: string, i: number) => {
-                        if (line.startsWith('## ')) return <h3 key={i} className="text-[#e8e8e8] font-semibold mt-3 mb-1">{line.replace('## ', '')}</h3>;
-                        if (line.startsWith('- BUY')) return <p key={i} className="text-[#00d4aa] font-medium">{line}</p>;
-                        if (line.startsWith('- SELL')) return <p key={i} className="text-[#ff4466] font-medium">{line}</p>;
-                        if (line.startsWith('- ')) return <p key={i} className="pl-2 text-[#c0c0c0]">{line}</p>;
-                        return <p key={i}>{line}</p>;
-                      })}
-                    </div>
-                  </div>
-                  <p className="text-xs text-[#666666] text-right">
-                    {new Date(intelligence.news_analysis.timestamp ?? "").toLocaleString()}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+
+          {/* Headline Stats Bar */}
+          {intelligence?.headline_stats && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Card className="bg-[rgba(255,255,255,0.03)]">
+                <CardContent className="pt-4 pb-3">
+                  <p className="text-2xl font-bold text-[#e8e8e8]">{(intelligence.headline_stats.total ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-[#666] mt-1">Headlines tracked</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-[rgba(255,255,255,0.03)]">
+                <CardContent className="pt-4 pb-3">
+                  <p className="text-2xl font-bold text-[#4a9eff]">+{intelligence.headline_stats.new_24h ?? 0}</p>
+                  <p className="text-xs text-[#666] mt-1">New in last 24h</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-[rgba(255,255,255,0.03)]">
+                <CardContent className="pt-4 pb-3">
+                  <p className="text-2xl font-bold text-[#e8e8e8]">{Object.keys(intelligence.headline_stats.by_category ?? {}).length}</p>
+                  <p className="text-xs text-[#666] mt-1">Categories covered</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-[rgba(255,255,255,0.03)]">
+                <CardContent className="pt-4 pb-3">
+                  <p className="text-2xl font-bold text-[#00d4aa]">{intelligence.structured_analysis?.headline_count ?? 0}</p>
+                  <p className="text-xs text-[#666] mt-1">In last analysis</p>
+                </CardContent>
+              </Card>
+            </div>
           )}
 
-          {/* News Interpretation fallback — from briefing data */}
-          {!intelligence?.news_analysis && intelligence?.news_interpretation && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <span className="size-2 rounded-full bg-[#4a9eff] animate-pulse" />
-                  News Interpretation
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-                  <div className="text-sm text-[#c0c0c0] whitespace-pre-wrap leading-relaxed">
-                    {String(intelligence.news_interpretation ?? "").split('\n').map((line: string, i: number) => {
-                      if (line.startsWith('## ')) return <h3 key={i} className="text-[#e8e8e8] font-semibold mt-3 mb-1">{line.replace('## ', '')}</h3>;
-                      if (line.startsWith('- BUY') || line.includes('bullish')) return <p key={i} className="text-[#00d4aa]">{line}</p>;
-                      if (line.startsWith('- SELL') || line.includes('bearish')) return <p key={i} className="text-[#ff4466]">{line}</p>;
-                      if (line.startsWith('- ') || line.startsWith('* ')) return <p key={i} className="pl-2 text-[#c0c0c0]">{line}</p>;
-                      if (line.match(/^\d+\./)) return <p key={i} className="pl-2 text-[#c0c0c0] font-medium">{line}</p>;
-                      return <p key={i}>{line}</p>;
-                    })}
+          {/* Structured News Analysis — Key Events + Signals + Risk Alerts */}
+          {intelligence?.structured_analysis ? (() => {
+            const sa = intelligence.structured_analysis;
+            const regimeColor = (sa.overall_score ?? 0) > 0.15 ? '#00d4aa' : (sa.overall_score ?? 0) < -0.15 ? '#ff4466' : '#c0c0c0';
+            return (
+              <div className="space-y-4">
+                {/* Header bar */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="size-2 rounded-full bg-[#00d4aa] animate-pulse" />
+                    <span className="font-semibold text-[#e8e8e8]">News Analysis</span>
+                    <span className="px-2 py-0.5 rounded text-xs font-bold uppercase" style={{ background: `${regimeColor}22`, color: regimeColor }}>
+                      {sa.regime || 'unknown'}
+                    </span>
+                    {sa.model_used === 'llm' && <Badge variant="secondary" className="text-[10px]">AI</Badge>}
                   </div>
+                  <span className="text-xs text-[#555]">{sa.timestamp ? new Date(sa.timestamp).toLocaleString() : ''}</span>
                 </div>
-              </CardContent>
-            </Card>
-          )}
 
-          {/* Asset Sentiment Impacts */}
-          {intelligence?.asset_impacts && Object.keys(intelligence.asset_impacts).length > 0 && (
-            <Card>
-              <CardHeader><CardTitle>Asset Sentiment</CardTitle></CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {Object.entries(intelligence.asset_impacts)
-                    .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
-                    .slice(0, 15)
-                    .map(([asset, score]) => (
-                      <div key={asset} className="flex items-center gap-3">
-                        <span className="text-sm text-[#c0c0c0] w-24 truncate">{asset}</span>
-                        <div className="flex-1 h-4 bg-white/5 rounded overflow-hidden relative">
-                          <div
-                            className={`h-full rounded ${score > 0 ? 'bg-[#00d4aa]' : 'bg-[#ff4466]'}`}
-                            style={{ width: `${Math.min(Math.abs(score) * 100, 100)}%`, marginLeft: score < 0 ? 'auto' : 0 }}
-                          />
-                        </div>
-                        <span className={`text-sm font-mono w-12 text-right ${score > 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
-                          {score > 0 ? '+' : ''}{score.toFixed(1)}
-                        </span>
+                {/* Key Events */}
+                {sa.key_events && sa.key_events.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />Key Events ({sa.key_events.length})</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {sa.key_events.map((e, i) => {
+                          const dir = (e.direction || '').toLowerCase();
+                          const c = dir === 'bullish' ? '#00d4aa' : dir === 'bearish' ? '#ff4466' : '#888';
+                          return (
+                            <div key={i} className="flex gap-3 py-2 border-b border-[rgba(255,255,255,0.04)] last:border-0">
+                              <div className="mt-1 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c }} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm text-[#e8e8e8] leading-snug">{e.headline}</p>
+                                {e.impact && <p className="text-xs text-[#888] mt-0.5">{e.impact}</p>}
+                                {e.assets && e.assets.length > 0 && (
+                                  <div className="flex gap-1 mt-1 flex-wrap">
+                                    {e.assets.map((a: string) => (
+                                      <span key={a} className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(74,158,255,0.15)] text-[#4a9eff]">{a}</span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              {dir && <span className="text-[10px] font-semibold shrink-0 self-start mt-1" style={{ color: c }}>{dir.toUpperCase()}</span>}
+                            </div>
+                          );
+                        })}
                       </div>
-                    ))}
-                </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Trading Signals from LLM */}
+                {sa.signals && sa.signals.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Target className="h-3.5 w-3.5" />AI Trading Signals ({sa.signals.length})</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {sa.signals.map((s, i) => {
+                          const isBuy = s.direction?.toLowerCase() === 'bullish' || s.direction?.toLowerCase() === 'buy';
+                          const c = isBuy ? '#00d4aa' : '#ff4466';
+                          return (
+                            <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-[rgba(255,255,255,0.03)]">
+                              <div className="size-2 rounded-full shrink-0" style={{ background: c }} />
+                              <span className="font-mono text-sm font-semibold" style={{ color: c }}>{s.asset}</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded font-bold uppercase" style={{ background: `${c}22`, color: c }}>{s.direction}</span>
+                              <span className="flex-1 text-xs text-[#888] truncate">{s.reason}</span>
+                              <span className="text-xs font-mono text-[#aaa] shrink-0">{((s.strength || 0) * 100).toFixed(0)}%</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Risk Alerts */}
+                {sa.risk_alerts && sa.risk_alerts.length > 0 && (
+                  <Card className="border-[rgba(255,68,102,0.2)]">
+                    <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2 text-[#ff4466]"><Shield className="h-3.5 w-3.5" />Risk Alerts</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="space-y-1.5">
+                        {sa.risk_alerts.map((a, i) => (
+                          <div key={i} className="flex gap-2 items-start text-sm text-[#ffa07a]">
+                            <span className="text-[#ff4466] mt-0.5 shrink-0">⚠</span>
+                            <span>{typeof a === 'string' ? a : (a as {alert?: string}).alert || JSON.stringify(a)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Asset Impacts from structured analysis */}
+                {sa.asset_impacts && Object.keys(sa.asset_impacts).length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2"><CardTitle className="text-sm">Asset Sentiment Impact</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {Object.entries(sa.asset_impacts)
+                          .map(([asset, v]) => {
+                            const score = typeof v === 'number' ? v : (v as {score?: number}).score ?? 0;
+                            return { asset, score };
+                          })
+                          .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+                          .slice(0, 20)
+                          .map(({ asset, score }) => {
+                            const c = score > 0 ? '#00d4aa' : '#ff4466';
+                            return (
+                              <div key={asset} className="flex items-center gap-3">
+                                <span className="text-sm text-[#c0c0c0] w-20 truncate font-mono">{asset}</span>
+                                <div className="flex-1 h-2 bg-[rgba(255,255,255,0.05)] rounded overflow-hidden relative">
+                                  <div className="absolute top-0 bottom-0 left-1/2 w-px bg-[rgba(255,255,255,0.1)]" />
+                                  <div className="absolute h-full rounded" style={{
+                                    left: score >= 0 ? '50%' : `${50 - Math.min(Math.abs(score) * 50, 50)}%`,
+                                    width: `${Math.min(Math.abs(score) * 50, 50)}%`,
+                                    background: c
+                                  }} />
+                                </div>
+                                <span className="text-xs font-mono w-10 text-right" style={{ color: c }}>{score > 0 ? '+' : ''}{score.toFixed(1)}</span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            );
+          })() : (
+            <Card>
+              <CardContent className="py-8 text-center">
+                <p className="text-[#666] text-sm">News analysis runs with the next intelligence briefing cycle.</p>
+                <p className="text-[#444] text-xs mt-1">Trigger a refresh to generate analysis immediately.</p>
               </CardContent>
             </Card>
           )}

@@ -178,7 +178,19 @@ export interface Intelligence {
   news_analysis?: { timestamp: string; interpretation: string; headline_count: number; source_count: number; regime: string };
   asset_impacts?: Record<string, number>;
   news_interpretation?: string;
-  headlines?: { title: string; source: string; category: string; published: string }[];
+  headlines?: { title: string; source: string; category: string; published: string; url?: string }[];
+  headline_stats?: { total: number; new_24h: number; by_category: Record<string, number> };
+  structured_analysis?: {
+    timestamp: string;
+    regime: string;
+    overall_score: number;
+    key_events: { headline: string; impact: string; assets: string[]; direction?: string }[];
+    signals: { direction: string; asset: string; strength: number; reason: string }[];
+    risk_alerts: { alert: string; severity?: string }[];
+    asset_impacts: Record<string, { score: number; rationale?: string } | number>;
+    headline_count: number;
+    model_used: string;
+  };
 }
 
 export interface RegimeAnalysis {
