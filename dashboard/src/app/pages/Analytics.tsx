@@ -8,12 +8,13 @@ import {
   BarChart, Bar, LineChart, Line, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts";
-import { Brain, TrendingUp, Shield, Gauge, Calendar, DollarSign, Activity, Filter, Target, Clock, Crosshair, BarChart3 } from "lucide-react";
+import { Brain, TrendingUp, Shield, Gauge, Calendar, DollarSign, Activity, Filter, Target, Clock, Crosshair, BarChart3, Layers } from "lucide-react";
 import { useState } from "react";
 import {
   api, usePolling,
   type Intelligence, type Strategy, type StatusResponse, type PnlHistory,
   type FillQuality, type StrategyAttribution, type FunnelData, type TimePnl,
+  type RegimeAnalysis,
 } from "../config/api";
 
 function FearGreedGauge({ value, label }: { value: number; label: string }) {
@@ -49,6 +50,7 @@ export function Analytics() {
   const { data: timePnl } = usePolling<TimePnl>(api.timePnl, 60000);
   const { data: fills } = usePolling<FillQuality[]>(api.fillAnalysis, 30000);
   const { data: attribution } = usePolling<StrategyAttribution[]>(api.attribution, 60000);
+  const { data: regimeData } = usePolling<RegimeAnalysis>(api.regimeAnalysis, 30000);
   const [periodTab, setPeriodTab] = useState<'daily' | 'weekly' | 'monthly'>('daily');
 
   const fearGreed = intelligence?.fear_greed;
@@ -192,6 +194,7 @@ export function Analytics() {
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="strategies">Strategies</TabsTrigger>
           <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
+          <TabsTrigger value="regime">Regime</TabsTrigger>
           <TabsTrigger value="execution">Execution</TabsTrigger>
           <TabsTrigger value="alpha-engine">Alpha Engine</TabsTrigger>
         </TabsList>
@@ -876,6 +879,232 @@ export function Analytics() {
                   </div>
                 );
               })()}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Regime Analysis Tab */}
+        <TabsContent value="regime" className="space-y-6">
+          {/* Row 1: Current Regime + HMM State */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Current Regime */}
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2"><Layers className="h-4 w-4" />Current Regime</CardTitle></CardHeader>
+              <CardContent>
+                {regimeData?.current_regime ? (() => {
+                  const r = regimeData.current_regime;
+                  const label = r.label || 'unknown';
+                  const score = r.score ?? 0;
+                  const color = score > 0.2 ? '#00d4aa' : score < -0.2 ? '#ff4466' : '#c0c0c0';
+                  const barWidth = Math.round(((score + 1) / 2) * 100);
+                  return (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <span className="px-3 py-1 rounded-full text-sm font-bold uppercase tracking-widest"
+                          style={{ background: `${color}22`, color, border: `1px solid ${color}66` }}>
+                          {label}
+                        </span>
+                        <span className="text-2xl font-bold" style={{ color }}>{score > 0 ? '+' : ''}{score.toFixed(3)}</span>
+                      </div>
+                      <div className="relative h-3 rounded-full bg-[rgba(255,255,255,0.05)] overflow-hidden">
+                        <div className="absolute top-0 h-full rounded-full transition-all duration-500"
+                          style={{ left: '50%', width: `${Math.abs(score) * 50}%`, background: color,
+                            transform: score >= 0 ? 'none' : 'translateX(-100%)' }} />
+                        <div className="absolute top-0 bottom-0 left-1/2 w-px bg-[rgba(255,255,255,0.2)]" />
+                      </div>
+                      <div className="flex justify-between text-xs text-[#666]">
+                        <span>Bearish −1.0</span><span>Neutral</span><span>Bullish +1.0</span>
+                      </div>
+                      {(regimeData.event_risk || []).length > 0 && (
+                        <div className="mt-2 p-2 rounded bg-[rgba(255,165,0,0.1)] border border-[rgba(255,165,0,0.3)]">
+                          <p className="text-xs text-orange-400 font-semibold mb-1">Event Risk</p>
+                          {(regimeData.event_risk || []).slice(0, 3).map((e, i) => (
+                            <p key={i} className="text-xs text-[#aaa]">• {String(e)}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })() : <p className="text-[#666] text-sm">No regime data yet</p>}
+              </CardContent>
+            </Card>
+
+            {/* HMM State */}
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2"><Brain className="h-4 w-4" />HMM Regime State</CardTitle></CardHeader>
+              <CardContent>
+                {regimeData?.hmm ? (() => {
+                  const h = regimeData.hmm;
+                  const stateColor = h.state === 'bull' ? '#00d4aa' : h.state === 'bear' ? '#ff4466' : '#c0c0c0';
+                  const states = ['bear', 'sideways', 'bull'];
+                  return (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <span className="px-3 py-1 rounded-full text-sm font-bold uppercase tracking-widest"
+                          style={{ background: `${stateColor}22`, color: stateColor, border: `1px solid ${stateColor}66` }}>
+                          {h.state}
+                        </span>
+                        <span className="text-lg font-semibold" style={{ color: stateColor }}>{(h.probability * 100).toFixed(0)}% confidence</span>
+                      </div>
+                      <div className="space-y-2">
+                        {states.map(s => {
+                          const sc = s === 'bull' ? '#00d4aa' : s === 'bear' ? '#ff4466' : '#c0c0c0';
+                          const pct = s === h.state ? h.probability * 100 : ((1 - h.probability) / 2) * 100;
+                          return (
+                            <div key={s} className="flex items-center gap-2">
+                              <span className="text-xs w-16 capitalize" style={{ color: s === h.state ? sc : '#555' }}>{s}</span>
+                              <div className="flex-1 h-2 rounded-full bg-[rgba(255,255,255,0.05)]">
+                                <div className="h-full rounded-full transition-all" style={{ width: `${pct.toFixed(0)}%`, background: sc, opacity: s === h.state ? 1 : 0.3 }} />
+                              </div>
+                              <span className="text-xs w-10 text-right" style={{ color: s === h.state ? sc : '#444' }}>{pct.toFixed(0)}%</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="text-xs text-[#444] space-y-1">
+                        <p>Trained on {h.n_samples} samples · {h.n_components} states</p>
+                        {h.fitted_at && <p>Fitted {new Date(h.fitted_at).toLocaleString()}</p>}
+                      </div>
+                    </div>
+                  );
+                })() : <p className="text-[#666] text-sm">No HMM data yet — waiting for first training cycle</p>}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Row 2: 10-Category Breakdown + Volatility Regime */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* 10-Category Breakdown */}
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="h-4 w-4" />Category Scores</CardTitle></CardHeader>
+              <CardContent>
+                {regimeData?.category_scores && Object.keys(regimeData.category_scores).length > 0 ? (() => {
+                  const weights: Record<string, number> = { crypto: 0.30, macro: 0.20, technology: 0.10, credit: 0.10, liquidity: 0.10, commodities: 0.07, currency: 0.06, energy: 0.04, geopolitical: 0.02, emerging_markets: 0.01 };
+                  return (
+                    <div className="space-y-2">
+                      {Object.entries(regimeData.category_scores)
+                        .sort((a, b) => (weights[b[0]] || 0) - (weights[a[0]] || 0))
+                        .map(([cat, score]) => {
+                          const color = score > 0.1 ? '#00d4aa' : score < -0.1 ? '#ff4466' : '#888';
+                          const barPct = Math.abs(score) * 50;
+                          const wt = weights[cat];
+                          return (
+                            <div key={cat} className="flex items-center gap-2">
+                              <div className="w-28 text-xs text-[#888] capitalize truncate">{cat.replace(/_/g, ' ')}</div>
+                              {wt && <span className="text-[10px] text-[#444] w-8">{(wt * 100).toFixed(0)}%</span>}
+                              <div className="flex-1 h-2 rounded-full bg-[rgba(255,255,255,0.05)] relative">
+                                <div className="absolute top-0 bottom-0 left-1/2 w-px bg-[rgba(255,255,255,0.1)]" />
+                                <div className="absolute top-0 h-full rounded-full"
+                                  style={{ left: score >= 0 ? '50%' : `${50 - barPct}%`, width: `${barPct}%`, background: color }} />
+                              </div>
+                              <span className="text-xs w-12 text-right font-mono" style={{ color }}>{score > 0 ? '+' : ''}{score.toFixed(2)}</span>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  );
+                })() : <p className="text-[#666] text-sm">No category data yet</p>}
+              </CardContent>
+            </Card>
+
+            {/* Volatility Regime */}
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4" />Volatility Regime</CardTitle></CardHeader>
+              <CardContent>
+                {(regimeData?.volatility || []).length > 0 ? (
+                  <div className="space-y-3">
+                    {(regimeData?.volatility || []).map(v => {
+                      const regColor = v.regime === 'compression' ? '#00d4aa' : v.regime === 'expansion' ? '#ff4466' : '#888';
+                      return (
+                        <div key={v.symbol} className="flex items-center gap-3 p-2 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)]">
+                          <span className="font-mono text-sm text-[#e8e8e8] w-20">{v.symbol}</span>
+                          <span className="px-2 py-0.5 rounded text-xs font-semibold capitalize"
+                            style={{ background: `${regColor}22`, color: regColor, border: `1px solid ${regColor}44` }}>
+                            {v.regime}
+                          </span>
+                          <div className="flex-1 text-xs text-[#666] space-y-0.5">
+                            <div className="flex gap-3">
+                              <span>ratio: <span className="text-[#aaa] font-mono">{v.vol_ratio.toFixed(2)}</span></span>
+                              <span>S: <span className="text-[#aaa] font-mono">{(v.short_vol * 100).toFixed(1)}%</span></span>
+                              <span>L: <span className="text-[#aaa] font-mono">{(v.long_vol * 100).toFixed(1)}%</span></span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : <p className="text-[#666] text-sm">No volatility regime signals yet</p>}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Row 3: Regime History sparkline */}
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4" />Regime History</CardTitle></CardHeader>
+            <CardContent>
+              {(regimeData?.history || []).length > 0 ? (
+                <ResponsiveContainer width="100%" height={160}>
+                  <AreaChart data={regimeData?.history || []} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <XAxis dataKey="timestamp" tick={{ fill: '#555', fontSize: 10 }}
+                      tickFormatter={v => v ? new Date(v).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''} />
+                    <YAxis domain={[-1, 1]} tick={{ fill: '#555', fontSize: 10 }} />
+                    <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle}
+                      formatter={(v: number) => [v.toFixed(3), 'Score']}
+                      labelFormatter={v => new Date(v).toLocaleString()} />
+                    <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" />
+                    <ReferenceLine y={0.3} stroke="rgba(0,212,170,0.2)" strokeDasharray="4 4" />
+                    <ReferenceLine y={-0.3} stroke="rgba(255,68,102,0.2)" strokeDasharray="4 4" />
+                    <Area type="monotone" dataKey="score" stroke="#4a9eff" fill="rgba(74,158,255,0.1)" strokeWidth={1.5} dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : <p className="text-[#666] text-sm">Regime history will appear after the first intelligence briefing</p>}
+            </CardContent>
+          </Card>
+
+          {/* Row 4: P&L by Regime */}
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2"><DollarSign className="h-4 w-4" />P&L by Regime</CardTitle></CardHeader>
+            <CardContent>
+              {(regimeData?.strategy_stats || []).length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-[#555] text-xs border-b border-[rgba(255,255,255,0.06)]">
+                        <th className="text-left pb-2 pr-4">Strategy</th>
+                        <th className="text-left pb-2 pr-4">Regime</th>
+                        <th className="text-right pb-2 pr-4">Trades</th>
+                        <th className="text-right pb-2 pr-4">Win Rate</th>
+                        <th className="text-right pb-2">Total P&L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(regimeData?.strategy_stats || []).map((s, i) => {
+                        const regColor = s.regime?.includes('bull') ? '#00d4aa' : s.regime?.includes('bear') ? '#ff4466' : '#888';
+                        const pnlColor = s.total_pnl >= 0 ? '#00d4aa' : '#ff4466';
+                        return (
+                          <tr key={i} className="border-b border-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.02)]">
+                            <td className="py-2 pr-4 text-[#aaa] font-mono text-xs">{s.strategy}</td>
+                            <td className="py-2 pr-4">
+                              <span className="px-2 py-0.5 rounded text-xs capitalize"
+                                style={{ background: `${regColor}22`, color: regColor }}>
+                                {s.regime || '—'}
+                              </span>
+                            </td>
+                            <td className="py-2 pr-4 text-right text-[#888]">{s.trade_count ?? '—'}</td>
+                            <td className="py-2 pr-4 text-right text-[#aaa]">
+                              {s.win_rate != null ? `${(s.win_rate * 100).toFixed(0)}%` : '—'}
+                            </td>
+                            <td className="py-2 text-right font-mono font-semibold" style={{ color: pnlColor }}>
+                              {s.total_pnl >= 0 ? '+' : ''}${s.total_pnl.toFixed(2)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p className="text-[#666] text-sm">P&L by regime will appear after trades are closed (min 10 per strategy)</p>}
             </CardContent>
           </Card>
         </TabsContent>

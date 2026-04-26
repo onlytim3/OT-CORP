@@ -1022,8 +1022,17 @@ def generate_briefing() -> MarketBriefing:
         from trading.data.news import fetch_all_headlines
         from trading.llm.engine import analyze_news_impact
         from trading.config import CRYPTO_SYMBOLS, ASTER_SYMBOLS
+        from trading.db.store import save_headlines
 
-        all_headlines = fetch_all_headlines(max_per_source=5)
+        all_headlines = fetch_all_headlines(max_per_source=100)
+        # Persist all fetched headlines to DB (deduped by title, kept indefinitely)
+        try:
+            saved = save_headlines(all_headlines)
+            if saved:
+                log.info("Persisted %d new headlines to DB (%d total fetched)", saved, len(all_headlines))
+        except Exception as _he:
+            log.debug("Headline persistence failed (non-fatal): %s", _he)
+
         if len(all_headlines) >= 3:
             traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(ASTER_SYMBOLS.keys())))
             interpretation = analyze_news_impact(

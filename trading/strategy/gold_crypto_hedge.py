@@ -72,6 +72,45 @@ def _fetch_daily_closes(symbol: str, limit: int) -> pd.Series | None:
     return df["close"]
 
 
+def _fetch_gold_closes(limit: int) -> pd.Series | None:
+    """Fetch gold daily closes from a multi-source cascade.
+
+    AsterDex does not trade gold perpetuals, so we try real-price sources first:
+    1. FRED GOLDAMGBD228NLBM — London gold fixing (physical, most accurate)
+    2. CoinGecko PAXG — tokenized gold, strongly correlated to spot
+    3. AsterDex GOLDUSDT — last resort, will likely return empty
+    """
+    min_rows = max(limit // 2, 20)
+
+    # 1. FRED — London gold fixing
+    try:
+        from trading.config import FRED_API_KEY
+        from trading.data.commodities import get_fred_series
+        if FRED_API_KEY:
+            df = get_fred_series("GOLDAMGBD228NLBM", limit=limit + 15)
+            if df is not None and not df.empty and len(df) >= min_rows:
+                series = df["value"].dropna().tail(limit)
+                log.debug("gold_crypto_hedge: using FRED gold data (%d rows)", len(series))
+                return series.reset_index(drop=True)
+    except Exception as e:
+        log.debug("gold_crypto_hedge: FRED gold fetch failed: %s", e)
+
+    # 2. CoinGecko PAXG (tokenized gold)
+    try:
+        from trading.data.crypto import get_ohlc
+        ohlc = get_ohlc("paxg-ethereum", days=limit + 5)
+        if ohlc is not None and not ohlc.empty and len(ohlc) >= min_rows:
+            series = ohlc["close"].tail(limit)
+            log.debug("gold_crypto_hedge: using CoinGecko PAXG data (%d rows)", len(series))
+            return series.reset_index(drop=True)
+    except Exception as e:
+        log.debug("gold_crypto_hedge: CoinGecko PAXG fetch failed: %s", e)
+
+    # 3. AsterDex klines — last resort
+    log.debug("gold_crypto_hedge: falling back to AsterDex klines for %s", _GOLD_ASTER)
+    return _fetch_daily_closes(_GOLD_ASTER, limit)
+
+
 def _rolling_correlation(returns_a: pd.Series, returns_b: pd.Series,
                          window: int) -> pd.Series:
     """Compute rolling Pearson correlation between two return series."""
@@ -114,7 +153,7 @@ class GoldCryptoHedgeStrategy(Strategy):
         # ------------------------------------------------------------------
         # 1. Fetch data
         # ------------------------------------------------------------------
-        gold_closes = _fetch_daily_closes(_GOLD_ASTER, cfg["data_limit"])
+        gold_closes = _fetch_gold_closes(cfg["data_limit"])
         btc_closes = _fetch_daily_closes(_BTC_ASTER, cfg["data_limit"])
 
         if gold_closes is None or btc_closes is None:
