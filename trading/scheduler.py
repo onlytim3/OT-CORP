@@ -1467,7 +1467,7 @@ def _check_scalp_exits(scalp_positions: list) -> list:
                         symbol=symbol, side=close_side, qty=qty,
                         price=exit_price, total=qty * exit_price,
                         strategy="intraday_scalp",
-                        status=order.get("status", "filled"),
+                        status="closed",
                         leverage=leverage,
                     )
                     try:
@@ -1700,7 +1700,7 @@ def check_stop_losses():
                     price=exit_price,
                     total=action["qty"] * exit_price,
                     strategy=f"profit_mgmt_{action['action']}",
-                    status=order["status"],
+                    status="closed",
                     alpaca_order_id=order.get("id"),
                 )
                 # Immediately close matching entry trades so open/recent tables stay in sync
@@ -1775,7 +1775,7 @@ def check_stop_losses():
                         price=sl_price,
                         total=pos["qty"] * sl_price,
                         strategy="stop_loss",
-                        status=order["status"],
+                        status="closed",
                         alpaca_order_id=order.get("id"),
                     )
                     # Immediately close matching entry trades so open/recent tables stay in sync
@@ -1827,7 +1827,7 @@ def check_stop_losses():
                             insert_trade(
                                 symbol=symbol, side=exit_side, qty=alert["qty"],
                                 price=exit_price, total=alert["qty"] * exit_price,
-                                strategy="passive_loss_recovery", status=order["status"],
+                                strategy="passive_loss_recovery", status="closed",
                                 alpaca_order_id=order.get("id"),
                             )
                             try:
@@ -1924,7 +1924,7 @@ def check_stop_losses():
                         price=vol_exit_price,
                         total=pos["qty"] * vol_exit_price,
                         strategy="volume_exit",
-                        status=order["status"],
+                        status="closed",
                         alpaca_order_id=order.get("id"),
                     )
                     # Immediately close matching entry trades so open/recent tables stay in sync
