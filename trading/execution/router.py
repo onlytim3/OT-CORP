@@ -1371,8 +1371,15 @@ def _paper_get_account() -> dict:
     cash = _get_paper_cash()
     positions = _paper_get_positions()
 
-    positions_value = sum(p["market_value"] for p in positions)
+    # For leveraged positions, equity contribution = margin_deployed + unrealized P&L.
+    # Using full market_value (qty * price) would inflate equity by (leverage-1)×margin
+    # every time a position opens, since cash is only reduced by notional/leverage.
     unrealized_pnl = sum(p["unrealized_pnl"] for p in positions)
+    margin_used = sum(
+        p["qty"] * p["avg_cost"] / max(float(p.get("leverage") or 1), 1.0)
+        for p in positions
+    )
+    positions_value = margin_used + unrealized_pnl
     equity = cash + positions_value
 
     return {

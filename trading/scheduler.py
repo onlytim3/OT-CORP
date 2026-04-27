@@ -935,12 +935,14 @@ def run_trading_cycle():
                 positions = _get_positions()
                 for p in (positions or []):
                     try:
-                        mv = float(p.get("market_value") or 0)
-                        if not mv:
-                            qty = float(p.get("qty") or 0)
-                            price = float(p.get("current_price") or p.get("avg_cost") or 0)
-                            mv = qty * price
-                        pos_value += mv
+                        # Use margin + unrealized P&L, not full notional market_value.
+                        # Cash is reduced by notional/leverage at open, so equity is:
+                        #   cash + Σ(margin + unrealized_pnl) — not cash + Σ(notional)
+                        qty_p = float(p.get("qty") or 0)
+                        avg_p = float(p.get("avg_cost") or 0)
+                        lev_p = float(p.get("leverage") or 1) or 1.0
+                        unr_p = float(p.get("unrealized_pnl") or 0)
+                        pos_value += qty_p * avg_p / lev_p + unr_p
                     except (TypeError, ValueError):
                         continue
             except Exception as pos_err:

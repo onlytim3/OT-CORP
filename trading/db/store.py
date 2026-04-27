@@ -701,6 +701,7 @@ def get_open_trades():
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM trades WHERE status IN ('filled', 'pending') AND closed_at IS NULL"
+            " AND COALESCE(qty, 0) > 0 AND COALESCE(price, 0) > 0"
         ).fetchall()
         return [dict(r) for r in rows]
 
