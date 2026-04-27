@@ -1023,6 +1023,23 @@ def run_trading_cycle():
         except Exception as e:
             log.warning("Dust cleanup failed: %s", e)
 
+        # Close any open trade records with zero market value (qty=0 or price=0).
+        try:
+            with get_db() as _zdb:
+                _zrows = _zdb.execute(
+                    "SELECT id FROM trades "
+                    "WHERE status IN ('filled', 'pending') AND closed_at IS NULL "
+                    "AND (COALESCE(qty, 0) <= 0 OR COALESCE(price, 0) <= 0)"
+                ).fetchall()
+                if _zrows:
+                    _zdb.executemany(
+                        "UPDATE trades SET status='closed', closed_at=datetime('now'), pnl=0 WHERE id=?",
+                        [(r["id"],) for r in _zrows],
+                    )
+                    log.info("Closed %d zero-value open trade records", len(_zrows))
+        except Exception as _ze:
+            log.warning("Zero-value trade cleanup failed: %s", _ze)
+
         # ---------------------------------------------------------------
         # Summary
         # ---------------------------------------------------------------
@@ -2385,6 +2402,29 @@ def start_daemon(interval_hours=4, paper=False):
             log.info("Orphan cleanup v3 complete: paired %d, reconciled %d", paired, reconciled)
     except Exception as e:
         log.error("Orphan cleanup v3 failed: %s", e)
+
+    # One-time cleanup v4 — close open trades with zero market value (qty=0 or price=0).
+    # These are ghost records that can never represent a real position.
+    try:
+        if not get_setting("orphan_cleanup_v4_done"):
+            with get_db() as _db:
+                rows = _db.execute(
+                    "SELECT id FROM trades "
+                    "WHERE status IN ('filled', 'pending') AND closed_at IS NULL "
+                    "AND (COALESCE(qty, 0) <= 0 OR COALESCE(price, 0) <= 0)"
+                ).fetchall()
+                if rows:
+                    ids = [r["id"] for r in rows]
+                    _db.executemany(
+                        "UPDATE trades SET status='closed', closed_at=datetime('now'), pnl=0 WHERE id=?",
+                        [(i,) for i in ids],
+                    )
+                    log.info("Orphan cleanup v4: closed %d zero-value open trades", len(ids))
+                    log_action("cleanup", "zero_value_trade_close",
+                               details=f"Closed {len(ids)} zero-value open trades (qty=0 or price=0)")
+            set_setting("orphan_cleanup_v4_done", "true")
+    except Exception as e:
+        log.error("Orphan cleanup v4 failed: %s", e)
 
     # Run startup validation backtest (if enabled)
     _run_startup_validation()
