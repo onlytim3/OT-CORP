@@ -717,7 +717,9 @@ def api_trades():
 
         # Mark each trade with consistent open/closed status
         # In futures trading, both buy (long) and sell/short entries can be open positions
-        t["is_open"] = (t.get("closed_at") is None and t.get("status") != "closed")
+        # A trade with zero market value (qty=0 or price=0) is not a real open position
+        market_value = qty * price
+        t["is_open"] = (t.get("closed_at") is None and t.get("status") != "closed" and market_value > 0)
 
         # If sell trade has no P&L, compute from buy entry price
         if pnl is None and side == "sell" and price > 0 and qty > 0:
