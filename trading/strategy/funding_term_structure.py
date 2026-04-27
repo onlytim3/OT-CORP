@@ -12,7 +12,7 @@ Signal logic:
 - Overleveraged shorts (short avg << long avg, z < -1.5) -> BUY
 - Cross-asset divergence: compare BTC funding dynamics vs altcoin for relative signals
 
-Data source: AsterDex API (perpetual futures, public endpoints).
+Data source: Bybit API (perpetual futures, public endpoints).
 """
 
 import logging
@@ -47,12 +47,12 @@ Z_THRESHOLD = 1.5         # Z-score threshold for extreme funding
 # ---------------------------------------------------------------------------
 
 def _fetch_funding_history(symbol: str) -> list[float]:
-    """Fetch historical funding rate series from AsterDex."""
+    """Fetch historical funding rate series from Bybit."""
     try:
-        from trading.data.aster import get_funding_rate_history
+        from trading.data.bybit import get_funding_rate_history
         return get_funding_rate_history(symbol)
     except ImportError:
-        log.warning("trading.data.aster not available — funding_term_structure disabled")
+        log.warning("trading.data.bybit not available — funding_term_structure disabled")
         return []
     except Exception as e:
         log.error("Failed to fetch funding history for %s: %s", symbol, e)
@@ -62,7 +62,7 @@ def _fetch_funding_history(symbol: str) -> list[float]:
 def _fetch_current_funding_rates() -> dict[str, float]:
     """Fetch current funding rates keyed by coin_id."""
     try:
-        from trading.data.aster import get_funding_rates
+        from trading.data.bybit import get_funding_rates
         return get_funding_rates()
     except ImportError:
         return {}
@@ -162,7 +162,7 @@ class FundingTermStructureStrategy(Strategy):
         context_data: dict[str, Any] = {}
 
         try:
-            from trading.config import ASTER_SYMBOLS
+            from trading.config import BYBIT_SYMBOLS
         except ImportError:
             log.error("Cannot import symbol config — funding_term_structure disabled")
             return signals
@@ -173,12 +173,12 @@ class FundingTermStructureStrategy(Strategy):
         coin_analyses: dict[str, dict] = {}
 
         for coin_id in TERM_STRUCTURE_COINS:
-            aster_symbol = ASTER_SYMBOLS.get(coin_id)
-            trade_symbol = ASTER_SYMBOLS.get(coin_id)
-            if not aster_symbol or not trade_symbol:
+            bybit_symbol = BYBIT_SYMBOLS.get(coin_id)
+            trade_symbol = BYBIT_SYMBOLS.get(coin_id)
+            if not bybit_symbol or not trade_symbol:
                 continue
 
-            history = _fetch_funding_history(aster_symbol)
+            history = _fetch_funding_history(bybit_symbol)
             if len(history) < LONG_WINDOW:
                 log.debug(
                     "funding_term_structure: insufficient history for %s (%d periods)",
@@ -201,7 +201,7 @@ class FundingTermStructureStrategy(Strategy):
                 "momentum": momentum,
                 "z_score": z,
                 "current_rate": current_rate,
-                "aster_symbol": aster_symbol,
+                "bybit_symbol": bybit_symbol,
                 "trade_symbol": trade_symbol,
             }
 

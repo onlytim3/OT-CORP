@@ -309,8 +309,8 @@ def _queue_action(action_type: str, description: str, execute_fn,
 
 def _find_position(symbol: str) -> dict | None:
     """Find a position by symbol."""
-    from trading.execution.router import get_positions_from_aster
-    positions = get_positions_from_aster()
+    from trading.execution.router import get_positions_from_bybit
+    positions = get_positions_from_bybit()
     sym_clean = symbol.replace("/", "")
     for pos in positions:
         if pos["symbol"].upper() == sym_clean.upper():
@@ -1123,7 +1123,7 @@ def _intent_set_alert(msg: str, lower: str) -> dict:
 def _read_briefing(msg: str, lower: str) -> dict:
     """Comprehensive system status briefing."""
     from trading.db.store import get_action_log, get_daily_pnl, get_pending_recommendations
-    from trading.execution.router import get_positions_from_aster, get_account
+    from trading.execution.router import get_positions_from_bybit, get_account
 
     lines = ["**System Briefing**\n"]
 
@@ -1139,7 +1139,7 @@ def _read_briefing(msg: str, lower: str) -> dict:
 
     # 2. Open positions
     try:
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
         if positions:
             lines.append(f"\n**Open Positions** ({len(positions)}):")
             for p in positions:
@@ -1824,7 +1824,7 @@ def _read_income_summary(msg: str, lower: str) -> dict:
     for itype, data in summary.items():
         lines.append(f"- **{itype}**: ${data['total']:+,.4f} ({data['count']} records)")
     if not summary:
-        lines.append("No income records yet — accumulates as trades execute on AsterDex.")
+        lines.append("No income records yet — accumulates as trades execute on Bybit.")
     try:
         with get_read_db() as conn:
             rows = conn.execute(
@@ -1869,8 +1869,8 @@ def _read_pending_orders(msg: str, lower: str) -> dict:
     from trading.db.store import get_stale_pending_trades
     lines = ["**Pending Orders**\n"]
     try:
-        from trading.execution.aster_client import aster_get_open_orders
-        live = aster_get_open_orders() or []
+        from trading.execution.bybit_client import bybit_get_open_orders
+        live = bybit_get_open_orders() or []
         stale = get_stale_pending_trades(max_age_minutes=15)
         stale_ids = {str(t.get("alpaca_order_id", "")) for t in stale}
         if live:
@@ -1898,9 +1898,9 @@ def _read_portfolio_analysis(msg: str, lower: str) -> dict:
 
     data: dict = {}
     try:
-        from trading.execution.router import get_account, get_positions_from_aster
+        from trading.execution.router import get_account, get_positions_from_bybit
         data["account"] = get_account()
-        data["positions"] = get_positions_from_aster() or []
+        data["positions"] = get_positions_from_bybit() or []
     except Exception:
         pass
     try:
@@ -2092,9 +2092,9 @@ def _intent_what_if(msg: str, lower: str) -> dict:
 
 def _intent_rebalance(msg: str, lower: str) -> dict:
     """Portfolio rebalancing: 'rebalance to equal weight' or 'reduce meme exposure'."""
-    from trading.execution.router import get_positions_from_aster, get_account
+    from trading.execution.router import get_positions_from_bybit, get_account
 
-    positions = get_positions_from_aster()
+    positions = get_positions_from_bybit()
     if not positions:
         return {"answer": "No open positions to rebalance."}
 
@@ -2279,10 +2279,10 @@ def _intent_schedule_command(msg: str, lower: str) -> dict:
 
 def _intent_batch_workflow(msg: str, lower: str) -> dict:
     """Multi-step workflows: 'take profit on all positions up >5%', 'close all losing positions'."""
-    from trading.execution.router import get_positions_from_aster
+    from trading.execution.router import get_positions_from_bybit
     from trading.db.store import log_action
 
-    positions = get_positions_from_aster()
+    positions = get_positions_from_bybit()
     if not positions:
         return {"answer": "No open positions."}
 
@@ -2806,14 +2806,14 @@ def _intent_llm_universal(msg: str, lower: str) -> dict:
     context_lines = [recovery_note or "Normal trading mode"]
     try:
         from trading.db.store import get_daily_pnl, get_income_summary, get_setting
-        from trading.execution.router import get_account, get_positions_from_aster
+        from trading.execution.router import get_account, get_positions_from_bybit
         acc = get_account()
         context_lines.append(
             f"Portfolio: ${acc.get('portfolio_value', 0):,.2f} | "
             f"Cash: ${acc.get('cash', 0):,.2f} | "
             f"Mode: {'PAPER' if acc.get('paper') else 'LIVE'}"
         )
-        positions = get_positions_from_aster() or []
+        positions = get_positions_from_bybit() or []
         if positions:
             pos_strs = [f"{p['symbol']} {p.get('side','?')} P&L ${p.get('unrealized_pnl',0):+.2f}"
                         for p in positions[:4]]
@@ -2982,7 +2982,7 @@ def _intent_batch_trades(msg: str, lower: str) -> dict:
 
 def _intent_live_prices(msg: str, lower: str) -> dict:
     """Query live prices: 'what is BTC at', 'price of ETH and SOL'."""
-    from trading.execution.router import get_positions_from_aster
+    from trading.execution.router import get_positions_from_bybit
 
     symbols = []
     words = msg.lower().split()
@@ -2995,7 +2995,7 @@ def _intent_live_prices(msg: str, lower: str) -> dict:
         return {"answer": "Please specify symbols: 'price of BTC and ETH' or 'what is SOL at'"}
 
     try:
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
         pos_map = {p["symbol"].replace("USDT", "/USD").replace("USD", "/USD"): p for p in positions}
 
         lines = ["**Live Prices:**\n"]
@@ -3014,7 +3014,7 @@ def _intent_live_prices(msg: str, lower: str) -> dict:
 
 def _intent_allocate_portfolio(msg: str, lower: str) -> dict:
     """Allocate portfolio by percentage: 'put 40% in ETH, 30% in BTC, 30% in SOL'."""
-    from trading.execution.router import get_account, get_positions_from_aster
+    from trading.execution.router import get_account, get_positions_from_bybit
     from trading.execution.router import close_position, submit_order
 
     # Parse allocations: "X% in SYMBOL, Y% in SYMBOL"
@@ -3032,7 +3032,7 @@ def _intent_allocate_portfolio(msg: str, lower: str) -> dict:
     try:
         account = get_account()
         portfolio_value = account.get("portfolio_value", 0)
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
     except Exception as e:
         return {"answer": f"Could not fetch portfolio: {e}"}
 
@@ -3177,7 +3177,7 @@ def _intent_auto_trigger(msg: str, lower: str) -> dict:
 
 def _intent_cancel_all_orders(msg: str, lower: str) -> dict:
     """Cancel all pending orders: 'cancel all orders', 'clear queue'."""
-    from trading.execution.router import get_positions_from_aster
+    from trading.execution.router import get_positions_from_bybit
     from trading.db.store import log_action
 
     desc = "Cancel ALL pending orders"
@@ -3198,7 +3198,7 @@ def _intent_cancel_all_orders(msg: str, lower: str) -> dict:
 
 def _intent_system_diagnostics(msg: str, lower: str) -> dict:
     """Full system health: 'system health', 'diagnose', 'system status'."""
-    from trading.execution.router import get_account, get_positions_from_aster
+    from trading.execution.router import get_account, get_positions_from_bybit
     from trading.db.store import get_daily_pnl, get_action_log
     from trading.config import TRADING_MODE, STRATEGY_ENABLED, RISK
     from trading.strategy.circuit_breaker import get_recovery_mode
@@ -3218,7 +3218,7 @@ def _intent_system_diagnostics(msg: str, lower: str) -> dict:
 
     # Positions
     try:
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
         lines.append(f"**Positions**: {len(positions)} open | Equity: ${sum(p.get('market_value', 0) for p in positions):,.2f}")
     except:
         lines.append("**Positions**: Error fetching")

@@ -4,7 +4,7 @@ Detects whale activity by analyzing order book depth asymmetry and large trade
 clusters across multiple depth levels.
 
 Signal logic:
-- Fetch deep order book (50 levels) from AsterDex
+- Fetch deep order book (50 levels) from Bybit
 - Compute top-of-book imbalance (levels 1-5) — reflects retail/HFT flow
 - Compute deep-book imbalance (levels 10-50) — reveals whale positioning
 - Compare the two signals for divergence:
@@ -18,8 +18,8 @@ Amplifiers:
 2. Spread-normalized large order clusters
 3. Absolute magnitude of imbalance
 
-Data source: AsterDex public orderbook API (no auth required).
-Execution: AsterDex perpetual futures.
+Data source: Bybit public orderbook API (no auth required).
+Execution: Bybit perpetual futures.
 """
 
 import logging
@@ -52,40 +52,40 @@ DIVERGENCE_BONUS = 0.2    # Extra strength when top vs deep signals diverge
 # Data helpers — lazy imports with graceful degradation
 # ---------------------------------------------------------------------------
 
-def _fetch_deep_orderbook(aster_symbol: str) -> dict | None:
-    """Fetch 50-level order book from AsterDex.
+def _fetch_deep_orderbook(bybit_symbol: str) -> dict | None:
+    """Fetch 50-level order book from Bybit.
 
     Returns dict with 'bids' and 'asks' as lists of [price, qty],
     or None on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_orderbook
-        book = get_aster_orderbook(aster_symbol, limit=50)
+        from trading.execution.bybit_client import get_bybit_orderbook
+        book = get_bybit_orderbook(bybit_symbol, limit=50)
         if not book or not book.get("bids") or not book.get("asks"):
-            log.warning("whale_flow: empty orderbook for %s", aster_symbol)
+            log.warning("whale_flow: empty orderbook for %s", bybit_symbol)
             return None
         return book
     except ImportError:
-        log.warning("trading.execution.aster_client not available — whale_flow skipped")
+        log.warning("trading.execution.bybit_client not available — whale_flow skipped")
         return None
     except Exception as e:
-        log.error("whale_flow: failed to fetch orderbook for %s: %s", aster_symbol, e)
+        log.error("whale_flow: failed to fetch orderbook for %s: %s", bybit_symbol, e)
         return None
 
 
-def _fetch_top_imbalance(aster_symbol: str) -> dict | None:
+def _fetch_top_imbalance(bybit_symbol: str) -> dict | None:
     """Fetch top-of-book imbalance from the data layer (top 20 levels).
 
     Returns dict with bid_volume, ask_volume, imbalance, spread_bps, mid_price,
     or None on failure.
     """
     try:
-        from trading.data.aster import get_orderbook_imbalance
-        return get_orderbook_imbalance(aster_symbol, depth=20)
+        from trading.data.bybit import get_orderbook_imbalance
+        return get_orderbook_imbalance(bybit_symbol, depth=20)
     except ImportError:
         return None
     except Exception as e:
-        log.error("whale_flow: failed to fetch imbalance for %s: %s", aster_symbol, e)
+        log.error("whale_flow: failed to fetch imbalance for %s: %s", bybit_symbol, e)
         return None
 
 
@@ -240,20 +240,20 @@ class WhaleFlowStrategy(Strategy):
         context_data: dict[str, Any] = {}
 
         try:
-            from trading.config import ASTER_SYMBOLS
+            from trading.config import BYBIT_SYMBOLS
         except ImportError:
             log.warning("whale_flow: trading.config not available, skipping")
             return signals
 
         for coin_id in WHALE_COINS:
-            aster_symbol = ASTER_SYMBOLS.get(coin_id)
-            if not aster_symbol:
-                log.warning("whale_flow: no AsterDex symbol for %s", coin_id)
+            bybit_symbol = BYBIT_SYMBOLS.get(coin_id)
+            if not bybit_symbol:
+                log.warning("whale_flow: no Bybit symbol for %s", coin_id)
                 continue
 
             try:
                 # Fetch deep order book (50 levels)
-                book = _fetch_deep_orderbook(aster_symbol)
+                book = _fetch_deep_orderbook(bybit_symbol)
                 if book is None:
                     # Abstain rather than veto — other strategies can still act on this symbol
                     log.warning("whale_flow: skipping %s — no orderbook data", coin_id)
@@ -271,7 +271,7 @@ class WhaleFlowStrategy(Strategy):
                 # Try to get 2 more snapshots with short delays
                 for _ in range(2):
                     time.sleep(2)  # 2-second delay between snapshots
-                    book2 = _fetch_deep_orderbook(aster_symbol)
+                    book2 = _fetch_deep_orderbook(bybit_symbol)
                     if book2:
                         bids2 = book2["bids"]
                         asks2 = book2["asks"]
@@ -288,7 +288,7 @@ class WhaleFlowStrategy(Strategy):
                 spread_bps = _compute_spread_bps(bids, asks)
 
                 # Also try to get the data-layer imbalance for cross-reference
-                data_imbalance = _fetch_top_imbalance(aster_symbol)
+                data_imbalance = _fetch_top_imbalance(bybit_symbol)
 
                 # Use data-layer spread if available (more accurate)
                 if data_imbalance and "spread_bps" in data_imbalance:
@@ -318,7 +318,7 @@ class WhaleFlowStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=ASTER_SYMBOLS.get(coin_id, aster_symbol),
+                    symbol=BYBIT_SYMBOLS.get(coin_id, bybit_symbol),
                     action=action,
                     strength=strength,
                     reason=f"{coin_id} {reason}",
@@ -329,7 +329,7 @@ class WhaleFlowStrategy(Strategy):
                 log.error("whale_flow error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=ASTER_SYMBOLS.get(coin_id, aster_symbol),
+                    symbol=BYBIT_SYMBOLS.get(coin_id, bybit_symbol),
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} whale_flow error: {e}",

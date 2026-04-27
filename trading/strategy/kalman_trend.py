@@ -15,7 +15,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
@@ -113,14 +113,14 @@ class KalmanTrendStrategy(Strategy):
 
         for coin_id in self.coins:
             try:
-                aster_symbol = ASTER_SYMBOLS.get(coin_id)
-                if not aster_symbol:
+                bybit_symbol = BYBIT_SYMBOLS.get(coin_id)
+                if not bybit_symbol:
                     continue
 
                 ohlc = get_ohlc(coin_id, self.lookback_days)
                 if ohlc.empty or len(ohlc) < self.min_data_points:
                     signals.append(Signal(
-                        strategy=self.name, symbol=aster_symbol, action="hold",
+                        strategy=self.name, symbol=bybit_symbol, action="hold",
                         strength=0.0,
                         reason=f"{coin_id} insufficient data",
                     ))
@@ -169,7 +169,7 @@ class KalmanTrendStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=aster_symbol,
+                    symbol=bybit_symbol,
                     action=action,
                     strength=round(max(strength, 0.0), 4),
                     reason=reason,
@@ -180,7 +180,7 @@ class KalmanTrendStrategy(Strategy):
                 ))
 
             except Exception as e:
-                sym = ASTER_SYMBOLS.get(coin_id, "BTC/USD")
+                sym = BYBIT_SYMBOLS.get(coin_id, "BTC/USD")
                 log.warning("kalman_trend error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name, symbol=sym, action="hold",

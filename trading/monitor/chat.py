@@ -84,9 +84,9 @@ def _handle_greeting(msg: str) -> str | None:
     if any(msg.startswith(g) or msg == g for g in greetings):
         # Gather a quick status snapshot
         try:
-            from trading.execution.router import get_account, get_positions_from_aster
+            from trading.execution.router import get_account, get_positions_from_bybit
             acct = get_account()
-            positions = get_positions_from_aster()
+            positions = get_positions_from_bybit()
             pv = acct.get("portfolio_value", 0) if acct else 0
             n_pos = len(positions) if positions else 0
             mode = "paper" if (acct or {}).get("paper", True) else "live"
@@ -791,14 +791,14 @@ def _knowledge_answer(msg: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _portfolio_answer() -> str:
-    from trading.execution.router import get_account, get_positions_from_aster
+    from trading.execution.router import get_account, get_positions_from_bybit
     try:
         account = get_account()
     except Exception:
         account = {"portfolio_value": 0, "cash": 0, "buying_power": 0, "equity": 0}
 
     try:
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
     except Exception:
         positions = []
 
@@ -845,9 +845,9 @@ def _portfolio_answer() -> str:
 
 
 def _positions_answer(msg: str) -> str:
-    from trading.execution.router import get_positions_from_aster
+    from trading.execution.router import get_positions_from_bybit
     try:
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
     except Exception:
         return "Unable to fetch positions right now. The broker connection may be down."
 
@@ -1093,11 +1093,11 @@ def _single_strategy_answer(name: str) -> str:
 
 def _risk_answer(msg: str) -> str:
     from trading.config import RISK
-    from trading.execution.router import get_account, get_positions_from_aster
+    from trading.execution.router import get_account, get_positions_from_bybit
 
     try:
         account = get_account()
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
     except Exception:
         account = {"portfolio_value": 0, "cash": 0}
         positions = []
@@ -1320,9 +1320,9 @@ def _gather_system_context() -> dict:
 
     # Portfolio
     try:
-        from trading.execution.router import get_account, get_positions_from_aster
+        from trading.execution.router import get_account, get_positions_from_bybit
         context["account"] = get_account()
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
         context["positions"] = positions[:10]
         
         # Explicitly calculate Unrealized P&L for the LLM

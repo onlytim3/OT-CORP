@@ -818,7 +818,7 @@ def update_journal_outcome(trade_id, outcome, pnl, lesson):
 
 @_retry_on_locked
 def insert_income_batch(rows: list) -> int:
-    """Upsert income records from aster_get_income(); returns count of new rows inserted."""
+    """Upsert income records from bybit_get_income(); returns count of new rows inserted."""
     inserted = 0
     now = _now()
     with get_db() as conn:

@@ -24,7 +24,7 @@ from trading.db.store import (
     get_journal, get_reviews, get_setting, get_open_trades,
     symbol_variants,
 )
-from trading.execution.router import get_account, get_positions_from_aster
+from trading.execution.router import get_account, get_positions_from_bybit
 from trading.monitor.auth import get_auth_middleware, _session_store
 
 log = logging.getLogger(__name__)
@@ -287,9 +287,9 @@ def _get_strategies():
 
 def _safe_positions():
     try:
-        return get_positions_from_aster()
+        return get_positions_from_bybit()
     except Exception:
-        log.exception("Failed to fetch positions from AsterDex")
+        log.exception("Failed to fetch positions from Bybit")
         return []
 
 
@@ -384,10 +384,10 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
                 entry_price = t.get("price") or 0
                 exit_price = entry_price  # fallback
                 try:
-                    from trading.execution.aster_client import get_aster_mark_prices
-                    from trading.execution.router import _to_aster
-                    aster_sym = _to_aster(sym)
-                    mark_data = get_aster_mark_prices(aster_sym)
+                    from trading.execution.bybit_client import get_bybit_mark_prices
+                    from trading.execution.router import _to_bybit
+                    bybit_sym = _to_bybit(sym)
+                    mark_data = get_bybit_mark_prices(bybit_sym)
                     if isinstance(mark_data, dict) and mark_data.get("markPrice"):
                         exit_price = mark_data["markPrice"]
                 except Exception:
@@ -413,10 +413,10 @@ def _reconcile_orphan_trades(broker_positions: list) -> int:
                 # so P&L reflects reality instead of defaulting to zero
                 exit_price = None
                 try:
-                    from trading.execution.aster_client import get_aster_mark_prices
-                    from trading.execution.router import _to_aster
-                    aster_sym = _to_aster(sym)
-                    mark_data = get_aster_mark_prices(aster_sym)
+                    from trading.execution.bybit_client import get_bybit_mark_prices
+                    from trading.execution.router import _to_bybit
+                    bybit_sym = _to_bybit(sym)
+                    mark_data = get_bybit_mark_prices(bybit_sym)
                     if isinstance(mark_data, dict):
                         exit_price = mark_data.get("markPrice")
                 except Exception:
@@ -667,10 +667,10 @@ def api_income():
     summary = get_income_summary(days=30)
     recent = []
     try:
-        from trading.execution.aster_client import aster_get_income
-        recent = aster_get_income(limit=20) or []
+        from trading.execution.bybit_client import bybit_get_income
+        recent = bybit_get_income(limit=20) or []
     except Exception as e:
-        log.debug("aster_get_income failed: %s", e)
+        log.debug("bybit_get_income failed: %s", e)
     return jsonify({"summary": summary, "recent": recent, "days": 30})
 
 
@@ -678,8 +678,8 @@ def api_income():
 def api_pending_orders():
     from trading.db.store import get_stale_pending_trades
     try:
-        from trading.execution.aster_client import aster_get_open_orders
-        live = aster_get_open_orders() or []
+        from trading.execution.bybit_client import bybit_get_open_orders
+        live = bybit_get_open_orders() or []
     except Exception as e:
         return jsonify({"error": str(e), "orders": [], "stale_count": 0})
     stale = get_stale_pending_trades(max_age_minutes=15)
@@ -885,8 +885,8 @@ def api_position_detail(symbol):
 
     # Find correlation group
     # Resolved symbol variants for mapping
-    from trading.data.aster import aster_to_alpaca
-    symbol_slash = aster_to_alpaca(pos["symbol"]) or pos["symbol"]
+    from trading.data.bybit import bybit_to_alpaca
+    symbol_slash = bybit_to_alpaca(pos["symbol"]) or pos["symbol"]
     symbol_flat = symbol_slash.split("/")[0].split("USDT")[0]
 
     corr_group = None
@@ -2396,10 +2396,10 @@ def api_llm_journal():
     try:
         from trading.llm.engine import generate_journal
         from trading.db.store import get_trades, get_daily_pnl, get_signals, get_action_log
-        from trading.execution.router import get_positions_from_aster
+        from trading.execution.router import get_positions_from_bybit
 
         trades = get_trades(limit=15)
-        positions = get_positions_from_aster()[:10]
+        positions = get_positions_from_bybit()[:10]
         pnl = get_daily_pnl(limit=7)
         signals = get_signals(limit=10)
         actions = get_action_log(limit=10)
@@ -2701,7 +2701,7 @@ def api_health():
     # --- Positions count ---
     positions_count = 0
     try:
-        positions_count = len(get_positions_from_aster())
+        positions_count = len(get_positions_from_bybit())
     except Exception:
         log.exception("Health check: failed to count positions")
 
@@ -2750,19 +2750,19 @@ def api_volume_all():
     """Volume analysis for all open positions."""
     try:
         from trading.risk.volume_gate import full_volume_analysis
-        from trading.data.aster import alpaca_to_aster
-        positions = get_positions_from_aster()
+        from trading.data.bybit import alpaca_to_bybit
+        positions = get_positions_from_bybit()
         results = []
         for pos in positions:
             sym = pos.get("symbol", "")
-            aster_sym = alpaca_to_aster(sym)
-            if not aster_sym:
+            bybit_sym = alpaca_to_bybit(sym)
+            if not bybit_sym:
                 continue
-            analysis = full_volume_analysis(aster_sym)
+            analysis = full_volume_analysis(bybit_sym)
             if analysis:
                 results.append({
                     "symbol": sym,
-                    "aster_symbol": aster_sym,
+                    "bybit_symbol": bybit_sym,
                     "ratio": analysis.ratio,
                     "trend": analysis.trend,
                     "spread_bps": analysis.spread_bps,
@@ -2859,7 +2859,7 @@ def api_attribution():
 def api_margin():
     """Margin health for all leveraged positions."""
     try:
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
         result = []
         for pos in positions:
             leverage = pos.get("leverage", 1)
@@ -2903,8 +2903,8 @@ def api_leverage():
     try:
         account = _safe_account()
         portfolio_value = account.get("portfolio_value", 0)
-        from trading.execution.router import get_positions_from_aster
-        positions = get_positions_from_aster()
+        from trading.execution.router import get_positions_from_bybit
+        positions = get_positions_from_bybit()
         total_notional = 0
         pos_data = []
         for pos in positions:
@@ -2933,7 +2933,7 @@ def api_leverage():
 def api_sectors():
     """Sector exposure breakdown."""
     try:
-        positions = get_positions_from_aster()
+        positions = get_positions_from_bybit()
         account = _safe_account()
         portfolio_value = account.get("portfolio_value", 0)
 
@@ -3384,13 +3384,13 @@ def api_risk_budget():
 
 @app.route("/api/price-chart/<symbol>")
 def api_price_chart(symbol):
-    """Real OHLCV candlestick data from AsterDex."""
+    """Real OHLCV candlestick data from Bybit."""
     try:
-        from trading.data.aster import get_aster_ohlcv, alpaca_to_aster
+        from trading.data.bybit import get_bybit_ohlcv, alpaca_to_bybit
         interval = request.args.get("interval", "1h")
         limit = int(request.args.get("limit", 48))
-        aster_sym = alpaca_to_aster(symbol) or symbol
-        df = get_aster_ohlcv(aster_sym, interval=interval, limit=limit)
+        bybit_sym = alpaca_to_bybit(symbol) or symbol
+        df = get_bybit_ohlcv(bybit_sym, interval=interval, limit=limit)
         if df is None or (hasattr(df, 'empty') and df.empty):
             return jsonify([])
         result = []

@@ -1,6 +1,6 @@
 """RSI Divergence Strategy — detect bullish/bearish divergences on crypto OHLC."""
 
-from trading.config import RSI_DIVERGENCE, ASTER_SYMBOLS
+from trading.config import RSI_DIVERGENCE, BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
@@ -28,14 +28,14 @@ class RSIDivergenceStrategy(Strategy):
 
         for coin_id in self.coins:
             try:
-                aster_symbol = ASTER_SYMBOLS.get(coin_id)
-                if not aster_symbol:
+                bybit_symbol = BYBIT_SYMBOLS.get(coin_id)
+                if not bybit_symbol:
                     continue
 
                 ohlc = get_ohlc(coin_id, self.ohlc_days)
                 if ohlc.empty or len(ohlc) < self.rsi_period + self.lookback:
                     signals.append(Signal(
-                        strategy=self.name, symbol=aster_symbol, action="hold",
+                        strategy=self.name, symbol=bybit_symbol, action="hold",
                         strength=0.0, reason=f"{coin_id} OHLC data too short ({len(ohlc) if not ohlc.empty else 0} candles)",
                     ))
                     continue
@@ -44,7 +44,7 @@ class RSIDivergenceStrategy(Strategy):
                 rsi_valid = rsi_series.dropna()
                 if len(rsi_valid) < self.lookback:
                     signals.append(Signal(
-                        strategy=self.name, symbol=aster_symbol, action="hold",
+                        strategy=self.name, symbol=bybit_symbol, action="hold",
                         strength=0.0, reason=f"{coin_id} insufficient RSI data ({len(rsi_valid)} valid points)",
                     ))
                     continue
@@ -62,7 +62,7 @@ class RSIDivergenceStrategy(Strategy):
                     strength = min((self.oversold - current_rsi) / self.oversold, 1.0)
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=aster_symbol,
+                        symbol=bybit_symbol,
                         action="buy",
                         strength=strength,
                         reason=f"{coin_id} RSI bullish divergence at {current_rsi:.0f} — oversold reversal",
@@ -72,7 +72,7 @@ class RSIDivergenceStrategy(Strategy):
                     strength = min((current_rsi - self.overbought) / (100 - self.overbought), 1.0)
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=aster_symbol,
+                        symbol=bybit_symbol,
                         action="sell",
                         strength=strength,
                         reason=f"{coin_id} RSI bearish divergence at {current_rsi:.0f} — overbought reversal",
@@ -81,7 +81,7 @@ class RSIDivergenceStrategy(Strategy):
                 else:
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=aster_symbol,
+                        symbol=bybit_symbol,
                         action="hold",
                         strength=0.0,
                         reason=f"{coin_id} RSI {current_rsi:.0f} — no divergence detected",
@@ -89,7 +89,7 @@ class RSIDivergenceStrategy(Strategy):
                     ))
 
             except Exception as e:
-                sym = ASTER_SYMBOLS.get(coin_id, "BTC/USD")
+                sym = BYBIT_SYMBOLS.get(coin_id, "BTC/USD")
                 signals.append(Signal(
                     strategy=self.name, symbol=sym, action="hold",
                     strength=0.0, reason=f"{coin_id} RSI error: {e}",

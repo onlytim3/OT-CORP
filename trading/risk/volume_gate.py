@@ -30,7 +30,7 @@ class VolumeAnalysis:
 
 
 def compute_volume_ratio(
-    aster_symbol: str,
+    bybit_symbol: str,
     recent_hours: int = 4,
     baseline_hours: int = 168,
 ) -> Optional[float]:
@@ -40,9 +40,9 @@ def compute_volume_ratio(
     is unavailable. Callers should treat None as "pass" (fail-open).
     """
     try:
-        from trading.data.aster import get_aster_ohlcv
+        from trading.data.bybit import get_bybit_ohlcv
 
-        df = get_aster_ohlcv(aster_symbol, interval="1h", limit=baseline_hours)
+        df = get_bybit_ohlcv(bybit_symbol, interval="1h", limit=baseline_hours)
         if df is None or df.empty or len(df) < recent_hours + 24:
             return None
 
@@ -59,11 +59,11 @@ def compute_volume_ratio(
 
         return recent_volume / avg_window_volume
     except Exception:
-        log.debug("Failed to compute volume ratio for %s", aster_symbol, exc_info=True)
+        log.debug("Failed to compute volume ratio for %s", bybit_symbol, exc_info=True)
         return None
 
 
-def compute_volume_trend(aster_symbol: str, window: int = 6) -> Optional[float]:
+def compute_volume_trend(bybit_symbol: str, window: int = 6) -> Optional[float]:
     """Detect whether volume is building or fading.
 
     Compares the most recent `window` hours to the `window` hours before that.
@@ -75,9 +75,9 @@ def compute_volume_trend(aster_symbol: str, window: int = 6) -> Optional[float]:
     Normalized to -1..+1 range. None on failure.
     """
     try:
-        from trading.data.aster import get_aster_ohlcv
+        from trading.data.bybit import get_bybit_ohlcv
 
-        df = get_aster_ohlcv(aster_symbol, interval="1h", limit=window * 2 + 2)
+        df = get_bybit_ohlcv(bybit_symbol, interval="1h", limit=window * 2 + 2)
         if df is None or df.empty or len(df) < window * 2:
             return None
 
@@ -93,29 +93,29 @@ def compute_volume_trend(aster_symbol: str, window: int = 6) -> Optional[float]:
         # Clamp to [-1, 1]
         return max(-1.0, min(1.0, change))
     except Exception:
-        log.debug("Failed to compute volume trend for %s", aster_symbol, exc_info=True)
+        log.debug("Failed to compute volume trend for %s", bybit_symbol, exc_info=True)
         return None
 
 
-def check_spread(aster_symbol: str) -> Optional[float]:
+def check_spread(bybit_symbol: str) -> Optional[float]:
     """Get current bid-ask spread in basis points.
 
     Returns spread_bps or None on failure. Wide spread = illiquid market.
     """
     try:
-        from trading.data.aster import get_orderbook_imbalance
+        from trading.data.bybit import get_orderbook_imbalance
 
-        book = get_orderbook_imbalance(aster_symbol, depth=5)
+        book = get_orderbook_imbalance(bybit_symbol, depth=5)
         if book is None:
             return None
         return book.get("spread_bps", None)
     except Exception:
-        log.debug("Failed to check spread for %s", aster_symbol, exc_info=True)
+        log.debug("Failed to check spread for %s", bybit_symbol, exc_info=True)
         return None
 
 
 def check_market_impact(
-    aster_symbol: str,
+    bybit_symbol: str,
     order_value_usd: float,
     max_impact_pct: float = 0.01,
 ) -> Optional[bool]:
@@ -126,9 +126,9 @@ def check_market_impact(
     None on data failure (fail-open).
     """
     try:
-        from trading.data.aster import get_aster_ohlcv
+        from trading.data.bybit import get_bybit_ohlcv
 
-        df = get_aster_ohlcv(aster_symbol, interval="1h", limit=4)
+        df = get_bybit_ohlcv(bybit_symbol, interval="1h", limit=4)
         if df is None or df.empty:
             return None
 
@@ -139,11 +139,11 @@ def check_market_impact(
         impact = order_value_usd / recent_quote_vol
         return impact <= max_impact_pct
     except Exception:
-        log.debug("Failed to check market impact for %s", aster_symbol, exc_info=True)
+        log.debug("Failed to check market impact for %s", bybit_symbol, exc_info=True)
         return None
 
 
-def compute_volume_sizing_multiplier(aster_symbol: str) -> float:
+def compute_volume_sizing_multiplier(bybit_symbol: str) -> float:
     """Compute a position sizing multiplier based on current volume conditions.
 
     High volume → bigger positions (up to 1.5x)
@@ -151,11 +151,11 @@ def compute_volume_sizing_multiplier(aster_symbol: str) -> float:
     Low volume → smaller positions (down to 0.5x)
     Data failure → 1.0x (neutral)
     """
-    ratio = compute_volume_ratio(aster_symbol)
+    ratio = compute_volume_ratio(bybit_symbol)
     if ratio is None:
         return 1.0
 
-    trend = compute_volume_trend(aster_symbol) or 0.0
+    trend = compute_volume_trend(bybit_symbol) or 0.0
 
     # Base multiplier from volume ratio
     # ratio=2.0 → 1.4x, ratio=1.0 → 1.0x, ratio=0.5 → 0.7x, ratio=0.3 → 0.5x
@@ -172,29 +172,29 @@ def compute_volume_sizing_multiplier(aster_symbol: str) -> float:
 
     log.debug(
         "Volume sizing %s: ratio=%.2f trend=%.2f → multiplier=%.2f",
-        aster_symbol, ratio, trend, multiplier,
+        bybit_symbol, ratio, trend, multiplier,
     )
     return round(multiplier, 3)
 
 
-def full_volume_analysis(aster_symbol: str) -> Optional[VolumeAnalysis]:
+def full_volume_analysis(bybit_symbol: str) -> Optional[VolumeAnalysis]:
     """Run complete volume analysis for a symbol. Returns None on failure."""
-    ratio = compute_volume_ratio(aster_symbol)
+    ratio = compute_volume_ratio(bybit_symbol)
     if ratio is None:
         return None
 
-    trend = compute_volume_trend(aster_symbol) or 0.0
-    spread = check_spread(aster_symbol) or 0.0
+    trend = compute_volume_trend(bybit_symbol) or 0.0
+    spread = check_spread(bybit_symbol) or 0.0
 
     # Get recent quote volume
     try:
-        from trading.data.aster import get_aster_ohlcv
-        df = get_aster_ohlcv(aster_symbol, interval="1h", limit=4)
+        from trading.data.bybit import get_bybit_ohlcv
+        df = get_bybit_ohlcv(bybit_symbol, interval="1h", limit=4)
         quote_vol = float(df["quote_volume"].sum()) if df is not None and not df.empty else 0
     except Exception:
         quote_vol = 0
 
-    sizing = compute_volume_sizing_multiplier(aster_symbol)
+    sizing = compute_volume_sizing_multiplier(bybit_symbol)
 
     return VolumeAnalysis(
         ratio=round(ratio, 3),
@@ -205,7 +205,7 @@ def full_volume_analysis(aster_symbol: str) -> Optional[VolumeAnalysis]:
     )
 
 
-def record_volume_snapshot(aster_symbol: str) -> None:
+def record_volume_snapshot(bybit_symbol: str) -> None:
     """Record current hourly volume snapshot for learning.
 
     Stores hour-of-day and day-of-week so the system can learn
@@ -213,21 +213,21 @@ def record_volume_snapshot(aster_symbol: str) -> None:
     """
     try:
         from datetime import datetime, timezone
-        from trading.data.aster import get_aster_ohlcv
+        from trading.data.bybit import get_bybit_ohlcv
         from trading.db.store import insert_volume_profile
 
-        ratio = compute_volume_ratio(aster_symbol, recent_hours=1, baseline_hours=168)
+        ratio = compute_volume_ratio(bybit_symbol, recent_hours=1, baseline_hours=168)
         if ratio is None:
             return
 
         # Get absolute quote volume for the last hour
-        df = get_aster_ohlcv(aster_symbol, interval="1h", limit=2)
+        df = get_bybit_ohlcv(bybit_symbol, interval="1h", limit=2)
         quote_vol = float(df["quote_volume"].iloc[-1]) if df is not None and not df.empty else 0
         trade_count = int(df["trades"].iloc[-1]) if df is not None and not df.empty and "trades" in df.columns else 0
 
         now = datetime.now(timezone.utc)
         insert_volume_profile(
-            symbol=aster_symbol,
+            symbol=bybit_symbol,
             hour_of_day=now.hour,
             day_of_week=now.weekday(),
             volume_ratio=ratio,
@@ -235,4 +235,4 @@ def record_volume_snapshot(aster_symbol: str) -> None:
             trade_count=trade_count,
         )
     except Exception:
-        log.debug("Failed to record volume snapshot for %s", aster_symbol, exc_info=True)
+        log.debug("Failed to record volume snapshot for %s", bybit_symbol, exc_info=True)

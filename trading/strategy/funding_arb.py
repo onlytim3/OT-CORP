@@ -13,7 +13,7 @@ Amplifiers:
 2. Basis spread confirmation (mark vs index price divergence)
 3. Cross-asset funding divergence (BTC vs altcoin funding skew)
 
-Data source: AsterDex API (perpetual futures, no auth required for data).
+Data source: Bybit API (perpetual futures, no auth required for data).
 Execution: Alpaca (spot crypto).
 """
 
@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 FUNDING_COINS = ["bitcoin", "ethereum", "solana", "avalanche-2", "chainlink", "litecoin"]
 
-ASTER_SYMBOL_MAP = {
+BYBIT_SYMBOL_MAP = {
     "bitcoin": "BTCUSDT",
     "ethereum": "ETHUSDT",
     "solana": "SOLUSDT",
@@ -41,7 +41,7 @@ ASTER_SYMBOL_MAP = {
     "litecoin": "LTCUSDT",
 }
 
-ASTER_SYMBOL_MAP = {
+BYBIT_SYMBOL_MAP = {
     "bitcoin": "BTC/USD",
     "ethereum": "ETH/USD",
     "solana": "SOL/USD",
@@ -63,26 +63,26 @@ ZSCORE_EXTREME = 2.5
 
 
 # ---------------------------------------------------------------------------
-# AsterDex data helpers — graceful degradation
+# Bybit data helpers — graceful degradation
 # ---------------------------------------------------------------------------
 
 def _fetch_funding_rates() -> dict[str, float]:
-    """Fetch current funding rates from AsterDex."""
+    """Fetch current funding rates from Bybit."""
     try:
-        from trading.data.aster import get_funding_rates
+        from trading.data.bybit import get_funding_rates
         return get_funding_rates()
     except ImportError:
-        log.warning("trading.data.aster not available — funding_arb returns no signals")
+        log.warning("trading.data.bybit not available — funding_arb returns no signals")
         return {}
     except Exception as e:
-        log.error("Failed to fetch AsterDex funding rates: %s", e)
+        log.error("Failed to fetch Bybit funding rates: %s", e)
         return {}
 
 
 def _fetch_funding_history(symbol: str) -> list[float]:
     """Fetch historical funding rate series for z-score calculation."""
     try:
-        from trading.data.aster import get_funding_rate_history
+        from trading.data.bybit import get_funding_rate_history
         return get_funding_rate_history(symbol)
     except ImportError:
         return []
@@ -97,12 +97,12 @@ def _fetch_basis_spreads() -> dict[str, float]:
     Returns mapping of coin_id -> basis_pct.
     """
     try:
-        from trading.data.aster import get_basis_spread
+        from trading.data.bybit import get_basis_spread
         data = get_basis_spread()
         if not isinstance(data, list):
             return {}
-        from trading.config import ASTER_SYMBOLS
-        aster_to_coin = {v: k for k, v in ASTER_SYMBOLS.items()}
+        from trading.config import BYBIT_SYMBOLS
+        aster_to_coin = {v: k for k, v in BYBIT_SYMBOLS.items()}
         result = {}
         for entry in data:
             coin_id = aster_to_coin.get(entry.get("symbol", ""))
@@ -233,9 +233,9 @@ class FundingArbStrategy(Strategy):
         btc_funding = funding_rates.get("bitcoin", 0.0)
 
         for coin_id in FUNDING_COINS:
-            aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
-            aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
-            if not aster_symbol or not aster_symbol:
+            bybit_symbol = BYBIT_SYMBOL_MAP.get(coin_id)
+            bybit_symbol = BYBIT_SYMBOL_MAP.get(coin_id)
+            if not bybit_symbol or not bybit_symbol:
                 continue
 
             try:
@@ -246,7 +246,7 @@ class FundingArbStrategy(Strategy):
                 basis_spread = basis_spreads.get(coin_id, 0.0)
 
                 # Historical z-scores
-                history = _fetch_funding_history(aster_symbol)
+                history = _fetch_funding_history(bybit_symbol)
                 rate_zscore = _compute_zscore(history) if history else 0.0
                 accel_zscore = _compute_rate_change_zscore(history) if history else 0.0
 
@@ -272,7 +272,7 @@ class FundingArbStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=aster_symbol,
+                    symbol=bybit_symbol,
                     action=action,
                     strength=strength,
                     reason=f"{coin_id} {reason}",
@@ -283,7 +283,7 @@ class FundingArbStrategy(Strategy):
                 log.error("funding_arb error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=aster_symbol,
+                    symbol=bybit_symbol,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} funding_arb error: {e}",

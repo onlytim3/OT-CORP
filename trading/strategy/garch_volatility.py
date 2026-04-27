@@ -13,7 +13,7 @@ import logging
 
 import numpy as np
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
@@ -71,15 +71,15 @@ class GARCHVolatilityStrategy(Strategy):
 
         for coin_id in self.coins:
             try:
-                aster_symbol = ASTER_SYMBOLS.get(coin_id)
-                if not aster_symbol:
+                bybit_symbol = BYBIT_SYMBOLS.get(coin_id)
+                if not bybit_symbol:
                     continue
 
                 ohlc = get_ohlc(coin_id, self.lookback_days)
                 if ohlc.empty or len(ohlc) < self.min_data_points:
                     row_count = len(ohlc) if not ohlc.empty else 0
                     signals.append(Signal(
-                        strategy=self.name, symbol=aster_symbol,
+                        strategy=self.name, symbol=bybit_symbol,
                         action="hold", strength=0.0,
                         reason=f"{coin_id} insufficient data ({row_count} rows)",
                     ))
@@ -93,7 +93,7 @@ class GARCHVolatilityStrategy(Strategy):
                 returns = np.diff(prices) / prices[:-1]
                 if len(returns) < self.min_data_points:
                     signals.append(Signal(
-                        strategy=self.name, symbol=aster_symbol,
+                        strategy=self.name, symbol=bybit_symbol,
                         action="hold", strength=0.0,
                         reason=f"{coin_id} insufficient returns data",
                     ))
@@ -112,7 +112,7 @@ class GARCHVolatilityStrategy(Strategy):
 
                 if long_term_vol <= 0:
                     signals.append(Signal(
-                        strategy=self.name, symbol=aster_symbol,
+                        strategy=self.name, symbol=bybit_symbol,
                         action="hold", strength=0.0,
                         reason=f"{coin_id} zero long-term vol",
                     ))
@@ -176,7 +176,7 @@ class GARCHVolatilityStrategy(Strategy):
                 )
 
                 signals.append(Signal(
-                    strategy=self.name, symbol=aster_symbol,
+                    strategy=self.name, symbol=bybit_symbol,
                     action=action, strength=round(strength, 3),
                     reason=reason,
                     data={
@@ -188,7 +188,7 @@ class GARCHVolatilityStrategy(Strategy):
                 ))
 
             except Exception as e:
-                sym = ASTER_SYMBOLS.get(coin_id, "BTC/USD")
+                sym = BYBIT_SYMBOLS.get(coin_id, "BTC/USD")
                 signals.append(Signal(
                     strategy=self.name, symbol=sym,
                     action="hold", strength=0.0,

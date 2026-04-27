@@ -1,5 +1,5 @@
 """Meme Momentum Strategy — rides momentum in meme coins using volume and
-taker flow confirmation on AsterDex perpetual futures.
+taker flow confirmation on Bybit perpetual futures.
 
 Signal logic:
   - Strong BUY:   momentum > 5% AND volume surge > 2x AND taker buy ratio > 0.55
@@ -41,28 +41,28 @@ VOLUME_BASELINE_HOURS = 168        # 7 days of hourly candles for avg volume
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_coin_data(aster_symbol: str) -> dict | None:
+def _fetch_coin_data(bybit_symbol: str) -> dict | None:
     """Fetch hourly klines and compute momentum + volume surge.
 
     Returns dict with: price, momentum_24h, momentum_12h, volume_surge,
     current_volume, avg_volume — or None on failure.
     """
     try:
-        from trading.data.aster import get_aster_ohlcv
+        from trading.data.bybit import get_bybit_ohlcv
     except ImportError:
-        log.error("Cannot import get_aster_ohlcv — aster data layer unavailable")
+        log.error("Cannot import get_bybit_ohlcv — bybit data layer unavailable")
         return None
 
     try:
         # Fetch 7 days of hourly candles for volume baseline
-        df = get_aster_ohlcv(aster_symbol, interval="1h", limit=VOLUME_BASELINE_HOURS)
+        df = get_bybit_ohlcv(bybit_symbol, interval="1h", limit=VOLUME_BASELINE_HOURS)
     except Exception as exc:
-        log.warning("Failed to fetch OHLCV for %s: %s", aster_symbol, exc)
+        log.warning("Failed to fetch OHLCV for %s: %s", bybit_symbol, exc)
         return None
 
     if df is None or df.empty or len(df) < LOOKBACK_HOURS:
         log.debug("Insufficient data for %s: got %d candles, need %d",
-                  aster_symbol, len(df) if df is not None else 0, LOOKBACK_HOURS)
+                  bybit_symbol, len(df) if df is not None else 0, LOOKBACK_HOURS)
         return None
 
     closes = df["close"].values
@@ -106,20 +106,20 @@ def _fetch_coin_data(aster_symbol: str) -> dict | None:
     }
 
 
-def _fetch_taker_ratio(aster_symbol: str) -> float | None:
+def _fetch_taker_ratio(bybit_symbol: str) -> float | None:
     """Fetch taker buy ratio for a symbol. Returns buy_ratio or None."""
     try:
-        from trading.data.aster import get_taker_volume_ratio
+        from trading.data.bybit import get_taker_volume_ratio
     except ImportError:
-        log.error("Cannot import get_taker_volume_ratio — aster data layer unavailable")
+        log.error("Cannot import get_taker_volume_ratio — bybit data layer unavailable")
         return None
 
     try:
-        result = get_taker_volume_ratio(aster_symbol, interval="1h", limit=LOOKBACK_HOURS)
+        result = get_taker_volume_ratio(bybit_symbol, interval="1h", limit=LOOKBACK_HOURS)
         if result and "buy_ratio" in result:
             return float(result["buy_ratio"])
     except Exception as exc:
-        log.warning("Failed to fetch taker ratio for %s: %s", aster_symbol, exc)
+        log.warning("Failed to fetch taker ratio for %s: %s", bybit_symbol, exc)
 
     return None
 
@@ -139,7 +139,7 @@ class MemeMomentumStrategy(Strategy):
 
     def generate_signals(self) -> list[Signal]:
         try:
-            from trading.config import CRYPTO_MEME, ASTER_SYMBOLS
+            from trading.config import CRYPTO_MEME, BYBIT_SYMBOLS
         except ImportError:
             log.error("Cannot import config — symbol mappings unavailable")
             return [self._hold("Config import failed")]
@@ -148,22 +148,22 @@ class MemeMomentumStrategy(Strategy):
         coin_data: dict[str, dict] = {}
 
         for coin_id in CRYPTO_MEME:
-            aster_sym = ASTER_SYMBOLS.get(coin_id)
-            if not aster_sym:
-                log.debug("No AsterDex symbol for %s — skipping", coin_id)
+            bybit_sym = BYBIT_SYMBOLS.get(coin_id)
+            if not bybit_sym:
+                log.debug("No Bybit symbol for %s — skipping", coin_id)
                 continue
 
-            data = _fetch_coin_data(aster_sym)
+            data = _fetch_coin_data(bybit_sym)
             if data is None:
                 continue
 
             # Fetch taker buy ratio for confirmation
-            taker_ratio = _fetch_taker_ratio(aster_sym)
+            taker_ratio = _fetch_taker_ratio(bybit_sym)
             data["taker_buy_ratio"] = taker_ratio
 
             coin_data[coin_id] = data
 
-            signal_symbol = ASTER_SYMBOLS.get(coin_id)
+            signal_symbol = BYBIT_SYMBOLS.get(coin_id)
             if not signal_symbol:
                 continue
 

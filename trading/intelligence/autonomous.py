@@ -1130,14 +1130,14 @@ def _learning_agent_think() -> list[dict]:
     # Analyze volume profiles to learn optimal trading times
     try:
         from trading.db.store import get_volume_profile, get_volume_profile_by_day
-        from trading.config import ASTER_SYMBOLS
+        from trading.config import BYBIT_SYMBOLS
 
         for coin in ("bitcoin", "ethereum", "solana"):
-            aster_sym = ASTER_SYMBOLS.get(coin)
-            if not aster_sym:
+            bybit_sym = BYBIT_SYMBOLS.get(coin)
+            if not bybit_sym:
                 continue
 
-            hourly = get_volume_profile(aster_sym, days=30)
+            hourly = get_volume_profile(bybit_sym, days=30)
             if len(hourly) < 12:
                 continue  # Not enough data yet
 
@@ -3031,8 +3031,8 @@ def _news_agent_think() -> list[dict]:
     try:
         from trading.data.news import fetch_all_headlines
         from trading.llm.engine import analyze_news_impact
-        from trading.execution.router import get_positions_from_aster
-        from trading.config import CRYPTO_SYMBOLS, ASTER_SYMBOLS
+        from trading.execution.router import get_positions_from_bybit
+        from trading.config import CRYPTO_SYMBOLS, BYBIT_SYMBOLS
         from trading.db.store import log_action, get_action_log
         import json
 
@@ -3056,7 +3056,7 @@ def _news_agent_think() -> list[dict]:
             return recommendations
 
         # Get positions and regime
-        positions = get_positions_from_aster()[:15]
+        positions = get_positions_from_bybit()[:15]
         regime = "unknown"
         for b in get_action_log(limit=3, category="intelligence"):
             data = b.get("data", {})
@@ -3069,7 +3069,7 @@ def _news_agent_think() -> list[dict]:
                 regime = data["overall_regime"]
                 break
 
-        traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(ASTER_SYMBOLS.keys())))
+        traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(BYBIT_SYMBOLS.keys())))
         analysis = analyze_news_impact(headlines, positions, regime, traded_assets[:30])
 
         if not isinstance(analysis, dict) or analysis.get("model_used") != "llm":

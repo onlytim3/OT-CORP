@@ -10,7 +10,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import z_score
@@ -159,8 +159,8 @@ class PairsTradingStrategy(Strategy):
         context_data = {}
 
         for coin_y, coin_x in self.config["pairs"]:
-            sym_y = ASTER_SYMBOLS.get(coin_y)
-            sym_x = ASTER_SYMBOLS.get(coin_x)
+            sym_y = BYBIT_SYMBOLS.get(coin_y)
+            sym_x = BYBIT_SYMBOLS.get(coin_x)
 
             if not sym_y or not sym_x:
                 log.warning("Pairs trading: missing symbol mapping for %s or %s", coin_y, coin_x)

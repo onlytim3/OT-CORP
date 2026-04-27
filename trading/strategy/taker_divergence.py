@@ -1,5 +1,5 @@
 """Taker Volume Divergence Strategy — detect mismatch between aggressive order
-flow and price movement on AsterDex perpetual futures.
+flow and price movement on Bybit perpetual futures.
 
 When taker buy volume dominates but price stays flat or declines, aggressive
 buyers are being absorbed by passive sellers — a breakout to the upside is
@@ -16,8 +16,8 @@ Amplifiers:
 2. Divergence strength (magnitude of ratio-price mismatch)
 3. Cross-asset: BTC taker ratio vs altcoin for relative positioning
 
-Data source: AsterDex klines with taker buy volume (no auth required).
-Execution: AsterDex perpetual futures.
+Data source: Bybit klines with taker buy volume (no auth required).
+Execution: Bybit perpetual futures.
 """
 
 import logging
@@ -38,7 +38,7 @@ TAKER_COINS = [
     "bitcoin", "ethereum", "solana", "avalanche-2", "chainlink", "litecoin",
 ]
 
-ASTER_SYMBOL_MAP = {
+BYBIT_SYMBOL_MAP = {
     "bitcoin": "BTCUSDT",
     "ethereum": "ETHUSDT",
     "solana": "SOLUSDT",
@@ -47,7 +47,7 @@ ASTER_SYMBOL_MAP = {
     "litecoin": "LTCUSDT",
 }
 
-ASTER_SYMBOL_MAP = {
+BYBIT_SYMBOL_MAP = {
     "bitcoin": "BTC/USD",
     "ethereum": "ETH/USD",
     "solana": "SOL/USD",
@@ -73,22 +73,22 @@ MIN_DIVERGENCE_STRENGTH = 0.3        # Minimum signal strength to emit
 # ---------------------------------------------------------------------------
 
 def _fetch_ohlcv(symbol: str, interval: str = "1h", limit: int = 24):
-    """Fetch OHLCV DataFrame from AsterDex."""
+    """Fetch OHLCV DataFrame from Bybit."""
     try:
-        from trading.data.aster import get_aster_ohlcv
-        return get_aster_ohlcv(symbol, interval=interval, limit=limit)
+        from trading.data.bybit import get_bybit_ohlcv
+        return get_bybit_ohlcv(symbol, interval=interval, limit=limit)
     except ImportError:
-        log.warning("trading.data.aster not available — taker_divergence returns no signals")
+        log.warning("trading.data.bybit not available — taker_divergence returns no signals")
         return None
     except Exception as e:
-        log.error("Failed to fetch AsterDex OHLCV for %s: %s", symbol, e)
+        log.error("Failed to fetch Bybit OHLCV for %s: %s", symbol, e)
         return None
 
 
 def _fetch_taker_ratio(symbol: str, limit: int = 24) -> dict | None:
     """Fetch aggregated taker volume ratio."""
     try:
-        from trading.data.aster import get_taker_volume_ratio
+        from trading.data.bybit import get_taker_volume_ratio
         return get_taker_volume_ratio(symbol, interval="1h", limit=limit)
     except ImportError:
         return None
@@ -221,18 +221,18 @@ class TakerDivergenceStrategy(Strategy):
         context_data: dict[str, Any] = {}
 
         # Fetch BTC taker ratio for cross-asset comparison
-        btc_taker = _fetch_taker_ratio(ASTER_SYMBOL_MAP["bitcoin"], limit=SHORT_PERIOD)
+        btc_taker = _fetch_taker_ratio(BYBIT_SYMBOL_MAP["bitcoin"], limit=SHORT_PERIOD)
         btc_buy_ratio = btc_taker["buy_ratio"] if btc_taker else 0.5
 
         for coin_id in TAKER_COINS:
-            aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
-            aster_symbol = ASTER_SYMBOL_MAP.get(coin_id)
-            if not aster_symbol or not aster_symbol:
+            bybit_symbol = BYBIT_SYMBOL_MAP.get(coin_id)
+            bybit_symbol = BYBIT_SYMBOL_MAP.get(coin_id)
+            if not bybit_symbol or not bybit_symbol:
                 continue
 
             try:
                 # Fetch full kline history (24h of 1h candles)
-                df = _fetch_ohlcv(aster_symbol, interval="1h", limit=LONG_PERIOD)
+                df = _fetch_ohlcv(bybit_symbol, interval="1h", limit=LONG_PERIOD)
                 if df is None or df.empty:
                     continue
 
@@ -310,7 +310,7 @@ class TakerDivergenceStrategy(Strategy):
 
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=aster_symbol,
+                    symbol=bybit_symbol,
                     action=action,
                     strength=strength,
                     reason=f"{coin_id} {' | '.join(reason_parts)}",
@@ -321,7 +321,7 @@ class TakerDivergenceStrategy(Strategy):
                 log.error("taker_divergence error for %s: %s", coin_id, e)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=aster_symbol,
+                    symbol=bybit_symbol,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} taker_divergence error: {e}",

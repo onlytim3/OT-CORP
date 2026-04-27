@@ -6,7 +6,7 @@ existing codebase patterns. Each generated strategy:
 
   1. Extends Strategy base class with @register decorator
   2. Implements generate_signals() and get_market_context()
-  3. Uses existing data APIs (get_ohlc, get_aster_ohlcv)
+  3. Uses existing data APIs (get_ohlc, get_bybit_ohlcv)
   4. Uses existing indicators (ema, sma, rsi, bollinger_bands, z_score, atr)
   5. Follows the signal strength / reason / data contract
   6. Gets auto-registered via registry.py auto-discover

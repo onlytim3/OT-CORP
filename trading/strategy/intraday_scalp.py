@@ -8,7 +8,7 @@ Signal pipeline per coin:
      by bias strength (×0.45–0.70), allowing strong mean-reversion to still fire
   5. 4h cycle bias (+0.15 additive) — quality signal from swing cycle wired in
 
-Covers all AsterDex markets discovered at startup. Tier-based leverage caps:
+Covers all Bybit markets discovered at startup. Tier-based leverage caps:
   T1 BTC/ETH/SOL → up to 18x | T2 major alts → up to 12x
   T3 small crypto/forex → 8x | T4 commodities/indices/equities → 5x.
 Stop 0.5%, take-profit 1.5% (3:1 R:R). Threshold 0.18. Runs via 5-minute cycle.
@@ -16,7 +16,7 @@ Stop 0.5%, take-profit 1.5% (3:1 R:R). Threshold 0.18. Runs via 5-minute cycle.
 
 import logging
 
-from trading.config import ASTER_SYMBOLS, CRYPTO_SYMBOLS
+from trading.config import BYBIT_SYMBOLS, CRYPTO_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import ema, rsi
 from trading.strategy.registry import register
@@ -24,8 +24,8 @@ from trading.strategy.registry import register
 log = logging.getLogger(__name__)
 
 def _build_scalp_coins() -> list[str]:
-    """Return all coin IDs from current ASTER_SYMBOLS — refreshed at import time."""
-    return list(ASTER_SYMBOLS.keys())
+    """Return all coin IDs from current BYBIT_SYMBOLS — refreshed at import time."""
+    return list(BYBIT_SYMBOLS.keys())
 
 SCALP_COINS = _build_scalp_coins()  # populated at startup; includes all discovered markets
 
@@ -65,15 +65,15 @@ _LEVERAGE_TIERS: dict[str, int] = {
 # Data helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_candles(aster_sym: str, interval: str, limit: int):
+def _fetch_candles(bybit_sym: str, interval: str, limit: int):
     try:
-        from trading.data.aster import get_aster_ohlcv
-        df = get_aster_ohlcv(aster_sym, interval=interval, limit=limit)
+        from trading.data.bybit import get_bybit_ohlcv
+        df = get_bybit_ohlcv(bybit_sym, interval=interval, limit=limit)
         if df is not None and not df.empty and len(df) >= 20:
             return df
         return None
     except Exception as e:
-        log.debug("Candle fetch failed for %s %s: %s", aster_sym, interval, e)
+        log.debug("Candle fetch failed for %s %s: %s", bybit_sym, interval, e)
         return None
 
 
@@ -123,22 +123,22 @@ def _vwap_rsi_score(df) -> tuple[float, dict]:
     }
 
 
-def _ob_score(aster_sym: str) -> float:
+def _ob_score(bybit_sym: str) -> float:
     """Orderbook imbalance score (-1 to +1). 0.0 on failure."""
     try:
-        from trading.data.aster import get_orderbook_imbalance
-        ob = get_orderbook_imbalance(aster_sym, depth=20)
+        from trading.data.bybit import get_orderbook_imbalance
+        ob = get_orderbook_imbalance(bybit_sym, depth=20)
         return float(ob["imbalance"]) if ob else 0.0
     except Exception as e:
-        log.debug("OB score failed for %s: %s", aster_sym, e)
+        log.debug("OB score failed for %s: %s", bybit_sym, e)
         return 0.0
 
 
-def _funding_score(aster_sym: str) -> tuple[float, float | None]:
+def _funding_score(bybit_sym: str) -> tuple[float, float | None]:
     """Funding rate score (-1 to +1) and average funding value."""
     try:
-        from trading.data.aster import get_funding_rate_history
-        hist = get_funding_rate_history(aster_sym, limit=5)
+        from trading.data.bybit import get_funding_rate_history
+        hist = get_funding_rate_history(bybit_sym, limit=5)
         if not hist:
             return 0.0, None
         recent = hist[-3:] if len(hist) >= 3 else hist
@@ -151,18 +151,18 @@ def _funding_score(aster_sym: str) -> tuple[float, float | None]:
             score = 0.0
         return round(score, 4), round(avg, 7)
     except Exception as e:
-        log.debug("Funding score failed for %s: %s", aster_sym, e)
+        log.debug("Funding score failed for %s: %s", bybit_sym, e)
         return 0.0, None
 
 
-def _get_1h_bias(aster_sym: str) -> float:
+def _get_1h_bias(bybit_sym: str) -> float:
     """1h trend direction: +1 strongly bullish, -1 strongly bearish, 0 neutral.
 
     Used as a multiplier gate — aligned 5m signals are boosted, counter-trend
     signals are heavily suppressed (×0.25) to avoid fighting the larger trend.
     """
     try:
-        df = _fetch_candles(aster_sym, "1h", 50)
+        df = _fetch_candles(bybit_sym, "1h", 50)
         if df is None:
             return 0.0
         closes = df["close"]
@@ -175,7 +175,7 @@ def _get_1h_bias(aster_sym: str) -> float:
             return round(-min((45 - rsi_1h) / 45.0, 1.0), 3)
         return 0.0
     except Exception as e:
-        log.debug("1h bias failed for %s: %s", aster_sym, e)
+        log.debug("1h bias failed for %s: %s", bybit_sym, e)
         return 0.0
 
 
@@ -241,15 +241,15 @@ class IntradayScalpStrategy(Strategy):
 
     def generate_signals(self) -> list[Signal]:
         # Rebuild coin list each run so newly discovered markets are included
-        coins = list(ASTER_SYMBOLS.keys())
+        coins = list(BYBIT_SYMBOLS.keys())
         signals = []
         for coin_id in coins:
-            aster_sym = ASTER_SYMBOLS.get(coin_id)
+            bybit_sym = BYBIT_SYMBOLS.get(coin_id)
             alpaca_sym = CRYPTO_SYMBOLS.get(coin_id)
-            if not aster_sym or not alpaca_sym:
+            if not bybit_sym or not alpaca_sym:
                 continue
             try:
-                signals.append(self._evaluate_coin(coin_id, aster_sym, alpaca_sym))
+                signals.append(self._evaluate_coin(coin_id, bybit_sym, alpaca_sym))
             except Exception as exc:
                 log.error("intraday_scalp error for %s: %s", coin_id, exc)
                 signals.append(Signal(
@@ -261,8 +261,8 @@ class IntradayScalpStrategy(Strategy):
     def get_market_context(self) -> dict:
         return {"strategy": self.name, "coins": SCALP_COINS}
 
-    def _evaluate_coin(self, coin_id: str, aster_sym: str, alpaca_sym: str) -> Signal:
-        df_5m = _fetch_candles(aster_sym, "5m", 78)
+    def _evaluate_coin(self, coin_id: str, bybit_sym: str, alpaca_sym: str) -> Signal:
+        df_5m = _fetch_candles(bybit_sym, "5m", 78)
         if df_5m is None:
             return Signal(
                 strategy=self.name, symbol=alpaca_sym, action="hold",
@@ -272,12 +272,12 @@ class IntradayScalpStrategy(Strategy):
 
         # --- Step 1: 5m sub-signals ---
         vr_score, vr_debug = _vwap_rsi_score(df_5m)
-        ob = _ob_score(aster_sym)
-        f_score, avg_funding = _funding_score(aster_sym)
+        ob = _ob_score(bybit_sym)
+        f_score, avg_funding = _funding_score(bybit_sym)
         combined = vr_score * 0.50 + ob * 0.30 + f_score * 0.20
 
         # --- Step 2: 1h MTF multiplier ---
-        bias_1h = _get_1h_bias(aster_sym)
+        bias_1h = _get_1h_bias(bybit_sym)
         if bias_1h != 0.0:
             same_dir = (combined >= 0) == (bias_1h >= 0)
             # Aligned: boost up to +35% | Counter-trend: scale by strength of bias

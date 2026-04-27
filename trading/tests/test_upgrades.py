@@ -71,7 +71,7 @@ class TestRateLimiter(unittest.TestCase):
     """Rate limiter should throttle requests."""
 
     def test_acquire_within_limit(self):
-        from trading.execution.aster_client import _RateLimiter
+        from trading.execution.bybit_client import _RateLimiter
 
         limiter = _RateLimiter(max_requests=10, window_seconds=1.0)
 
@@ -85,7 +85,7 @@ class TestRateLimiter(unittest.TestCase):
         self.assertEqual(limiter.current_count, 5)
 
     def test_current_count_resets(self):
-        from trading.execution.aster_client import _RateLimiter
+        from trading.execution.bybit_client import _RateLimiter
 
         limiter = _RateLimiter(max_requests=100, window_seconds=0.1)
 

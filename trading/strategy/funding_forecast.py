@@ -40,13 +40,13 @@ class FundingForecastStrategy(Strategy):
         """Generate signals based on funding rate AR(1) forecast."""
         signals: list[Signal] = []
         try:
-            from trading.execution.aster_client import get_aster_funding_rates
+            from trading.execution.bybit_client import get_bybit_funding_rates
         except ImportError:
             return signals
 
         for symbol in self.default_symbols:
             try:
-                rates_data = get_aster_funding_rates(symbol)
+                rates_data = get_bybit_funding_rates(symbol)
                 if not rates_data:
                     continue
                 if isinstance(rates_data, list):

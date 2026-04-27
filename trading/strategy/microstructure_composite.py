@@ -1,4 +1,4 @@
-"""Microstructure Composite Strategy — order flow + volume imbalance from AsterDex microstructure.
+"""Microstructure Composite Strategy — order flow + volume imbalance from Bybit microstructure.
 
 Combines three microstructure signals into a single composite score to
 detect aggressive directional positioning:
@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 COINS = ["bitcoin", "ethereum", "solana"]
-ASTER_SYMBOLS = {"bitcoin": "BTCUSDT", "ethereum": "ETHUSDT", "solana": "SOLUSDT"}
+BYBIT_SYMBOLS = {"bitcoin": "BTCUSDT", "ethereum": "ETHUSDT", "solana": "SOLUSDT"}
 ALPACA_SYMBOLS = {"bitcoin": "BTC/USD", "ethereum": "ETH/USD", "solana": "SOL/USD"}
 
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ def _basis_funding_signal(basis: float | None, funding: float | None) -> float:
 
 @register
 class MicrostructureCompositeStrategy(Strategy):
-    """Trade based on AsterDex order flow imbalance and microstructure signals."""
+    """Trade based on Bybit order flow imbalance and microstructure signals."""
 
     name = "microstructure_composite"
 
@@ -141,16 +141,16 @@ class MicrostructureCompositeStrategy(Strategy):
         signals: list[Signal] = []
         context_data: dict = {}
 
-        # Import data functions here so missing aster module doesn't crash registry
+        # Import data functions here so missing bybit module doesn't crash registry
         try:
-            from trading.data.aster import (
+            from trading.data.bybit import (
                 get_taker_volume_ratio,
                 get_orderbook_imbalance,
                 get_basis_spread,
                 get_funding_rates,
             )
         except ImportError:
-            log.warning("trading.data.aster not available — microstructure_composite disabled")
+            log.warning("trading.data.bybit not available — microstructure_composite disabled")
             self._last_context = {}
             return signals
 
@@ -158,13 +158,13 @@ class MicrostructureCompositeStrategy(Strategy):
         funding_rates = get_funding_rates()
 
         for coin_id in self.coins:
-            aster_sym = ASTER_SYMBOLS.get(coin_id)
-            if not aster_sym:
+            bybit_sym = BYBIT_SYMBOLS.get(coin_id)
+            if not bybit_sym:
                 continue
 
             try:
                 signal = self._evaluate_coin(
-                    coin_id, aster_sym, funding_rates,
+                    coin_id, bybit_sym, funding_rates,
                     get_taker_volume_ratio, get_orderbook_imbalance, get_basis_spread,
                     context_data,
                 )
@@ -174,7 +174,7 @@ class MicrostructureCompositeStrategy(Strategy):
                 log.error("microstructure_composite error for %s: %s", coin_id, exc)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=aster_sym,
+                    symbol=bybit_sym,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} microstructure error: {exc}",
@@ -193,7 +193,7 @@ class MicrostructureCompositeStrategy(Strategy):
     def _evaluate_coin(
         self,
         coin_id: str,
-        aster_sym: str,
+        bybit_sym: str,
         funding_rates: dict,
         get_taker_volume_ratio,
         get_orderbook_imbalance,
@@ -203,10 +203,10 @@ class MicrostructureCompositeStrategy(Strategy):
         """Compute composite microstructure signal for a single coin."""
 
         # --- Fetch raw data (returns dicts — extract scalars) ---
-        taker_data = get_taker_volume_ratio(aster_sym, interval="1h", limit=6)
-        ob_data = get_orderbook_imbalance(aster_sym, depth=20)
-        basis_data = get_basis_spread(aster_sym)
-        funding = funding_rates.get(coin_id)  # keyed by coin_id, not aster_sym
+        taker_data = get_taker_volume_ratio(bybit_sym, interval="1h", limit=6)
+        ob_data = get_orderbook_imbalance(bybit_sym, depth=20)
+        basis_data = get_basis_spread(bybit_sym)
+        funding = funding_rates.get(coin_id)  # keyed by coin_id, not bybit_sym
 
         taker_ratio = taker_data.get("buy_ratio") if isinstance(taker_data, dict) else None
         ob_imbalance = ob_data.get("imbalance") if isinstance(ob_data, dict) else None
@@ -260,7 +260,7 @@ class MicrostructureCompositeStrategy(Strategy):
 
         return Signal(
             strategy=self.name,
-            symbol=aster_sym,
+            symbol=bybit_sym,
             action=action,
             strength=strength,
             reason=reason,

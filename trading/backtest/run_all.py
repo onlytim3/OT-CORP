@@ -38,7 +38,7 @@ ALL_STRATEGIES = [
     "kalman_trend",
     "regime_mean_reversion",
     "factor_crypto",
-    # Perps-specific (AsterDex)
+    # Perps-specific (Bybit)
     "funding_arb",
     "microstructure_composite",
     "basis_zscore",

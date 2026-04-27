@@ -5,7 +5,7 @@ and takes relative value positions: long the cheapest basis (backwardation),
 short the richest basis (contango).
 
 Signal generation:
-1. Fetch basis spread for all tracked AsterDex symbols.
+1. Fetch basis spread for all tracked Bybit symbols.
 2. Compute cross-sectional z-scores of basis_pct across all assets.
 3. Long assets with most negative basis (backwardation = undervalued).
 4. Short assets with most positive basis (contango = overvalued).
@@ -15,14 +15,14 @@ Signal generation:
 import logging
 from statistics import mean, stdev
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
 log = logging.getLogger(__name__)
 
 # Reverse maps for symbol translation
-_ASTER_TO_COIN = {v: k for k, v in ASTER_SYMBOLS.items()}
+_BYBIT_TO_COIN = {v: k for k, v in BYBIT_SYMBOLS.items()}
 
 # Asset categories for within-group z-scoring
 ASSET_CATEGORIES = {
@@ -35,10 +35,10 @@ ASSET_CATEGORIES = {
 }
 
 
-def _get_asset_category(aster_symbol: str) -> str:
-    """Get the category for an AsterDex symbol."""
+def _get_asset_category(bybit_symbol: str) -> str:
+    """Get the category for an Bybit symbol."""
     for category, symbols in ASSET_CATEGORIES.items():
-        if aster_symbol in symbols:
+        if bybit_symbol in symbols:
             return category
     return "other"
 
@@ -51,12 +51,12 @@ CROSS_BASIS_RV = {
 }
 
 
-def _aster_to_alpaca(aster_symbol: str) -> str | None:
-    """Convert AsterDex symbol to Alpaca-style symbol via coin_id lookup."""
-    coin_id = _ASTER_TO_COIN.get(aster_symbol)
+def _bybit_to_alpaca(bybit_symbol: str) -> str | None:
+    """Convert Bybit symbol to Alpaca-style symbol via coin_id lookup."""
+    coin_id = _BYBIT_TO_COIN.get(bybit_symbol)
     if coin_id is None:
         return None
-    return ASTER_SYMBOLS.get(coin_id)
+    return BYBIT_SYMBOLS.get(coin_id)
 
 
 @register
@@ -76,9 +76,9 @@ class CrossBasisRVStrategy(Strategy):
     def generate_signals(self) -> list[Signal]:
         # Lazy import of data functions
         try:
-            from trading.data.aster import get_basis_spread
+            from trading.data.bybit import get_basis_spread
         except ImportError:
-            log.error("Cannot import trading.data.aster — strategy disabled")
+            log.error("Cannot import trading.data.bybit — strategy disabled")
             return [Signal(
                 strategy=self.name,
                 symbol="BTC/USD",
@@ -115,12 +115,12 @@ class CrossBasisRVStrategy(Strategy):
             index_price = entry.get("indexPrice", 0)
             if index_price <= 0:
                 continue
-            aster_sym = _aster_to_alpaca(entry.get("symbol", ""))
-            if aster_sym is None:
+            bybit_sym = _bybit_to_alpaca(entry.get("symbol", ""))
+            if bybit_sym is None:
                 continue
             valid.append({
-                "aster_symbol": entry["symbol"],
-                "aster_symbol": aster_sym,
+                "bybit_symbol": entry["symbol"],
+                "bybit_symbol": bybit_sym,
                 "basis_pct": float(entry.get("basis_pct", 0)),
                 "mark_price": float(entry.get("markPrice", 0)),
                 "index_price": float(index_price),
@@ -168,7 +168,7 @@ class CrossBasisRVStrategy(Strategy):
         from collections import defaultdict
         groups = defaultdict(list)
         for asset in valid:
-            category = _get_asset_category(asset["aster_symbol"])
+            category = _get_asset_category(asset["bybit_symbol"])
             groups[category].append(asset)
 
         # Compute z-scores within each group
@@ -213,9 +213,9 @@ class CrossBasisRVStrategy(Strategy):
             "cross_section_mean": round(cross_mean, 4),
             "cross_section_std": round(cross_std, 4),
             "num_assets": len(valid),
-            "cheapest": valid[0]["aster_symbol"],
+            "cheapest": valid[0]["bybit_symbol"],
             "cheapest_basis": round(cheapest_basis, 4),
-            "richest": valid[-1]["aster_symbol"],
+            "richest": valid[-1]["bybit_symbol"],
             "richest_basis": round(richest_basis, 4),
             "long_candidates": len(cheap_candidates),
             "short_candidates": len(rich_candidates),
@@ -231,7 +231,7 @@ class CrossBasisRVStrategy(Strategy):
 
             signals.append(Signal(
                 strategy=self.name,
-                symbol=asset["aster_symbol"],
+                symbol=asset["bybit_symbol"],
                 action="buy",
                 strength=strength,
                 reason=(
@@ -259,7 +259,7 @@ class CrossBasisRVStrategy(Strategy):
 
             signals.append(Signal(
                 strategy=self.name,
-                symbol=asset["aster_symbol"],
+                symbol=asset["bybit_symbol"],
                 action="sell",
                 strength=strength,
                 reason=(

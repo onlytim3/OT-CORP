@@ -15,7 +15,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_historical_prices, get_ohlc
 from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
@@ -132,7 +132,7 @@ class FactorCryptoStrategy(Strategy):
         coin_prices: dict[str, float] = {}
 
         for coin_id in self.coins:
-            symbol = ASTER_SYMBOLS.get(coin_id)
+            symbol = BYBIT_SYMBOLS.get(coin_id)
             if not symbol:
                 continue
 
@@ -223,7 +223,7 @@ class FactorCryptoStrategy(Strategy):
         made_trade = False
 
         for coin_id, score in ranked:
-            symbol = ASTER_SYMBOLS[coin_id]
+            symbol = BYBIT_SYMBOLS[coin_id]
             strength = min(abs(score) / 2.0, 1.0)
             price = coin_prices.get(coin_id, 0)
 

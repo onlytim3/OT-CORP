@@ -9,19 +9,19 @@ console = Console()
 
 
 def get_account():
-    """Get account from AsterDex (primary execution venue)."""
+    """Get account from Bybit (primary execution venue)."""
     from trading.execution.router import get_account as _get_account
     return _get_account()
 
 
 def get_positions_list():
-    """Get positions from AsterDex."""
-    from trading.execution.router import get_positions_from_aster
-    return get_positions_from_aster()
+    """Get positions from Bybit."""
+    from trading.execution.router import get_positions_from_bybit
+    return get_positions_from_bybit()
 
 
 def execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None):
-    """Execute order via AsterDex perpetual futures."""
+    """Execute order via Bybit perpetual futures."""
     from trading.execution.router import submit_order
     return submit_order(symbol, side, notional=notional, qty=qty,
                         stop_loss_price=stop_loss_price)

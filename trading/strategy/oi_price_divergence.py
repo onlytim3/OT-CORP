@@ -1,7 +1,7 @@
 """Open Interest - Price Divergence Strategy.
 
 Detects divergence between open interest changes and price movement on
-AsterDex perpetual futures.  When OI rises but price does not follow (or
+Bybit perpetual futures.  When OI rises but price does not follow (or
 vice versa), the imbalance signals a potential reversal or capitulation.
 
 Divergence matrix:
@@ -11,8 +11,8 @@ Divergence matrix:
   OI falling + price falling       -> longs closing, capitulation                   -> contrarian BUY (if extreme)
 
 Data sources:
-  - Open interest: AsterDex ``/fapi/v1/openInterest`` (public, no auth)
-  - Price klines:  ``trading.data.aster.get_aster_ohlcv``
+  - Open interest: Bybit ``/fapi/v1/openInterest`` (public, no auth)
+  - Price klines:  ``trading.data.bybit.get_bybit_ohlcv``
 
 Execution: signals emitted with Alpaca symbol for the execution router.
 """
@@ -20,7 +20,7 @@ Execution: signals emitted with Alpaca symbol for the execution router.
 import logging
 from typing import Any
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 COINS = ["bitcoin", "ethereum", "solana"]
 
-ASTER_SYMBOL_MAP = {c: ASTER_SYMBOLS[c] for c in COINS}
+BYBIT_SYMBOL_MAP = {c: BYBIT_SYMBOLS[c] for c in COINS}
 
 # ---------------------------------------------------------------------------
 # Thresholds
@@ -50,33 +50,33 @@ EXTREME_PRICE_CHANGE = 0.05      # 5% price move in 24 h is significant
 # Data helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_open_interest(aster_sym: str) -> float | None:
-    """Fetch current open interest from AsterDex."""
+def _fetch_open_interest(bybit_sym: str) -> float | None:
+    """Fetch current open interest from Bybit."""
     try:
-        from trading.execution.aster_client import _public_get
-        data = _public_get("/fapi/v1/openInterest", {"symbol": aster_sym})
+        from trading.execution.bybit_client import _public_get
+        data = _public_get("/fapi/v1/openInterest", {"symbol": bybit_sym})
         return float(data.get("openInterest", 0))
     except Exception as e:
-        log.warning("OI fetch failed for %s: %s", aster_sym, e)
+        log.warning("OI fetch failed for %s: %s", bybit_sym, e)
         return None
 
 
-def _fetch_klines(aster_sym: str, hours: int = LOOKBACK_HOURS):
-    """Fetch recent hourly klines from AsterDex.
+def _fetch_klines(bybit_sym: str, hours: int = LOOKBACK_HOURS):
+    """Fetch recent hourly klines from Bybit.
 
     Returns a pandas DataFrame with OHLCV columns, or None on failure.
     """
     try:
-        from trading.data.aster import get_aster_ohlcv
-        df = get_aster_ohlcv(aster_sym, interval="1h", limit=hours + 1)
+        from trading.data.bybit import get_bybit_ohlcv
+        df = get_bybit_ohlcv(bybit_sym, interval="1h", limit=hours + 1)
         if df is not None and not df.empty:
             return df
         return None
     except ImportError:
-        log.warning("trading.data.aster not available -- oi_price_divergence disabled")
+        log.warning("trading.data.bybit not available -- oi_price_divergence disabled")
         return None
     except Exception as e:
-        log.warning("Kline fetch failed for %s: %s", aster_sym, e)
+        log.warning("Kline fetch failed for %s: %s", bybit_sym, e)
         return None
 
 
@@ -214,18 +214,18 @@ class OIPriceDivergenceStrategy(Strategy):
         context_data: dict[str, Any] = {}
 
         for coin_id in COINS:
-            aster_sym = ASTER_SYMBOL_MAP.get(coin_id)
-            if not aster_sym:
+            bybit_sym = BYBIT_SYMBOL_MAP.get(coin_id)
+            if not bybit_sym:
                 continue
 
             try:
-                signal = self._evaluate_coin(coin_id, aster_sym, context_data)
+                signal = self._evaluate_coin(coin_id, bybit_sym, context_data)
                 signals.append(signal)
             except Exception as exc:
                 log.error("oi_price_divergence error for %s: %s", coin_id, exc)
                 signals.append(Signal(
                     strategy=self.name,
-                    symbol=aster_sym,
+                    symbol=bybit_sym,
                     action="hold",
                     strength=0.0,
                     reason=f"{coin_id} oi_price_divergence error: {exc}",
@@ -244,17 +244,17 @@ class OIPriceDivergenceStrategy(Strategy):
     def _evaluate_coin(
         self,
         coin_id: str,
-        aster_sym: str,
+        bybit_sym: str,
         context_data: dict,
     ) -> Signal:
         """Evaluate OI-price divergence for a single coin."""
 
         # --- Fetch current open interest ---
-        oi_current = _fetch_open_interest(aster_sym)
+        oi_current = _fetch_open_interest(bybit_sym)
         if oi_current is None:
             return Signal(
                 strategy=self.name,
-                symbol=aster_sym,
+                symbol=bybit_sym,
                 action="hold",
                 strength=0.0,
                 reason=f"{coin_id} OI data unavailable",
@@ -262,12 +262,12 @@ class OIPriceDivergenceStrategy(Strategy):
             )
 
         # --- Fetch klines for price change ---
-        klines = _fetch_klines(aster_sym, hours=LOOKBACK_HOURS)
+        klines = _fetch_klines(bybit_sym, hours=LOOKBACK_HOURS)
         price_change = _price_change_pct(klines)
         if price_change is None:
             return Signal(
                 strategy=self.name,
-                symbol=aster_sym,
+                symbol=bybit_sym,
                 action="hold",
                 strength=0.0,
                 reason=f"{coin_id} price data unavailable",
@@ -292,7 +292,7 @@ class OIPriceDivergenceStrategy(Strategy):
             context_data[coin_id] = signal_data
             return Signal(
                 strategy=self.name,
-                symbol=aster_sym,
+                symbol=bybit_sym,
                 action="hold",
                 strength=0.0,
                 reason=f"{coin_id} first OI snapshot stored, need history to compare",
@@ -314,7 +314,7 @@ class OIPriceDivergenceStrategy(Strategy):
 
         return Signal(
             strategy=self.name,
-            symbol=aster_sym,
+            symbol=bybit_sym,
             action=action,
             strength=round(strength, 2),
             reason=f"{coin_id} {reason}",

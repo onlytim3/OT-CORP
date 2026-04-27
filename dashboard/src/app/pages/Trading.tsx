@@ -137,7 +137,7 @@ function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trad
 
             {/* Volume & Margin Analysis — only for open trades */}
             {trade.is_open && (() => {
-              const vol = volumes?.find(v => v.symbol === trade.symbol || v.aster_symbol === trade.symbol);
+              const vol = volumes?.find(v => v.symbol === trade.symbol || v.bybit_symbol === trade.symbol);
               const mg = marginData?.find(m => m.symbol === trade.symbol);
               if (!vol && !mg) return null;
               return (
@@ -354,7 +354,7 @@ export function Trading() {
         {positions.length === 0 ? (
           <Card className="col-span-full"><CardContent className="p-8 text-center text-[#888888]">No open positions</CardContent></Card>
         ) : positions.map((pos, idx) => {
-          const vol = volumes?.find(v => v.symbol === pos.symbol || v.aster_symbol === pos.symbol);
+          const vol = volumes?.find(v => v.symbol === pos.symbol || v.bybit_symbol === pos.symbol);
           return (
             <Card key={idx} className="hover:shadow-xl hover:shadow-[#4a9eff]/10 transition-all duration-300 cursor-pointer" onClick={() => {
               const match = trades?.find(t => t.symbol === pos.symbol && !t.closed_at);

@@ -12,15 +12,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-# --- AsterDex (perpetual futures exchange) ---
-ASTER_USER_ADDRESS = os.getenv("ASTER_USER_ADDRESS", "")
-ASTER_SIGNER_ADDRESS = os.getenv("ASTER_SIGNER_ADDRESS", "")
-ASTER_PRIVATE_KEY = os.getenv("ASTER_PRIVATE_KEY", "")
-ASTER_API_KEY = os.getenv("ASTER_API_KEY", "")
-ASTER_API_SECRET = os.getenv("ASTER_API_SECRET", "")
-ASTER_FUTURES_BASE = "https://fapi.asterdex.com"
-ASTER_SPOT_BASE = "https://sapi.asterdex.com"
-ASTER_WS_BASE = "wss://fstream.asterdex.com"
+# --- Bybit (perpetual futures exchange — linear USDT perps) ---
+BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
+BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
+# Testnet flag: true → api-testnet.bybit.com, false → api.bybit.com.
+# Default true so a misconfigured deployment doesn't accidentally hit mainnet.
+BYBIT_TESTNET = os.getenv("BYBIT_TESTNET", "true").lower() in ("1", "true", "yes")
+BYBIT_RECV_WINDOW = int(os.getenv("BYBIT_RECV_WINDOW", "5000"))
 
 # --- FRED ---
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
@@ -98,7 +96,7 @@ SCALP_RISK = {
 ALLOW_SHORT_SELLING = os.getenv("ALLOW_SHORT_SELLING", "true").lower() == "true"
 SHORT_ALLOWED_STRATEGIES = {"cross_basis_rv", "multi_factor_rank", "pairs_trading"}
 
-# --- Asset Universe Groupings (CoinGecko IDs for ASTER_SYMBOLS lookups) ---
+# --- Asset Universe Groupings (CoinGecko IDs for BYBIT_SYMBOLS lookups) ---
 CRYPTO_L1 = ["bitcoin", "ethereum", "solana", "bnb", "xrp", "avalanche-2", "toncoin", "polkadot"]
 CRYPTO_L2 = ["arbitrum", "optimism", "near"]
 CRYPTO_DEFI = ["uniswap", "aave", "injective"]
@@ -116,7 +114,7 @@ COMMODITY_ETFS = {
 }
 
 # --- Default Coins (used by data layer for multi-coin fetches) ---
-# Top assets by liquidity — strategies can use wider subsets from ASTER_SYMBOLS
+# Top assets by liquidity — strategies can use wider subsets from BYBIT_SYMBOLS
 DEFAULT_COINS = [
     "bitcoin", "ethereum", "solana", "bnb", "xrp",
     "avalanche-2", "polkadot", "chainlink", "uniswap", "aave",
@@ -125,8 +123,8 @@ DEFAULT_COINS = [
 ]
 
 # --- Symbol Mappings ---
-# Maps CoinGecko IDs to AsterDex symbols (Perps)
-ASTER_SYMBOLS = {
+# Maps CoinGecko IDs to Bybit linear USDT perp symbols
+BYBIT_SYMBOLS = {
     "bitcoin": "BTCUSDT",
     "ethereum": "ETHUSDT",
     "solana": "SOLUSDT",
@@ -207,16 +205,16 @@ STRATEGY_ENABLED = {
     "kalman_trend": True,
     "regime_mean_reversion": True,
     "factor_crypto": True,
-    # Perps-specific strategies (AsterDex alpha)
+    # Perps-specific strategies (Bybit alpha)
     "funding_arb": True,
     "microstructure_composite": True,
     "basis_zscore": True,
     "funding_term_structure": True,
-    "taker_divergence": True,
+    "taker_divergence": False,  # Disabled: Bybit V5 has no taker buy/sell volume endpoint
     "cross_basis_rv": True,
     "oi_price_divergence": True,
     "whale_flow": True,
-    # Cross-asset strategies (stocks/commodities/indices on AsterDex)
+    # Cross-asset strategies (stocks/commodities/indices on Bybit)
     "cross_asset_momentum": True,
     "gold_crypto_hedge": True,
     "equity_crypto_correlation": True,
@@ -268,11 +266,14 @@ def validate_config(test_api: bool = True) -> list[str]:
     """
     warnings: list[str] = []
 
-    # -- Required keys: AsterDex (primary execution venue) --------------------
-    if not ASTER_API_KEY or not ASTER_API_SECRET:
+    # -- Required keys: Bybit (primary execution venue) -----------------------
+    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+        env_label = "testnet" if BYBIT_TESTNET else "mainnet"
+        url = "https://testnet.bybit.com" if BYBIT_TESTNET else "https://www.bybit.com/app/user/api-management"
         raise ConfigError(
-            "ASTER_API_KEY and ASTER_API_SECRET are required. "
-            "Get keys at https://www.asterdex.com → sign with wallet → create API key."
+            f"BYBIT_API_KEY and BYBIT_API_SECRET are required. "
+            f"Active environment: {env_label}. Create keys at {url}. "
+            "Testnet keys are SEPARATE from mainnet keys."
         )
 
     # -- Trading mode sanity --------------------------------------------------
@@ -281,21 +282,30 @@ def validate_config(test_api: bool = True) -> list[str]:
             f"TRADING_MODE must be 'paper' or 'live', got '{TRADING_MODE}'"
         )
 
+    # Mismatch between trading mode and Bybit environment is almost always a mistake.
+    if TRADING_MODE == "live" and BYBIT_TESTNET:
+        warnings.append(
+            "TRADING_MODE=live but BYBIT_TESTNET=true — orders will route to Bybit testnet."
+        )
+    if TRADING_MODE == "paper" and not BYBIT_TESTNET:
+        warnings.append(
+            "TRADING_MODE=paper but BYBIT_TESTNET=false — paper engine will read mainnet data."
+        )
 
     if not FRED_API_KEY:
         warnings.append(
             "FRED_API_KEY not set — macro data strategies will have limited data."
         )
 
-    # -- API connectivity test (AsterDex) -------------------------------------
+    # -- API connectivity test (Bybit) ----------------------------------------
     if test_api:
         try:
             from trading.execution.router import get_account
             account = get_account()
             if account.get("trading_blocked"):
                 raise ConfigError(
-                    "AsterDex account is inactive or not configured. "
-                    "Check your API keys and wallet address."
+                    "Bybit account is inactive or not configured. "
+                    "Check your API keys and BYBIT_TESTNET flag."
                 )
             status = account.get("status", "UNKNOWN")
             if status not in ("ACTIVE", "active"):
@@ -303,9 +313,10 @@ def validate_config(test_api: bool = True) -> list[str]:
         except ConfigError:
             raise
         except Exception as e:
+            env_label = "testnet" if BYBIT_TESTNET else "mainnet"
             raise ConfigError(
-                f"Failed to connect to AsterDex API: {e}. "
-                "Check your API keys and network connectivity."
+                f"Failed to connect to Bybit API ({env_label}): {e}. "
+                "Check BYBIT_API_KEY/SECRET, BYBIT_TESTNET, and network connectivity."
             ) from e
 
     # -- Strategy file existence check -----------------------------------------
@@ -491,10 +502,10 @@ EQUITY_BASES = frozenset({
 ALL_NON_CRYPTO_BASES = COMMODITY_BASES | INDEX_BASES | FOREX_BASES | EQUITY_BASES
 
 
-def discover_aster_markets() -> int:
-    """Fetch all available AsterDex markets and merge into ASTER_SYMBOLS / CRYPTO_SYMBOLS.
+def discover_bybit_markets() -> int:
+    """Fetch all available Bybit linear perp markets and merge into BYBIT_SYMBOLS / CRYPTO_SYMBOLS.
 
-    Queries the exchange info endpoint, filters to TRADING-status perpetuals,
+    Queries the V5 instruments-info endpoint, filters to Trading-status USDT perpetuals,
     and adds any symbol not already configured. Uses the base asset (lowercase)
     as the coin_id key for newly discovered markets.
 
@@ -502,31 +513,32 @@ def discover_aster_markets() -> int:
     Fails silently — static config is always the fallback.
     """
     try:
-        from trading.execution.aster_client import get_aster_exchange_info
-        info = get_aster_exchange_info()
+        from trading.execution.bybit_client import get_bybit_exchange_info
+        info = get_bybit_exchange_info()
     except Exception as exc:
-        _log.warning("AsterDex market discovery failed: %s", exc)
+        _log.warning("Bybit market discovery failed: %s", exc)
         return 0
 
-    existing_aster = set(ASTER_SYMBOLS.values())
+    existing_bybit = set(BYBIT_SYMBOLS.values())
     added = 0
 
     for sym_info in info.get("symbols", []):
-        if sym_info.get("status") != "TRADING":
+        # Bybit V5 status is mixed-case "Trading"
+        if sym_info.get("status") != "Trading":
             continue
-        aster_sym = sym_info.get("symbol", "")
-        if not aster_sym.endswith("USDT"):
+        bybit_sym = sym_info.get("symbol", "")
+        if not bybit_sym.endswith("USDT"):
             continue
-        if aster_sym in existing_aster:
+        if bybit_sym in existing_bybit:
             continue
 
-        base = aster_sym[:-4]  # strip USDT suffix
+        base = bybit_sym[:-4]  # strip USDT suffix
         coin_id = base.lower()
 
         # Build the Alpaca-style internal symbol
         alpaca_sym = f"{base}/USD"
 
-        ASTER_SYMBOLS[coin_id] = aster_sym
+        BYBIT_SYMBOLS[coin_id] = bybit_sym
         CRYPTO_SYMBOLS[coin_id] = alpaca_sym
 
         # Populate category lists for non-crypto assets
@@ -538,12 +550,12 @@ def discover_aster_markets() -> int:
         elif base_up in EQUITY_BASES and coin_id not in STOCK_PERPS:
             STOCK_PERPS.append(coin_id)
 
-        existing_aster.add(aster_sym)
+        existing_bybit.add(bybit_sym)
         added += 1
 
     _log.info(
-        "AsterDex discovery: %d new markets added, %d total configured",
-        added, len(ASTER_SYMBOLS),
+        "Bybit discovery: %d new markets added, %d total configured",
+        added, len(BYBIT_SYMBOLS),
     )
     return added
 

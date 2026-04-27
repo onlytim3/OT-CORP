@@ -313,8 +313,8 @@ def _apply_multi_timeframe_confirmation(signal: Signal) -> Signal:
     """Adjust signal strength based on daily 20-SMA trend confirmation."""
     try:
         from trading.strategy.indicators import sma
-        from trading.execution.aster_client import get_aster_klines
-        klines = get_aster_klines(signal.symbol.replace("/", ""), interval="1d", limit=25)
+        from trading.execution.bybit_client import get_bybit_klines
+        klines = get_bybit_klines(signal.symbol.replace("/", ""), interval="1d", limit=25)
         if klines and len(klines) >= 20:
             closes = [float(k[4]) for k in klines]
             sma_20 = sum(closes[-20:]) / 20

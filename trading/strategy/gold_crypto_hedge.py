@@ -1,6 +1,6 @@
 """Gold-Crypto Hedge Strategy — exploits correlation and decorrelation between gold and Bitcoin.
 
-Both XAU and BTC are tradeable as AsterDex perpetual futures. The strategy detects
+Both XAU and BTC are tradeable as Bybit perpetual futures. The strategy detects
 regime shifts in the gold-BTC relationship and generates signals based on:
 
 1. Correlation regime changes (risk-off vs. inflation hedge)
@@ -17,7 +17,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -39,12 +39,12 @@ GOLD_CRYPTO_HEDGE = {
 }
 
 # Symbols
-_GOLD_ASTER = ASTER_SYMBOLS.get("gold", "XAUUSDT")
-_BTC_ASTER = ASTER_SYMBOLS.get("bitcoin", "BTCUSDT")
-_SILVER_ASTER = ASTER_SYMBOLS.get("silver", "XAGUSDT")
+_GOLD_ASTER = BYBIT_SYMBOLS.get("gold", "XAUUSDT")
+_BTC_ASTER = BYBIT_SYMBOLS.get("bitcoin", "BTCUSDT")
+_SILVER_ASTER = BYBIT_SYMBOLS.get("silver", "XAGUSDT")
 
-_GOLD_SIGNAL = ASTER_SYMBOLS.get("gold", "XAU/USD")
-_BTC_SIGNAL = ASTER_SYMBOLS.get("bitcoin", "BTC/USD")
+_GOLD_SIGNAL = BYBIT_SYMBOLS.get("gold", "XAU/USD")
+_BTC_SIGNAL = BYBIT_SYMBOLS.get("bitcoin", "BTC/USD")
 
 
 # ---------------------------------------------------------------------------
@@ -52,15 +52,15 @@ _BTC_SIGNAL = ASTER_SYMBOLS.get("bitcoin", "BTC/USD")
 # ---------------------------------------------------------------------------
 
 def _fetch_daily_closes(symbol: str, limit: int) -> pd.Series | None:
-    """Fetch daily close prices from AsterDex klines. Returns None on failure."""
+    """Fetch daily close prices from Bybit klines. Returns None on failure."""
     try:
-        from trading.execution.aster_client import get_aster_klines
+        from trading.execution.bybit_client import get_bybit_klines
     except ImportError:
-        log.error("Cannot import get_aster_klines — aster_client unavailable")
+        log.error("Cannot import get_bybit_klines — bybit_client unavailable")
         return None
 
     try:
-        df = get_aster_klines(symbol, interval="1d", limit=limit)
+        df = get_bybit_klines(symbol, interval="1d", limit=limit)
     except Exception as e:
         log.warning("Failed to fetch klines for %s: %s", symbol, e)
         return None
@@ -75,10 +75,10 @@ def _fetch_daily_closes(symbol: str, limit: int) -> pd.Series | None:
 def _fetch_gold_closes(limit: int) -> pd.Series | None:
     """Fetch gold daily closes from a multi-source cascade.
 
-    AsterDex does not trade gold perpetuals, so we try real-price sources first:
+    Bybit does not trade gold perpetuals, so we try real-price sources first:
     1. FRED GOLDAMGBD228NLBM — London gold fixing (physical, most accurate)
     2. CoinGecko PAXG — tokenized gold, strongly correlated to spot
-    3. AsterDex GOLDUSDT — last resort, will likely return empty
+    3. Bybit GOLDUSDT — last resort, will likely return empty
     """
     min_rows = max(limit // 2, 20)
 
@@ -106,8 +106,8 @@ def _fetch_gold_closes(limit: int) -> pd.Series | None:
     except Exception as e:
         log.debug("gold_crypto_hedge: CoinGecko PAXG fetch failed: %s", e)
 
-    # 3. AsterDex klines — last resort
-    log.debug("gold_crypto_hedge: falling back to AsterDex klines for %s", _GOLD_ASTER)
+    # 3. Bybit klines — last resort
+    log.debug("gold_crypto_hedge: falling back to Bybit klines for %s", _GOLD_ASTER)
     return _fetch_daily_closes(_GOLD_ASTER, limit)
 
 

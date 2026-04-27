@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 
 from trading.config import (
-    ASTER_SYMBOLS,
+    BYBIT_SYMBOLS,
     CRYPTO_L1, CRYPTO_L2, CRYPTO_DEFI, CRYPTO_AI, CRYPTO_MEME,
     STOCK_PERPS, COMMODITY_PERPS, INDEX_PERPS,
 )
@@ -42,11 +42,11 @@ def _get_all_tradeable_symbols() -> dict[str, str]:
     """Build map of coin_id → trading symbol for all tradeable assets."""
     symbols = {}
     for coin_id in (CRYPTO_L1 + CRYPTO_L2 + CRYPTO_DEFI + CRYPTO_AI + CRYPTO_MEME):
-        sym = ASTER_SYMBOLS.get(coin_id)
+        sym = BYBIT_SYMBOLS.get(coin_id)
         if sym:
             symbols[coin_id] = sym
     for asset_id in (STOCK_PERPS + COMMODITY_PERPS + INDEX_PERPS):
-        sym = ASTER_SYMBOLS.get(asset_id)
+        sym = BYBIT_SYMBOLS.get(asset_id)
         if sym:
             symbols[asset_id] = sym
     return symbols
@@ -154,8 +154,8 @@ class NewsSentimentStrategy(Strategy):
 
         # Step 2: Current positions and regime
         try:
-            from trading.execution.router import get_positions_from_aster
-            positions = get_positions_from_aster()[:20]
+            from trading.execution.router import get_positions_from_bybit
+            positions = get_positions_from_bybit()[:20]
         except Exception:
             positions = []
 

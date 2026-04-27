@@ -24,7 +24,7 @@ def record_fill(
     """Record a fill in the fill_quality table for slippage tracking.
 
     Args:
-        symbol: Trading symbol (Alpaca or AsterDex format).
+        symbol: Trading symbol (Alpaca or Bybit format).
         mid_at_signal: Mid-price at the time the signal was generated.
         fill_price: Actual execution price.
         qty: Filled quantity.
