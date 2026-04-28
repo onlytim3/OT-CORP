@@ -30,17 +30,17 @@ services:
       - key: DASHBOARD_PIN
         sync: false
 
-      # ── AsterDex Perpetual Futures ──
-      - key: ASTER_USER_ADDRESS
+      # ── Bybit Perpetual Futures (linear USDT) ──
+      - key: BYBIT_API_KEY
         sync: false
-      - key: ASTER_SIGNER_ADDRESS
+      - key: BYBIT_API_SECRET
         sync: false
-      - key: ASTER_PRIVATE_KEY
-        sync: false
-      - key: ASTER_API_KEY
-        sync: false
-      - key: ASTER_API_SECRET
-        sync: false
+      # Testnet flag: "true" routes to api-testnet.bybit.com.
+      # Flip to "false" at mainnet cutover.
+      - key: BYBIT_TESTNET
+        value: "true"
+      - key: BYBIT_RECV_WINDOW
+        value: "5000"
 
       # ── LLM (OpenAI GPT-4o-mini — primary reasoning) ──
       - key: OPENAI_API_KEY
