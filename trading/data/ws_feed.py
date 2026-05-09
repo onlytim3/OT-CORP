@@ -1,12 +1,11 @@
-"""WebSocket real-time price feed for AsterDex.
+"""Bybit V5 WebSocket real-time price feed (linear perps).
 
-Provides a background thread that maintains a WebSocket connection
-for streaming mark prices. Falls back to REST when the websocket-client
-library is not installed or the connection drops.
+Uses pybit.unified_trading.WebSocket which manages reconnection internally.
+REST fallback via bybit_client.get_bybit_mark_prices when stale or unavailable.
 """
 
-import json
 import logging
+import os
 import threading
 import time
 from typing import Optional
@@ -14,87 +13,94 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _price_cache: dict[str, dict] = {}
-_ws_thread: Optional[threading.Thread] = None
+_cache_lock = threading.Lock()
+_ws_client = None
 _ws_running = False
 
 
+def _testnet_flag() -> bool:
+    return os.getenv("BYBIT_TESTNET", "true").lower() in ("1", "true", "yes")
+
+
 def get_realtime_price(symbol: str) -> Optional[float]:
-    """Get cached real-time price, fallback to REST if stale or unavailable."""
+    """Cached real-time mark price; REST fallback if stale (>30s) or missing."""
     entry = _price_cache.get(symbol)
     if entry and time.time() - entry.get("updated", 0) < 30:
         return entry["price"]
-    # Fallback to REST
     try:
-        from trading.execution.aster_client import get_aster_mark_prices
+        from trading.execution.bybit_client import get_bybit_mark_prices
 
-        data = get_aster_mark_prices(symbol)
+        data = get_bybit_mark_prices(symbol)
         price = data.get("markPrice") if isinstance(data, dict) else None
         if price:
-            _price_cache[symbol] = {"price": float(price), "updated": time.time()}
+            with _cache_lock:
+                _price_cache[symbol] = {"price": float(price), "updated": time.time()}
             return float(price)
     except Exception as e:
         logger.debug("REST price fallback failed for %s: %s", symbol, e)
     return None
 
 
-def _ws_listener(symbols: list[str]):
-    """WebSocket listener thread -- reconnects automatically on failure."""
-    global _ws_running
+def _on_ticker(message):
+    """pybit invokes this for each ticker update.
+
+    Bybit V5 ticker stream sends partial updates; markPrice may be absent on
+    a particular delta — we only update the cache when it's present.
+    """
     try:
-        import websocket  # type: ignore[import-untyped]
-    except ImportError:
-        logger.warning("websocket-client not installed, using REST fallback only")
-        _ws_running = False
-        return
-
-    streams = "/".join(f"{s.lower()}@markPrice" for s in symbols)
-    url = f"wss://fstream.asterdex.com/ws/{streams}"
-
-    def on_message(_ws, message):
-        try:
-            data = json.loads(message)
-            sym = data.get("s", "")
-            price = float(data.get("p", 0))
-            if sym and price:
-                _price_cache[sym] = {"price": price, "updated": time.time()}
-        except Exception:
-            pass
-
-    def on_error(_ws, error):
-        logger.warning("WebSocket error: %s", error)
-
-    def on_close(_ws, close_status_code, close_msg):
-        logger.info("WebSocket closed (code=%s)", close_status_code)
-
-    while _ws_running:
-        try:
-            ws = websocket.WebSocketApp(
-                url,
-                on_message=on_message,
-                on_error=on_error,
-                on_close=on_close,
-            )
-            ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            logger.warning("WebSocket reconnect after error: %s", e)
-        if _ws_running:
-            time.sleep(5)
+        data = message.get("data", {}) if isinstance(message, dict) else {}
+        sym = data.get("symbol", "")
+        mp = data.get("markPrice")
+        if sym and mp:
+            with _cache_lock:
+                _price_cache[sym] = {"price": float(mp), "updated": time.time()}
+    except Exception as e:
+        logger.debug("ws message parse error: %s", e)
 
 
 def start_ws_feed(symbols: list[str]):
-    """Start WebSocket feed in a background daemon thread."""
-    global _ws_thread, _ws_running
+    """Start the Bybit WebSocket feed in a background thread.
+
+    pybit's WebSocket spawns its own daemon thread per channel and handles
+    reconnection automatically, so no manual reconnect loop is needed.
+    """
+    global _ws_client, _ws_running
     if _ws_running:
         return
+    try:
+        from pybit.unified_trading import WebSocket
+    except ImportError:
+        logger.warning("pybit not installed, using REST fallback only")
+        return
+
+    testnet = _testnet_flag()
+    try:
+        _ws_client = WebSocket(testnet=testnet, channel_type="linear")
+    except Exception as e:
+        logger.warning("Bybit WebSocket init failed: %s", e)
+        return
+
     _ws_running = True
-    _ws_thread = threading.Thread(
-        target=_ws_listener, args=(symbols,), daemon=True
+    subscribed = 0
+    for s in symbols:
+        try:
+            _ws_client.ticker_stream(symbol=s, callback=_on_ticker)
+            subscribed += 1
+        except Exception as e:
+            logger.warning("WS subscribe failed for %s: %s", s, e)
+    logger.info(
+        "Started Bybit WebSocket feed for %d/%d symbols (testnet=%s)",
+        subscribed, len(symbols), testnet,
     )
-    _ws_thread.start()
-    logger.info("Started WebSocket price feed for %d symbols", len(symbols))
 
 
 def stop_ws_feed():
-    """Signal the WebSocket feed to stop."""
-    global _ws_running
+    """Tear down the WebSocket client."""
+    global _ws_running, _ws_client
     _ws_running = False
+    if _ws_client is not None:
+        try:
+            _ws_client.exit()
+        except Exception:
+            pass
+        _ws_client = None

@@ -1,5 +1,6 @@
 # Core trading system dependencies
 alpaca-py>=0.21.0
+pybit>=5.7
 requests==2.33.1
 yfinance>=0.2.36
 pandas==3.0.2

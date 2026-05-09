@@ -36,7 +36,7 @@ class TestAccountChecks(unittest.TestCase):
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
              patch("trading.risk.manager.get_trades", return_value=[]), \
-             patch("trading.execution.router.get_positions_from_aster", return_value=[]), \
+             patch("trading.execution.router.get_positions_from_bybit", return_value=[]), \
              patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
              patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
              patch("trading.risk.manager.check_spread", return_value=1.0), \
@@ -103,7 +103,7 @@ class TestPositionSize(unittest.TestCase):
         with patch("trading.risk.manager.get_positions", return_value=[]), \
              patch("trading.risk.manager.get_daily_pnl", return_value=[]), \
              patch("trading.risk.manager.get_trades", return_value=[]), \
-             patch("trading.execution.router.get_positions_from_aster", return_value=[]), \
+             patch("trading.execution.router.get_positions_from_bybit", return_value=[]), \
              patch("trading.risk.manager.compute_volume_ratio", return_value=1.0), \
              patch("trading.risk.manager.compute_volume_trend", return_value=0.0), \
              patch("trading.risk.manager.check_spread", return_value=1.0), \

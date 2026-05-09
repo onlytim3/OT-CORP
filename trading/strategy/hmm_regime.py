@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
 from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
@@ -200,8 +200,8 @@ class HMMRegimeStrategy(Strategy):
 
         for coin_id in self.coins:
             try:
-                aster_symbol = ASTER_SYMBOLS.get(coin_id)
-                if not aster_symbol:
+                bybit_symbol = BYBIT_SYMBOLS.get(coin_id)
+                if not bybit_symbol:
                     continue
 
                 ohlc = get_ohlc(coin_id, self.training_days)
@@ -217,7 +217,7 @@ class HMMRegimeStrategy(Strategy):
                     strength = min(regime_prob, 1.0)
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=aster_symbol,
+                        symbol=bybit_symbol,
                         action="buy",
                         strength=strength,
                         reason=f"{coin_id} HMM bull regime (prob {regime_prob:.0%})",
@@ -227,7 +227,7 @@ class HMMRegimeStrategy(Strategy):
                     strength = min(regime_prob, 1.0)
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=aster_symbol,
+                        symbol=bybit_symbol,
                         action="sell",
                         strength=strength,
                         reason=f"{coin_id} HMM bear regime (prob {regime_prob:.0%})",
@@ -237,7 +237,7 @@ class HMMRegimeStrategy(Strategy):
                     # sideways — abstain from trading but record regime state for Regime tab
                     signals.append(Signal(
                         strategy=self.name,
-                        symbol=aster_symbol,
+                        symbol=bybit_symbol,
                         action="hold",
                         strength=regime_prob,
                         reason=f"{coin_id} HMM sideways regime (prob {regime_prob:.0%})",

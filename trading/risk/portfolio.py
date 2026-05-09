@@ -37,7 +37,7 @@ STRATEGY_BUDGETS: dict[str, float] = {
     "kalman_trend": 0.06,
     "regime_mean_reversion": 0.05,
     "factor_crypto": 0.04,
-    # Perps-specific strategies (AsterDex alpha)
+    # Perps-specific strategies (Bybit alpha)
     "funding_arb": 0.05,
     "microstructure_composite": 0.04,
     "basis_zscore": 0.04,
@@ -529,9 +529,9 @@ def calculate_order_size(
     if signal.action == "buy":
         try:
             from trading.risk.volume_gate import compute_volume_sizing_multiplier
-            from trading.data.aster import alpaca_to_aster
-            aster_sym = alpaca_to_aster(signal.symbol)
-            volume_mult = compute_volume_sizing_multiplier(aster_sym) if aster_sym else 1.0
+            from trading.data.bybit import alpaca_to_bybit
+            bybit_sym = alpaca_to_bybit(signal.symbol)
+            volume_mult = compute_volume_sizing_multiplier(bybit_sym) if bybit_sym else 1.0
         except Exception:
             volume_mult = 1.0
     else:
@@ -575,7 +575,7 @@ def calculate_order_size(
     # Also cap at free capital
     order_value = min(order_value, free_capital * 0.95)
 
-    # Minimum order size (AsterDex hard floor: $5.00)
+    # Minimum order size (Bybit hard floor: $5.00)
     if order_value < 5.0:
         # SMALL ACCOUNT FLOOR: nudge to $5.01 rather than silently drop the order.
         # Drawdown + confluence multipliers can reduce a valid $100 order to $4 on a

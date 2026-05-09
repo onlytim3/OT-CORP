@@ -12,7 +12,7 @@ transitions and adjusts positioning:
 Additional cross-asset signal: when altcoin realized vol significantly exceeds
 BTC vol, a rotation out of alts is likely.
 
-Uses hourly klines from AsterDex (7 days = 168 candles).
+Uses hourly klines from Bybit (7 days = 168 candles).
 Realized volatility = annualized standard deviation of log returns.
 """
 
@@ -20,22 +20,22 @@ import logging
 
 import numpy as np
 
-from trading.config import ASTER_SYMBOLS
+from trading.config import BYBIT_SYMBOLS
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
 try:
-    from trading.data.aster import get_aster_ohlcv
+    from trading.data.bybit import get_bybit_ohlcv
 except ImportError:
-    get_aster_ohlcv = None
+    get_bybit_ohlcv = None
 
 
-def _fetch_hourly_closes(coin_id: str, aster_sym: str, hours: int) -> "np.ndarray | None":
-    """Fetch hourly close prices, falling back to CoinGecko market chart if AsterDex fails."""
-    # 1. AsterDex — primary source
-    if get_aster_ohlcv is not None:
+def _fetch_hourly_closes(coin_id: str, bybit_sym: str, hours: int) -> "np.ndarray | None":
+    """Fetch hourly close prices, falling back to CoinGecko market chart if Bybit fails."""
+    # 1. Bybit — primary source
+    if get_bybit_ohlcv is not None:
         try:
-            df = get_aster_ohlcv(aster_sym, interval="1h", limit=hours + 10)
+            df = get_bybit_ohlcv(bybit_sym, interval="1h", limit=hours + 10)
             if df is not None and not df.empty and len(df) >= hours // 4:
                 return df["close"].values.astype(float)
         except Exception:
@@ -235,8 +235,8 @@ class VolatilityRegimeStrategy(Strategy):
         self._last_context: dict = {}
 
     def generate_signals(self) -> list[Signal]:
-        if get_aster_ohlcv is None:
-            log.error("volatility_regime: trading.data.aster not available")
+        if get_bybit_ohlcv is None:
+            log.error("volatility_regime: trading.data.bybit not available")
             return []
 
         signals: list[Signal] = []
@@ -250,15 +250,15 @@ class VolatilityRegimeStrategy(Strategy):
         hpy = self.config["hours_per_year"]
 
         for coin in self.config["coins"]:
-            symbol = ASTER_SYMBOLS.get(coin)
-            aster_sym = ASTER_SYMBOLS.get(coin)
+            symbol = BYBIT_SYMBOLS.get(coin)
+            bybit_sym = BYBIT_SYMBOLS.get(coin)
 
-            if not symbol or not aster_sym:
+            if not symbol or not bybit_sym:
                 log.warning("volatility_regime: no symbol mapping for %s", coin)
                 continue
 
             try:
-                closes = _fetch_hourly_closes(coin, aster_sym, long_w)
+                closes = _fetch_hourly_closes(coin, bybit_sym, long_w)
 
                 if closes is None or len(closes) < min_pts // 4:
                     log.debug("volatility_regime: skipping %s — insufficient data from all sources", coin)
@@ -339,7 +339,7 @@ class VolatilityRegimeStrategy(Strategy):
         rotation = _check_rotation_signal(vol_data)
         if rotation:
             for alt_coin, alt_ratio in rotation["elevated_alts"]:
-                alt_sym = ASTER_SYMBOLS.get(alt_coin)
+                alt_sym = BYBIT_SYMBOLS.get(alt_coin)
                 if not alt_sym:
                     continue
                 # Downgrade any existing buy signal for this alt to hold

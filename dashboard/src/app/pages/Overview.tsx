@@ -362,6 +362,7 @@ export function Overview() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div
           className="rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 border-l-[#4a9eff] min-w-0"
+          className="rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 border-l-[#4a9eff]"
           title="Portfolio value = cash + open-position margin + unrealized P&L. Open trades are included, not subtracted."
         >
           <p className="text-xs text-[#555555] uppercase tracking-widest mb-3 font-mono">Portfolio Value</p>
@@ -597,6 +598,8 @@ export function Overview() {
                       { label: 'Age', hide: 'hidden sm:table-cell' },
                     ].map(({ label, hide }) => (
                       <th key={label} className={`${label === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-2 sm:px-4 font-medium text-[#888888] ${hide}`}>{label}</th>
+                    {['Symbol', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Entry Value', 'Mkt Value', 'Age'].map(h => (
+                      <th key={h} className={`${h === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -633,6 +636,18 @@ export function Overview() {
                       <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
                       <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
                       <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#888888]">{pos.age || '-'}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
+                      <td className={`text-right py-3 px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                        {(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${formatPnl(pos.unrealized_pnl || 0)}
+                      </td>
+                      <td className={`text-right py-3 px-4 ${(pos.unrealized_pnl_pct || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                        {(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{formatPct(pos.unrealized_pnl_pct || 0)}%
+                      </td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.avg_cost || 0)}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.current_price || 0)}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
+                      <td className="text-right py-3 px-4 text-[#888888] text-sm">{pos.age || '-'}</td>
                     </tr>
                     );
                   })}
@@ -715,7 +730,7 @@ export function Overview() {
                   const normSym = selectedPosition.symbol.replace("/", "").toUpperCase();
                   const vol = volumes?.find(v => {
                     const vNorm = v.symbol.replace("/", "").toUpperCase();
-                    const aNorm = (v.aster_symbol || "").replace("/", "").toUpperCase();
+                    const aNorm = (v.bybit_symbol || "").replace("/", "").toUpperCase();
                     return vNorm === normSym || aNorm === normSym || v.symbol === selectedPosition.symbol;
                   });
                   const mg = marginData?.find(m => {

@@ -262,7 +262,7 @@ export interface PnlHistory {
 
 export interface VolumeAnalysis {
   symbol: string;
-  aster_symbol?: string;
+  bybit_symbol?: string;
   ratio: number;
   trend: number;
   spread_bps: number;

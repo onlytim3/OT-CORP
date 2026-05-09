@@ -741,14 +741,14 @@ class Backtester:
             _add_patch("get_fred_series", "trading.data.commodities",
                        mock_get_fred_series, [])
 
-        # -- trading.data.aster (AsterDex derivatives data) ------------------
+        # -- trading.data.bybit (Bybit derivatives data) ------------------
         # Derive realistic derivatives data from OHLC price action so that
         # funding rates, basis, order books, and volume correlate with actual
         # market movements.  This replaces the old random-noise mocks.
-        from trading.config import ASTER_SYMBOLS
+        from trading.config import BYBIT_SYMBOLS
 
         # Reverse map: BTCUSDT -> bitcoin
-        _aster_to_coin = {v: k for k, v in ASTER_SYMBOLS.items()}
+        _bybit_to_coin = {v: k for k, v in BYBIT_SYMBOLS.items()}
 
         def _price_momentum(coin_id: str, lookback: int = 5) -> float:
             """Return recent price momentum (-1..+1) from OHLC data."""
@@ -784,12 +784,12 @@ class Backtester:
             return float(rets.std()) if len(rets) > 0 else 0.02
 
         def _coin_for_symbol(symbol: str) -> str:
-            """Map AsterDex symbol to coin_id."""
-            return _aster_to_coin.get(symbol, "bitcoin")
+            """Map Bybit symbol to coin_id."""
+            return _bybit_to_coin.get(symbol, "bitcoin")
 
         # --- Funding rates: dict[str, float] (coin_id -> rate) ---
         def mock_get_funding_rates(symbols=None):
-            from trading.config import ASTER_SYMBOLS as _AS
+            from trading.config import BYBIT_SYMBOLS as _AS
             target_coins = list(_AS.keys())[:6]  # Top 6
             result = {}
             for coin_id in target_coins:
@@ -880,8 +880,8 @@ class Backtester:
                 "periods": limit,
             }
 
-        # --- AsterDex OHLCV: pd.DataFrame ---
-        def mock_get_aster_ohlcv(symbol, interval="1h", limit=500):
+        # --- Bybit OHLCV: pd.DataFrame ---
+        def mock_get_bybit_ohlcv(symbol, interval="1h", limit=500):
             coin_id = _coin_for_symbol(symbol)
             df = ohlc_data.get(coin_id, pd.DataFrame())
             if df.empty:
@@ -902,12 +902,12 @@ class Backtester:
                 result["trades"] = 100
             return result
 
-        # --- AsterDex klines (from aster_client): pd.DataFrame ---
-        def mock_get_aster_klines(symbol, interval="1d", limit=500):
-            return mock_get_aster_ohlcv(symbol, interval=interval, limit=limit)
+        # --- Bybit klines (from bybit_client): pd.DataFrame ---
+        def mock_get_bybit_klines(symbol, interval="1d", limit=500):
+            return mock_get_bybit_ohlcv(symbol, interval=interval, limit=limit)
 
-        # --- AsterDex order book (from aster_client): dict ---
-        def mock_get_aster_orderbook(symbol, limit=50):
+        # --- Bybit order book (from bybit_client): dict ---
+        def mock_get_bybit_orderbook(symbol, limit=50):
             coin_id = _coin_for_symbol(symbol)
             price = _current_price(coin_id)
             if price <= 0:
@@ -926,8 +926,8 @@ class Backtester:
                 asks.append((round(ask_p, 2), round(ask_q, 4)))
             return {"bids": bids, "asks": asks}
 
-        # --- AsterDex open interest (from aster_client): dict ---
-        def mock_get_aster_open_interest(symbol):
+        # --- Bybit open interest (from bybit_client): dict ---
+        def mock_get_bybit_open_interest(symbol):
             coin_id = _coin_for_symbol(symbol)
             vol = _volatility(coin_id)
             price = _current_price(coin_id)
@@ -936,8 +936,8 @@ class Backtester:
             return {"openInterest": round(base_oi + np.random.normal(0, base_oi * 0.05), 2),
                     "symbol": symbol}
 
-        # --- AsterDex mark prices (from aster_client): list or dict ---
-        def mock_get_aster_mark_prices(symbol=None):
+        # --- Bybit mark prices (from bybit_client): list or dict ---
+        def mock_get_bybit_mark_prices(symbol=None):
             if symbol:
                 coin_id = _coin_for_symbol(symbol)
                 price = _current_price(coin_id)
@@ -956,11 +956,11 @@ class Backtester:
             tracked = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT"]
             results = []
             for s in tracked:
-                results.append(mock_get_aster_mark_prices(s))
+                results.append(mock_get_bybit_mark_prices(s))
             return results
 
         # --- Market summary ---
-        def mock_get_aster_market_summary():
+        def mock_get_bybit_market_summary():
             btc_mom = _price_momentum("bitcoin", lookback=5)
             return {
                 "funding_sentiment": round(btc_mom * 0.0005, 6),
@@ -969,8 +969,8 @@ class Backtester:
                 "volume_flow": round(btc_mom * 0.3, 4),
             }
 
-        # All strategy modules that import from trading.data.aster or aster_client
-        _aster_strategies = [
+        # All strategy modules that import from trading.data.bybit or bybit_client
+        _bybit_strategies = [
             "funding_arb", "microstructure_composite", "basis_zscore",
             "funding_term_structure", "taker_divergence", "cross_basis_rv",
             "oi_price_divergence", "whale_flow", "cross_asset_momentum",
@@ -978,48 +978,48 @@ class Backtester:
             "equity_crypto_correlation", "gold_crypto_hedge",
         ]
 
-        # Patch trading.data.aster functions
-        _add_patch("get_funding_rates", "trading.data.aster",
-                   mock_get_funding_rates, _aster_strategies)
-        _add_patch("get_funding_rate_history", "trading.data.aster",
-                   mock_get_funding_rate_history, _aster_strategies)
-        _add_patch("get_orderbook_imbalance", "trading.data.aster",
-                   mock_get_orderbook_imbalance, _aster_strategies)
-        _add_patch("get_basis_spread", "trading.data.aster",
-                   mock_get_basis_spread, _aster_strategies)
-        _add_patch("get_taker_volume_ratio", "trading.data.aster",
-                   mock_get_taker_volume_ratio, _aster_strategies)
-        _add_patch("get_aster_ohlcv", "trading.data.aster",
-                   mock_get_aster_ohlcv, _aster_strategies)
-        _add_patch("get_aster_market_summary", "trading.data.aster",
-                   mock_get_aster_market_summary, _aster_strategies)
-        _add_patch("get_open_interest", "trading.data.aster",
-                   lambda s: mock_get_aster_open_interest(s).get("openInterest"),
-                   _aster_strategies)
+        # Patch trading.data.bybit functions
+        _add_patch("get_funding_rates", "trading.data.bybit",
+                   mock_get_funding_rates, _bybit_strategies)
+        _add_patch("get_funding_rate_history", "trading.data.bybit",
+                   mock_get_funding_rate_history, _bybit_strategies)
+        _add_patch("get_orderbook_imbalance", "trading.data.bybit",
+                   mock_get_orderbook_imbalance, _bybit_strategies)
+        _add_patch("get_basis_spread", "trading.data.bybit",
+                   mock_get_basis_spread, _bybit_strategies)
+        _add_patch("get_taker_volume_ratio", "trading.data.bybit",
+                   mock_get_taker_volume_ratio, _bybit_strategies)
+        _add_patch("get_bybit_ohlcv", "trading.data.bybit",
+                   mock_get_bybit_ohlcv, _bybit_strategies)
+        _add_patch("get_bybit_market_summary", "trading.data.bybit",
+                   mock_get_bybit_market_summary, _bybit_strategies)
+        _add_patch("get_open_interest", "trading.data.bybit",
+                   lambda s: mock_get_bybit_open_interest(s).get("openInterest"),
+                   _bybit_strategies)
 
-        # Patch trading.execution.aster_client functions (some strategies import directly)
-        _add_patch("get_aster_klines", "trading.execution.aster_client",
-                   mock_get_aster_klines, _aster_strategies)
-        _add_patch("get_aster_orderbook", "trading.execution.aster_client",
-                   mock_get_aster_orderbook, _aster_strategies)
-        _add_patch("get_aster_open_interest", "trading.execution.aster_client",
-                   mock_get_aster_open_interest, _aster_strategies)
-        _add_patch("get_aster_mark_prices", "trading.execution.aster_client",
-                   mock_get_aster_mark_prices, _aster_strategies)
+        # Patch trading.execution.bybit_client functions (some strategies import directly)
+        _add_patch("get_bybit_klines", "trading.execution.bybit_client",
+                   mock_get_bybit_klines, _bybit_strategies)
+        _add_patch("get_bybit_orderbook", "trading.execution.bybit_client",
+                   mock_get_bybit_orderbook, _bybit_strategies)
+        _add_patch("get_bybit_open_interest", "trading.execution.bybit_client",
+                   mock_get_bybit_open_interest, _bybit_strategies)
+        _add_patch("get_bybit_mark_prices", "trading.execution.bybit_client",
+                   mock_get_bybit_mark_prices, _bybit_strategies)
 
         # _public_get is used by oi_price_divergence to fetch OI directly
         def mock_public_get(endpoint, params=None):
             params = params or {}
             if "openInterest" in endpoint:
                 symbol = params.get("symbol", "BTCUSDT")
-                return mock_get_aster_open_interest(symbol)
+                return mock_get_bybit_open_interest(symbol)
             if "klines" in endpoint:
                 symbol = params.get("symbol", "BTCUSDT")
-                return []  # klines go through get_aster_klines
+                return []  # klines go through get_bybit_klines
             return {}
 
-        _add_patch("_public_get", "trading.execution.aster_client",
-                   mock_public_get, _aster_strategies)
+        _add_patch("_public_get", "trading.execution.bybit_client",
+                   mock_public_get, _bybit_strategies)
 
         return patches
 

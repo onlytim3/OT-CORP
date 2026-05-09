@@ -1,5 +1,5 @@
 """Cross-Asset Momentum Strategy — detects momentum divergences across crypto,
-stocks, commodities, and indices, all traded as AsterDex perpetual futures.
+stocks, commodities, and indices, all traded as Bybit perpetual futures.
 
 Signal logic:
   1. Gold rising + BTC falling          -> risk-off, sell crypto
@@ -17,7 +17,7 @@ from trading.strategy.registry import register
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Asset groups (internal IDs that map into ASTER_SYMBOLS and ASTER_SYMBOLS)
+# Asset groups (internal IDs that map into BYBIT_SYMBOLS and BYBIT_SYMBOLS)
 # ---------------------------------------------------------------------------
 CRYPTO_IDS = ["bitcoin", "ethereum", "solana"]
 STOCK_IDS = ["apple", "nvidia", "tesla", "sp500"]
@@ -40,25 +40,25 @@ LOOKBACK_DAYS = 7
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_momentum(aster_symbol: str) -> dict | None:
-    """Fetch klines from AsterDex and compute 24h and 7d momentum.
+def _fetch_momentum(bybit_symbol: str) -> dict | None:
+    """Fetch klines from Bybit and compute 24h and 7d momentum.
 
     Returns dict with keys: price, mom_24h, mom_7d  — or None on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_klines
+        from trading.execution.bybit_client import get_bybit_klines
     except ImportError:
-        log.error("Cannot import get_aster_klines — aster_client unavailable")
+        log.error("Cannot import get_bybit_klines — bybit_client unavailable")
         return None
 
     try:
-        df = get_aster_klines(aster_symbol, interval="1d", limit=30)
+        df = get_bybit_klines(bybit_symbol, interval="1d", limit=30)
     except Exception as exc:
-        log.warning("Failed to fetch klines for %s: %s", aster_symbol, exc)
+        log.warning("Failed to fetch klines for %s: %s", bybit_symbol, exc)
         return None
 
     if df is None or df.empty:
-        log.warning("Empty klines for %s", aster_symbol)
+        log.warning("Empty klines for %s", bybit_symbol)
         return None
 
     closes = df["close"]
@@ -93,7 +93,7 @@ def _avg_momentum(momenta: list[dict], key: str) -> float:
 @register
 class CrossAssetMomentumStrategy(Strategy):
     """Detect momentum divergences between crypto, stocks, commodities, and
-    indices — all sourced from AsterDex perpetual futures klines.
+    indices — all sourced from Bybit perpetual futures klines.
     """
 
     name = "cross_asset_momentum"
@@ -105,7 +105,7 @@ class CrossAssetMomentumStrategy(Strategy):
 
     def generate_signals(self) -> list[Signal]:
         try:
-            from trading.config import ASTER_SYMBOLS
+            from trading.config import BYBIT_SYMBOLS
         except ImportError:
             log.error("Cannot import symbol mappings from trading.config")
             return [self._hold("Symbol config unavailable")]
@@ -117,11 +117,11 @@ class CrossAssetMomentumStrategy(Strategy):
         index_mom: dict[str, dict] = {}
 
         for asset_id in _ALL_IDS:
-            aster_sym = ASTER_SYMBOLS.get(asset_id)
-            if not aster_sym:
-                log.debug("No AsterDex symbol for %s — skipping", asset_id)
+            bybit_sym = BYBIT_SYMBOLS.get(asset_id)
+            if not bybit_sym:
+                log.debug("No Bybit symbol for %s — skipping", asset_id)
                 continue
-            data = _fetch_momentum(aster_sym)
+            data = _fetch_momentum(bybit_sym)
             if data is None:
                 continue
 
@@ -183,7 +183,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 divergence = gold_mom["mom_24h"] - btc_mom["mom_24h"]
                 strength = min(abs(divergence) / DIVERGENCE_THRESHOLD * 0.3, 0.85)
                 for cid in crypto_mom:
-                    sym = ASTER_SYMBOLS.get(cid)
+                    sym = BYBIT_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -211,7 +211,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 lag = avg_index_7d - avg_crypto_7d
                 strength = min(lag / DIVERGENCE_THRESHOLD * 0.25, 0.80)
                 for cid in crypto_mom:
-                    sym = ASTER_SYMBOLS.get(cid)
+                    sym = BYBIT_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -246,7 +246,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 )
                 # Sell all crypto
                 for cid in crypto_mom:
-                    sym = ASTER_SYMBOLS.get(cid)
+                    sym = BYBIT_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -273,7 +273,7 @@ class CrossAssetMomentumStrategy(Strategy):
             if outperformance > DIVERGENCE_THRESHOLD * 2:
                 strength = min(outperformance / (DIVERGENCE_THRESHOLD * 3) * 0.4, 0.70)
                 for cid in crypto_mom:
-                    sym = ASTER_SYMBOLS.get(cid)
+                    sym = BYBIT_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -308,7 +308,7 @@ class CrossAssetMomentumStrategy(Strategy):
                 strength = min(avg_comm_7d / MOMENTUM_7D_THRESHOLD * 0.3, 0.80)
 
                 # Buy BTC as inflation hedge
-                btc_sym = ASTER_SYMBOLS.get("bitcoin")
+                btc_sym = BYBIT_SYMBOLS.get("bitcoin")
                 if btc_sym:
                     signals.append(Signal(
                         strategy=self.name,
@@ -329,7 +329,7 @@ class CrossAssetMomentumStrategy(Strategy):
                     ))
 
                 # Buy gold perp itself
-                gold_sym = ASTER_SYMBOLS.get("gold")
+                gold_sym = BYBIT_SYMBOLS.get("gold")
                 if gold_sym:
                     signals.append(Signal(
                         strategy=self.name,

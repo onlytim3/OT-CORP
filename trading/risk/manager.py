@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from trading.config import RISK, CRYPTO_SYMBOLS
 from trading.risk.profit_manager import TAKE_PROFIT_PCT, TRAILING_STOP_ACTIVATE
 from trading.risk.volume_gate import compute_volume_ratio, compute_volume_trend, check_spread, check_market_impact
-from trading.data.aster import alpaca_to_aster
+from trading.data.bybit import alpaca_to_bybit
 from trading.db.store import get_positions, get_daily_pnl, get_trades, get_setting, set_setting
 from trading.strategy.base import Signal
 
@@ -56,24 +56,24 @@ def _get_atr_stop_pct(symbol: str, leverage: int = 1) -> float | None:
     """
     try:
         from trading.strategy.indicators import atr
-        from trading.data.aster import get_aster_ohlcv
-        from trading.config import (ASTER_SYMBOLS, CRYPTO_SYMBOLS,
+        from trading.data.bybit import get_bybit_ohlcv
+        from trading.config import (BYBIT_SYMBOLS, CRYPTO_SYMBOLS,
                                      CRYPTO_L1 as CFG_L1, CRYPTO_MEME as CFG_MEME,
                                      STOCK_PERPS as CFG_STOCK, COMMODITY_PERPS as CFG_COMM,
                                      INDEX_PERPS as CFG_IDX)
 
-        # Resolve symbol to AsterDex
-        aster_sym = None
+        # Resolve symbol to Bybit
+        bybit_sym = None
         matched_coin_id = None
         for coin_id, alpaca_sym in CRYPTO_SYMBOLS.items():
             if alpaca_sym == symbol or symbol.replace("/", "") in alpaca_sym.replace("/", ""):
-                aster_sym = ASTER_SYMBOLS.get(coin_id)
+                bybit_sym = BYBIT_SYMBOLS.get(coin_id)
                 matched_coin_id = coin_id
                 break
-        if not aster_sym and symbol.endswith("USDT"):
-            aster_sym = symbol
+        if not bybit_sym and symbol.endswith("USDT"):
+            bybit_sym = symbol
 
-        if not aster_sym:
+        if not bybit_sym:
             return None
 
         # Per-asset-class ATR multiplier
@@ -88,7 +88,7 @@ def _get_atr_stop_pct(symbol: str, leverage: int = 1) -> float | None:
         else:
             atr_mult = 2.0
 
-        df = get_aster_ohlcv(aster_sym, interval="1h", limit=50)
+        df = get_bybit_ohlcv(bybit_sym, interval="1h", limit=50)
         if df is None or df.empty or len(df) < 14:
             return None
 
@@ -246,11 +246,11 @@ class RiskManager:
             return RiskCheck(allowed=True, reason="Not a buy — volume gate skipped", signal=signal)
 
         min_ratio = self.rules.get("min_volume_ratio", 0.30)
-        aster_sym = alpaca_to_aster(signal.symbol)
-        if not aster_sym:
-            return RiskCheck(allowed=True, reason="No AsterDex symbol — volume gate skipped", signal=signal)
+        bybit_sym = alpaca_to_bybit(signal.symbol)
+        if not bybit_sym:
+            return RiskCheck(allowed=True, reason="No Bybit symbol — volume gate skipped", signal=signal)
 
-        ratio = compute_volume_ratio(aster_sym)
+        ratio = compute_volume_ratio(bybit_sym)
         if ratio is None:
             return RiskCheck(allowed=True, reason="Volume data unavailable — gate passed", signal=signal)
 
@@ -262,7 +262,7 @@ class RiskManager:
             )
 
         # Check volume trend — block if volume is rapidly fading even if still above threshold
-        trend = compute_volume_trend(aster_sym)
+        trend = compute_volume_trend(bybit_sym)
         if trend is not None and trend < -0.5 and ratio < 0.6:
             return RiskCheck(
                 allowed=False,
@@ -284,13 +284,13 @@ class RiskManager:
         if signal.action != "buy":
             return RiskCheck(allowed=True, reason="Not a buy — liquidity check skipped", signal=signal)
 
-        aster_sym = alpaca_to_aster(signal.symbol)
-        if not aster_sym:
-            return RiskCheck(allowed=True, reason="No AsterDex symbol — liquidity check skipped", signal=signal)
+        bybit_sym = alpaca_to_bybit(signal.symbol)
+        if not bybit_sym:
+            return RiskCheck(allowed=True, reason="No Bybit symbol — liquidity check skipped", signal=signal)
 
         # Check spread — block if spread is too wide (> 50 bps = 0.5%)
         max_spread_bps = self.rules.get("max_spread_bps", 50)
-        spread = check_spread(aster_sym)
+        spread = check_spread(bybit_sym)
         if spread is not None and spread > max_spread_bps:
             return RiskCheck(
                 allowed=False,
@@ -300,7 +300,7 @@ class RiskManager:
 
         # Check market impact — block if order is > 1% of recent 4h quote volume
         max_impact = self.rules.get("max_market_impact_pct", 0.01)
-        impact_ok = check_market_impact(aster_sym, order_value, max_impact)
+        impact_ok = check_market_impact(bybit_sym, order_value, max_impact)
         if impact_ok is not None and not impact_ok:
             return RiskCheck(
                 allowed=False,
@@ -592,8 +592,8 @@ class RiskManager:
         total_notional = order_value * new_leverage
         # Add existing positions' leveraged exposure — fail CLOSED on error
         try:
-            from trading.execution.router import get_positions_from_aster
-            for pos in get_positions_from_aster():
+            from trading.execution.router import get_positions_from_bybit
+            for pos in get_positions_from_bybit():
                 pos_lev = pos.get("leverage", 1)
                 total_notional += abs(pos.get("market_value", 0)) * pos_lev
         except Exception as e:
@@ -620,8 +620,8 @@ class RiskManager:
         # Sum existing exposure in same sector
         sector_exposure = order_value
         try:
-            from trading.execution.router import get_positions_from_aster
-            for pos in get_positions_from_aster():
+            from trading.execution.router import get_positions_from_bybit
+            for pos in get_positions_from_bybit():
                 if _get_asset_sector(pos.get("symbol", "")) == sector:
                     sector_exposure += abs(pos.get("market_value", 0))
         except Exception:
@@ -734,20 +734,20 @@ def compute_trade_targets(
     # Try ATR-based stop distance with per-asset-class multiplier
     try:
         from trading.strategy.indicators import atr
-        from trading.data.aster import get_aster_ohlcv
-        from trading.config import (ASTER_SYMBOLS, CRYPTO_SYMBOLS,
+        from trading.data.bybit import get_bybit_ohlcv
+        from trading.config import (BYBIT_SYMBOLS, CRYPTO_SYMBOLS,
                                      CRYPTO_L1, CRYPTO_MEME,
                                      STOCK_PERPS, COMMODITY_PERPS, INDEX_PERPS)
-        # Resolve to AsterDex symbol and determine coin_id
-        aster_sym = None
+        # Resolve to Bybit symbol and determine coin_id
+        bybit_sym = None
         matched_coin_id = None
         for coin_id, alpaca_sym in CRYPTO_SYMBOLS.items():
             if alpaca_sym == symbol or symbol.replace("/", "") in alpaca_sym.replace("/", ""):
-                aster_sym = ASTER_SYMBOLS.get(coin_id)
+                bybit_sym = BYBIT_SYMBOLS.get(coin_id)
                 matched_coin_id = coin_id
                 break
-        if not aster_sym and symbol.endswith("USDT"):
-            aster_sym = symbol
+        if not bybit_sym and symbol.endswith("USDT"):
+            bybit_sym = symbol
 
         # Per-asset-class ATR multiplier:
         #   2.5x — crypto majors (BTC, ETH, SOL, etc.)
@@ -765,8 +765,8 @@ def compute_trade_targets(
         else:
             atr_mult = 2.0  # default for unknown
 
-        if aster_sym:
-            df = get_aster_ohlcv(aster_sym, interval="1h", limit=50)
+        if bybit_sym:
+            df = get_bybit_ohlcv(bybit_sym, interval="1h", limit=50)
             if df is not None and not df.empty and len(df) >= 14:
                 atr_series = atr(df["high"], df["low"], df["close"], period=14)
                 atr_value = float(atr_series.iloc[-1])

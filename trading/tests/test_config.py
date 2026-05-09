@@ -6,49 +6,49 @@ from unittest.mock import patch
 from trading.config import validate_config, ConfigError
 
 
-# All tests need valid ASTER keys to pass the first gate
+# All tests need valid BYBIT keys to pass the first gate
 _ASTER_MOCKS = {
-    "trading.config.ASTER_API_KEY": "test-aster-key",
-    "trading.config.ASTER_API_SECRET": "test-aster-secret",
+    "trading.config.BYBIT_API_KEY": "test-bybit-key",
+    "trading.config.BYBIT_API_SECRET": "test-bybit-secret",
 }
 
 
 class TestValidateConfig(unittest.TestCase):
     """Test startup config validation."""
 
-    def test_missing_aster_api_key_raises(self):
-        with patch("trading.config.ASTER_API_KEY", ""), \
-             patch("trading.config.ASTER_API_SECRET", "test-secret"):
+    def test_missing_bybit_api_key_raises(self):
+        with patch("trading.config.BYBIT_API_KEY", ""), \
+             patch("trading.config.BYBIT_API_SECRET", "test-secret"):
             with self.assertRaises(ConfigError):
                 validate_config(test_api=False)
 
-    def test_missing_aster_secret_raises(self):
-        with patch("trading.config.ASTER_API_KEY", "test-key"), \
-             patch("trading.config.ASTER_API_SECRET", ""):
+    def test_missing_bybit_secret_raises(self):
+        with patch("trading.config.BYBIT_API_KEY", "test-key"), \
+             patch("trading.config.BYBIT_API_SECRET", ""):
             with self.assertRaises(ConfigError):
                 validate_config(test_api=False)
 
     @patch("trading.config.TRADING_MODE", "invalid")
     def test_invalid_trading_mode_raises(self):
         with patch.dict("os.environ", {}, clear=False), \
-             patch("trading.config.ASTER_API_KEY", "k"), \
-             patch("trading.config.ASTER_API_SECRET", "s"):
+             patch("trading.config.BYBIT_API_KEY", "k"), \
+             patch("trading.config.BYBIT_API_SECRET", "s"):
             with self.assertRaises(ConfigError):
                 validate_config(test_api=False)
 
     @patch("trading.config.TRADING_MODE", "live")
     @patch("trading.config.ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     def test_live_mode_paper_url_raises(self):
-        with patch("trading.config.ASTER_API_KEY", "k"), \
-             patch("trading.config.ASTER_API_SECRET", "s"):
+        with patch("trading.config.BYBIT_API_KEY", "k"), \
+             patch("trading.config.BYBIT_API_SECRET", "s"):
             with self.assertRaises(ConfigError):
                 validate_config(test_api=False)
 
     @patch("trading.config.TRADING_MODE", "paper")
     @patch("trading.config.FRED_API_KEY", "")
     def test_missing_fred_warns(self):
-        with patch("trading.config.ASTER_API_KEY", "k"), \
-             patch("trading.config.ASTER_API_SECRET", "s"):
+        with patch("trading.config.BYBIT_API_KEY", "k"), \
+             patch("trading.config.BYBIT_API_SECRET", "s"):
             warnings = validate_config(test_api=False)
             self.assertTrue(any("FRED" in w for w in warnings))
 
@@ -56,8 +56,8 @@ class TestValidateConfig(unittest.TestCase):
     @patch("trading.config.FRED_API_KEY", "some-key")
     @patch("trading.config.ALPACA_API_KEY", "some-key")
     def test_valid_config_no_warnings(self):
-        with patch("trading.config.ASTER_API_KEY", "k"), \
-             patch("trading.config.ASTER_API_SECRET", "s"):
+        with patch("trading.config.BYBIT_API_KEY", "k"), \
+             patch("trading.config.BYBIT_API_SECRET", "s"):
             warnings = validate_config(test_api=False)
             self.assertEqual(len(warnings), 0)
 
@@ -131,8 +131,8 @@ class TestPreflightCheck(unittest.TestCase):
             return original_exists(self_path)
 
         enabled = {"fake_missing": True}
-        with patch("trading.config.ASTER_API_KEY", "k"), \
-             patch("trading.config.ASTER_API_SECRET", "s"), \
+        with patch("trading.config.BYBIT_API_KEY", "k"), \
+             patch("trading.config.BYBIT_API_SECRET", "s"), \
              patch("trading.config.STRATEGY_ENABLED", enabled), \
              patch.object(Path, "exists", mock_exists):
             with self.assertRaises(ConfigError) as ctx:

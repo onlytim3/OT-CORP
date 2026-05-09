@@ -185,7 +185,7 @@ _CRYPTO_SUFFIXES = ("USDT", "USDC", "BUSD", "BTC", "ETH", "USD")
 def is_crypto_symbol(symbol: str) -> bool:
     """Return True if *symbol* is a crypto pair.
 
-    Recognises both slash format (``"BTC/USD"``) and AsterDex concatenated
+    Recognises both slash format (``"BTC/USD"``) and Bybit concatenated
     format (``"BTCUSDT"``, ``"BNBUSDT"``, ``"SOLUSDT"``).
     """
     if "/" in symbol:
