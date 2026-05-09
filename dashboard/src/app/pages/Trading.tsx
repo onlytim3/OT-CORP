@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/
 import { TrendingUp, TrendingDown, DollarSign, Volume2, RefreshCw, ArrowUpDown, ShieldAlert } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api, usePolling, fetchAPI, type StatusResponse, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
+import { formatPrice, formatPnl, formatPct } from "../utils/format";
 
 interface OhlcvCandle { time: number; open: number; high: number; low: number; close: number; volume: number; }
 import { Chart } from "../components/Chart";
@@ -245,7 +246,7 @@ function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trad
 }
 
 export function Trading() {
-  const { data: status } = usePolling<StatusResponse>(api.status, 10000);
+  const { data: status } = usePolling<StatusResponse>(api.status, 3000);
   const { data: trades } = usePolling<Trade[]>(api.trades, 15000);
   const { data: volumes } = usePolling<VolumeAnalysis[]>(api.volume, 30000);
   const { data: marginData } = usePolling<MarginHealth[]>(api.margin, 15000);
@@ -367,8 +368,8 @@ export function Trading() {
                     <p className="text-sm text-[#888888]">{pos.age || ''}</p>
                   </div>
                   <div className={`text-right ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
-                    <p className="text-lg font-bold">{(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${(pos.unrealized_pnl || 0).toFixed(2)}</p>
-                    <p className="text-sm">{(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{(pos.unrealized_pnl_pct || 0).toFixed(2)}%</p>
+                    <p className="text-lg font-bold">{(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${formatPnl(pos.unrealized_pnl || 0)}</p>
+                    <p className="text-sm">{(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{formatPct(pos.unrealized_pnl_pct || 0)}%</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3 text-sm mb-4">
@@ -378,7 +379,15 @@ export function Trading() {
                   </div>
                   <div>
                     <p className="text-[#888888]">Current</p>
-                    <p className="text-[#e8e8e8] font-medium">${(pos.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                    <p className="text-[#e8e8e8] font-medium">${formatPrice(pos.current_price || 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[#888888]">Entry Value</p>
+                    <p className="text-[#e8e8e8] font-medium">${formatPrice((pos.qty || 0) * (pos.avg_cost || 0))}</p>
+                  </div>
+                  <div>
+                    <p className="text-[#888888]">Mkt Value</p>
+                    <p className="text-[#e8e8e8] font-medium">${formatPrice(pos.market_value ?? (pos.qty || 0) * (pos.current_price || 0))}</p>
                   </div>
                 </div>
                 {vol && (
