@@ -1,6 +1,6 @@
-"""AsterDex derivatives market data — funding rates, order flow, basis spreads.
+"""Bybit derivatives market data — funding rates, order flow, basis spreads.
 
-Wraps the low-level ``trading.execution.aster_client`` public endpoints into
+Wraps the low-level ``trading.execution.bybit_client`` public endpoints into
 higher-level functions that strategies and the intelligence engine consume.
 All public endpoints require NO authentication or API keys.
 
@@ -14,7 +14,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from trading.config import ASTER_SYMBOLS, DEFAULT_COINS
+from trading.config import BYBIT_SYMBOLS, DEFAULT_COINS
 from trading.data.cache import cached
 
 log = logging.getLogger(__name__)
@@ -24,55 +24,55 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Reverse map: BTCUSDT -> bitcoin
-_ASTER_TO_COIN = {v: k for k, v in ASTER_SYMBOLS.items()}
+_BYBIT_TO_COIN = {v: k for k, v in BYBIT_SYMBOLS.items()}
 
-# Build Alpaca <-> AsterDex maps dynamically from config
+# Build Alpaca <-> Bybit maps dynamically from config
 from trading.config import CRYPTO_SYMBOLS
-_ALPACA_TO_ASTER = {}
-_ASTER_TO_ALPACA = {}
-for coin_id, aster_sym in ASTER_SYMBOLS.items():
+_ALPACA_TO_BYBIT = {}
+_BYBIT_TO_ALPACA = {}
+for coin_id, bybit_sym in BYBIT_SYMBOLS.items():
     alpaca_sym = CRYPTO_SYMBOLS.get(coin_id)
     if alpaca_sym:
-        _ALPACA_TO_ASTER[alpaca_sym] = aster_sym
-        _ASTER_TO_ALPACA[aster_sym] = alpaca_sym
+        _ALPACA_TO_BYBIT[alpaca_sym] = bybit_sym
+        _BYBIT_TO_ALPACA[bybit_sym] = alpaca_sym
 
 
-def alpaca_to_aster(symbol: str) -> str | None:
-    """Convert Alpaca symbol (BTC/USD) to AsterDex symbol (BTCUSDT)."""
-    return _ALPACA_TO_ASTER.get(symbol)
+def alpaca_to_bybit(symbol: str) -> str | None:
+    """Convert Alpaca symbol (BTC/USD) to Bybit symbol (BTCUSDT)."""
+    return _ALPACA_TO_BYBIT.get(symbol)
 
 
-def aster_to_alpaca(symbol: str) -> str | None:
-    """Convert AsterDex symbol (BTCUSDT) to Alpaca symbol (BTC/USD)."""
-    return _ASTER_TO_ALPACA.get(symbol)
+def bybit_to_alpaca(symbol: str) -> str | None:
+    """Convert Bybit symbol (BTCUSDT) to Alpaca symbol (BTC/USD)."""
+    return _BYBIT_TO_ALPACA.get(symbol)
 
 
 def refresh_symbol_maps() -> None:
-    """Rebuild translation maps from the current ASTER_SYMBOLS/CRYPTO_SYMBOLS.
+    """Rebuild translation maps from the current BYBIT_SYMBOLS/CRYPTO_SYMBOLS.
 
-    Call after discover_aster_markets() expands the symbol universe so that
-    alpaca_to_aster() and aster_to_alpaca() cover all newly added markets.
+    Call after discover_bybit_markets() expands the symbol universe so that
+    alpaca_to_bybit() and bybit_to_alpaca() cover all newly added markets.
     """
-    from trading.config import ASTER_SYMBOLS as _AS, CRYPTO_SYMBOLS as _CS
-    global _ASTER_TO_COIN, _ALPACA_TO_ASTER, _ASTER_TO_ALPACA
-    _ASTER_TO_COIN = {v: k for k, v in _AS.items()}
-    _ALPACA_TO_ASTER.clear()
-    _ASTER_TO_ALPACA.clear()
-    for coin_id, aster_sym in _AS.items():
+    from trading.config import BYBIT_SYMBOLS as _BS, CRYPTO_SYMBOLS as _CS
+    global _BYBIT_TO_COIN, _ALPACA_TO_BYBIT, _BYBIT_TO_ALPACA
+    _BYBIT_TO_COIN = {v: k for k, v in _BS.items()}
+    _ALPACA_TO_BYBIT.clear()
+    _BYBIT_TO_ALPACA.clear()
+    for coin_id, bybit_sym in _BS.items():
         alpaca_sym = _CS.get(coin_id)
         if alpaca_sym:
-            _ALPACA_TO_ASTER[alpaca_sym] = aster_sym
-            _ASTER_TO_ALPACA[aster_sym] = alpaca_sym
+            _ALPACA_TO_BYBIT[alpaca_sym] = bybit_sym
+            _BYBIT_TO_ALPACA[bybit_sym] = alpaca_sym
 
 
-def coin_to_aster(coin_id: str) -> str | None:
-    """Convert CoinGecko coin ID to AsterDex symbol."""
-    return ASTER_SYMBOLS.get(coin_id)
+def coin_to_bybit(coin_id: str) -> str | None:
+    """Convert CoinGecko coin ID to Bybit symbol."""
+    return BYBIT_SYMBOLS.get(coin_id)
 
 
-def _all_aster_symbols() -> list[str]:
-    """Return all tracked AsterDex symbols."""
-    return list(ASTER_SYMBOLS.values())
+def _all_bybit_symbols() -> list[str]:
+    """Return all tracked Bybit symbols."""
+    return list(BYBIT_SYMBOLS.values())
 
 
 # ---------------------------------------------------------------------------
@@ -87,19 +87,19 @@ def get_funding_rates(symbols: list[str] | None = None) -> dict[str, float]:
     Returns empty dict on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_mark_prices
+        from trading.execution.bybit_client import get_bybit_mark_prices
 
-        data = get_aster_mark_prices()
+        data = get_bybit_mark_prices()
         if not isinstance(data, list):
             data = [data]
 
         result = {}
-        target_symbols = set(symbols) if symbols else set(_all_aster_symbols())
+        target_symbols = set(symbols) if symbols else set(_all_bybit_symbols())
 
         for entry in data:
             sym = entry.get("symbol", "")
             if sym in target_symbols or not symbols:
-                coin_id = _ASTER_TO_COIN.get(sym)
+                coin_id = _BYBIT_TO_COIN.get(sym)
                 if coin_id:
                     rate = entry.get("lastFundingRate", 0.0)
                     result[coin_id] = float(rate)
@@ -107,7 +107,7 @@ def get_funding_rates(symbols: list[str] | None = None) -> dict[str, float]:
         return result
 
     except Exception as e:
-        log.warning("Failed to fetch AsterDex funding rates: %s", e)
+        log.warning("Failed to fetch Bybit funding rates: %s", e)
         return {}
 
 
@@ -116,15 +116,15 @@ def get_funding_rate_history(symbol: str, limit: int = 100) -> list[float]:
     """Get historical funding rate series for z-score calculation.
 
     Args:
-        symbol: AsterDex symbol (e.g. 'BTCUSDT').
+        symbol: Bybit symbol (e.g. 'BTCUSDT').
         limit: Number of historical entries.
 
     Returns list of funding rates (oldest first). Empty list on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_funding_rates
+        from trading.execution.bybit_client import get_bybit_funding_rates
 
-        data = get_aster_funding_rates(symbol=symbol, limit=limit)
+        data = get_bybit_funding_rates(symbol=symbol, limit=limit)
         if not data:
             return []
 
@@ -142,16 +142,16 @@ def get_orderbook_imbalance(symbol: str, depth: int = 20) -> dict | None:
     """Get bid/ask volume imbalance from order book.
 
     Args:
-        symbol: AsterDex symbol (e.g. 'BTCUSDT').
+        symbol: Bybit symbol (e.g. 'BTCUSDT').
         depth: Order book depth (default 20 levels).
 
     Returns dict with bid_volume, ask_volume, imbalance (-1 to +1),
     spread_bps, mid_price. None on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_orderbook
+        from trading.execution.bybit_client import get_bybit_orderbook
 
-        book = get_aster_orderbook(symbol, limit=depth)
+        book = get_bybit_orderbook(symbol, limit=depth)
         bids = book.get("bids", [])
         asks = book.get("asks", [])
 
@@ -185,17 +185,17 @@ def get_basis_spread(symbol: str | None = None) -> dict | list[dict]:
     """Get mark vs index price basis spread.
 
     Args:
-        symbol: AsterDex symbol. If None, returns all tracked symbols.
+        symbol: Bybit symbol. If None, returns all tracked symbols.
 
     Returns:
         Single dict if symbol provided, list of dicts otherwise.
         Each contains: symbol, markPrice, indexPrice, basis_pct, fundingRate.
     """
     try:
-        from trading.execution.aster_client import get_aster_mark_prices
+        from trading.execution.bybit_client import get_bybit_mark_prices
 
         if symbol:
-            data = get_aster_mark_prices(symbol=symbol)
+            data = get_bybit_mark_prices(symbol=symbol)
             if not isinstance(data, dict):
                 return {"symbol": symbol, "markPrice": 0, "indexPrice": 0,
                         "basis_pct": 0, "fundingRate": 0}
@@ -211,11 +211,11 @@ def get_basis_spread(symbol: str | None = None) -> dict | list[dict]:
             }
 
         # All symbols
-        data = get_aster_mark_prices()
+        data = get_bybit_mark_prices()
         if not isinstance(data, list):
             return []
 
-        tracked = set(_all_aster_symbols())
+        tracked = set(_all_bybit_symbols())
         results = []
         for entry in data:
             sym = entry.get("symbol", "")
@@ -244,49 +244,16 @@ def get_basis_spread(symbol: str | None = None) -> dict | list[dict]:
 @cached(ttl=300)
 def get_taker_volume_ratio(symbol: str, interval: str = "1h",
                            limit: int = 24) -> dict | None:
-    """Get taker buy/sell volume ratio from kline data.
+    """Taker buy/sell volume ratio.
 
-    Computes the ratio of taker buy volume to total volume over recent candles.
-
-    Args:
-        symbol: AsterDex symbol (e.g. 'BTCUSDT').
-        interval: Kline interval (default '1h').
-        limit: Number of candles (default 24 = last 24 hours for 1h).
-
-    Returns dict with buy_ratio, sell_ratio, net_ratio (-1 to +1), periods.
-    None on failure.
+    Bybit V5 klines do NOT expose taker_buy_base_vol. Returns None so consumers
+    (microstructure_composite, market_summary) skip this factor cleanly.
     """
-    try:
-        from trading.execution.aster_client import get_aster_klines
-
-        df = get_aster_klines(symbol, interval=interval, limit=limit)
-        if df.empty:
-            return None
-
-        total_vol = df["volume"].sum()
-        taker_buy_vol = df["taker_buy_base_vol"].sum()
-
-        if total_vol <= 0:
-            return None
-
-        buy_ratio = taker_buy_vol / total_vol
-        sell_ratio = 1.0 - buy_ratio
-
-        return {
-            "symbol": symbol,
-            "buy_ratio": round(float(buy_ratio), 4),
-            "sell_ratio": round(float(sell_ratio), 4),
-            "net_ratio": round(float(buy_ratio * 2 - 1), 4),  # -1 to +1
-            "periods": limit,
-        }
-
-    except Exception as e:
-        log.warning("Failed to fetch taker volume for %s: %s", symbol, e)
-        return None
+    return None
 
 
 @cached(ttl=300)
-def get_aster_ohlcv(symbol: str, interval: str = "1h",
+def get_bybit_ohlcv(symbol: str, interval: str = "1h",
                     limit: int = 500) -> pd.DataFrame:
     """Get OHLCV with taker buy volume and trade count.
 
@@ -294,15 +261,15 @@ def get_aster_ohlcv(symbol: str, interval: str = "1h",
     open, high, low, close, volume, taker_buy_base_vol, trades.
     """
     try:
-        from trading.execution.aster_client import get_aster_klines
-        return get_aster_klines(symbol, interval=interval, limit=limit)
+        from trading.execution.bybit_client import get_bybit_klines
+        return get_bybit_klines(symbol, interval=interval, limit=limit)
     except Exception as e:
-        log.warning("Failed to fetch AsterDex OHLCV for %s: %s", symbol, e)
+        log.warning("Failed to fetch Bybit OHLCV for %s: %s", symbol, e)
         return pd.DataFrame()
 
 
 @cached(ttl=300)
-def get_aster_market_summary() -> dict:
+def get_bybit_market_summary() -> dict:
     """Get aggregated market intelligence across all tracked symbols.
 
     Combines funding rates, orderbook pressure, basis regime, and volume flow
@@ -355,7 +322,7 @@ def get_aster_market_summary() -> dict:
             summary["volume_flow"] = round(sum(flows) / len(flows), 4)
 
     except Exception as e:
-        log.warning("AsterDex market summary partially failed: %s", e)
+        log.warning("Bybit market summary partially failed: %s", e)
 
     return summary
 
@@ -366,16 +333,16 @@ def get_aster_market_summary() -> dict:
 
 @cached(ttl=300)
 def get_open_interest(symbol: str) -> float | None:
-    """Get current open interest for an AsterDex symbol.
+    """Get current open interest for an Bybit symbol.
 
     Args:
-        symbol: AsterDex symbol (e.g. 'BTCUSDT').
+        symbol: Bybit symbol (e.g. 'BTCUSDT').
 
     Returns open interest as float, or None on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_open_interest
-        data = get_aster_open_interest(symbol)
+        from trading.execution.bybit_client import get_bybit_open_interest
+        data = get_bybit_open_interest(symbol)
         return data.get("openInterest")
     except Exception as e:
         log.warning("Failed to fetch OI for %s: %s", symbol, e)
@@ -388,7 +355,7 @@ def get_open_interest_history(symbol: str, period: str = "1h",
     """Get historical open interest data.
 
     Args:
-        symbol: AsterDex symbol.
+        symbol: Bybit symbol.
         period: Data period (5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d).
         limit: Number of records.
 
@@ -396,8 +363,8 @@ def get_open_interest_history(symbol: str, period: str = "1h",
     Empty list on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_open_interest_hist
-        return get_aster_open_interest_hist(symbol, period=period, limit=limit)
+        from trading.execution.bybit_client import get_bybit_open_interest_hist
+        return get_bybit_open_interest_hist(symbol, period=period, limit=limit)
     except Exception as e:
         log.warning("Failed to fetch OI history for %s: %s", symbol, e)
         return []
@@ -409,7 +376,7 @@ def get_long_short_ratio(symbol: str, period: str = "1h",
     """Get top trader long/short account ratio.
 
     Args:
-        symbol: AsterDex symbol.
+        symbol: Bybit symbol.
         period: Data period.
         limit: Number of records.
 
@@ -417,8 +384,8 @@ def get_long_short_ratio(symbol: str, period: str = "1h",
     Empty list on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_long_short_ratio
-        return get_aster_long_short_ratio(symbol, period=period, limit=limit)
+        from trading.execution.bybit_client import get_bybit_long_short_ratio
+        return get_bybit_long_short_ratio(symbol, period=period, limit=limit)
     except Exception as e:
         log.warning("Failed to fetch long/short ratio for %s: %s", symbol, e)
         return []
@@ -433,8 +400,8 @@ def get_taker_buy_sell_ratio(symbol: str, period: str = "1h",
     Empty list on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_taker_buy_sell_volume
-        return get_aster_taker_buy_sell_volume(symbol, period=period, limit=limit)
+        from trading.execution.bybit_client import get_bybit_taker_buy_sell_volume
+        return get_bybit_taker_buy_sell_volume(symbol, period=period, limit=limit)
     except Exception as e:
         log.warning("Failed to fetch taker volume for %s: %s", symbol, e)
         return []
@@ -458,7 +425,7 @@ def get_funding_surface(symbols: list[str] | None = None) -> dict[str, dict]:
         slope > 0 means funding is rising (overleveraged longs accumulating).
         z_score is current 8h rate relative to 30-period history.
     """
-    target = symbols or _all_aster_symbols()
+    target = symbols or _all_bybit_symbols()
     result: dict[str, dict] = {}
 
     for sym in target:
@@ -570,8 +537,8 @@ def get_liquidation_estimate(symbol: str) -> dict:
 
         # Fetch current mark price
         try:
-            from trading.execution.aster_client import get_aster_mark_prices
-            prices = get_aster_mark_prices()
+            from trading.execution.bybit_client import get_bybit_mark_prices
+            prices = get_bybit_mark_prices()
             current_price = next(
                 (float(p.get("markPrice", 0)) for p in (prices if isinstance(prices, list) else [prices])
                  if p.get("symbol") == symbol),
@@ -609,7 +576,7 @@ def get_liquidation_estimate(symbol: str) -> dict:
 def get_enhanced_market_data() -> dict:
     """Extended market summary combining base summary + derivatives surfaces.
 
-    Extends get_aster_market_summary() with:
+    Extends get_bybit_market_summary() with:
     - funding_surface: multi-tenor funding rates per symbol
     - oi_deltas: OI trend per symbol
     - liquidation_estimates: long/short liq zone per symbol
@@ -618,11 +585,11 @@ def get_enhanced_market_data() -> dict:
     signal generation without extra API calls (all data sources are cached).
     """
     try:
-        base = get_aster_market_summary()
+        base = get_bybit_market_summary()
     except Exception:
         base = {}
 
-    symbols = _all_aster_symbols()
+    symbols = _all_bybit_symbols()
 
     funding_surface = get_funding_surface(symbols)
 

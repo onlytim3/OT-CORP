@@ -19,7 +19,7 @@ import statistics
 import numpy as np
 
 from trading.config import (
-    ASTER_SYMBOLS,
+    BYBIT_SYMBOLS,
     CRYPTO_L1,
     CRYPTO_DEFI,
 )
@@ -31,17 +31,17 @@ log = logging.getLogger(__name__)
 # Lazy imports for data functions — guarded so the module loads even if
 # the data layer is unavailable (e.g. during tests or backtest dry-runs).
 try:
-    from trading.data.aster import (
+    from trading.data.bybit import (
         get_funding_rates,
         get_taker_volume_ratio,
         get_basis_spread,
-        get_aster_ohlcv,
+        get_bybit_ohlcv,
     )
 except ImportError:
     get_funding_rates = None
     get_taker_volume_ratio = None
     get_basis_spread = None
-    get_aster_ohlcv = None
+    get_bybit_ohlcv = None
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -122,11 +122,11 @@ class MultiFactorRankStrategy(Strategy):
         """Build the tradeable universe from L1 + DeFi coins.
 
         Skips meme coins for ranking stability.  Only includes coins
-        that exist in both ASTER_SYMBOLS and ASTER_SYMBOLS.
+        that exist in both BYBIT_SYMBOLS and BYBIT_SYMBOLS.
         """
         universe = []
         for coin_id in CRYPTO_L1 + CRYPTO_DEFI:
-            if coin_id in ASTER_SYMBOLS and coin_id in ASTER_SYMBOLS:
+            if coin_id in BYBIT_SYMBOLS and coin_id in BYBIT_SYMBOLS:
                 universe.append(coin_id)
         return universe
 
@@ -136,11 +136,11 @@ class MultiFactorRankStrategy(Strategy):
 
     def _compute_momentum(self, coin_id: str) -> float | None:
         """Compute 7-day return from OHLCV data."""
-        if get_aster_ohlcv is None:
+        if get_bybit_ohlcv is None:
             return None
 
-        aster_sym = ASTER_SYMBOLS[coin_id]
-        df = get_aster_ohlcv(aster_sym, interval=self.ohlcv_interval,
+        bybit_sym = BYBIT_SYMBOLS[coin_id]
+        df = get_bybit_ohlcv(bybit_sym, interval=self.ohlcv_interval,
                              limit=self.ohlcv_limit)
         if df.empty or len(df) < 2:
             return None
@@ -168,8 +168,8 @@ class MultiFactorRankStrategy(Strategy):
         """Fetch taker buy ratio for a single asset."""
         if get_taker_volume_ratio is None:
             return None
-        aster_sym = ASTER_SYMBOLS[coin_id]
-        result = get_taker_volume_ratio(aster_sym)
+        bybit_sym = BYBIT_SYMBOLS[coin_id]
+        result = get_taker_volume_ratio(bybit_sym)
         if result is None:
             return None
         return result.get("buy_ratio")
@@ -178,8 +178,8 @@ class MultiFactorRankStrategy(Strategy):
         """Fetch basis spread percentage for a single asset."""
         if get_basis_spread is None:
             return None
-        aster_sym = ASTER_SYMBOLS[coin_id]
-        result = get_basis_spread(aster_sym)
+        bybit_sym = BYBIT_SYMBOLS[coin_id]
+        result = get_basis_spread(bybit_sym)
         if result is None or not isinstance(result, dict):
             return None
         basis = result.get("basis_pct")
@@ -334,7 +334,7 @@ class MultiFactorRankStrategy(Strategy):
 
         for i, (coin_id, score) in enumerate(ranked):
             rank = i + 1
-            symbol = ASTER_SYMBOLS[coin_id]
+            symbol = BYBIT_SYMBOLS[coin_id]
             strength = min(abs(score) / 2.0, 1.0)
 
             detail = {

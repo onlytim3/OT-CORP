@@ -479,13 +479,13 @@ def run_journal_agent() -> dict:
     # 6. Fill counterfactual exits with current prices (non-blocking)
     try:
         from trading.db.store import fill_counterfactual_exits
-        from trading.data.aster import get_aster_market_summary
-        summary_data = get_aster_market_summary() or {}
+        from trading.data.bybit import get_bybit_market_summary
+        summary_data = get_bybit_market_summary() or {}
         # Build price map from any available price field in market summary
         prices: dict[str, float] = {}
         try:
-            from trading.execution.aster_client import get_aster_mark_prices
-            for entry in (get_aster_mark_prices() or []):
+            from trading.execution.bybit_client import get_bybit_mark_prices
+            for entry in (get_bybit_mark_prices() or []):
                 sym = entry.get("symbol", "")
                 mp = entry.get("markPrice")
                 if sym and mp:

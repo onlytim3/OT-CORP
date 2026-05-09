@@ -44,26 +44,26 @@ EQUITY_MOMENTUM_THRESHOLD = 0.02  # 2% move considered significant
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_daily_closes(aster_symbol: str, days: int) -> np.ndarray | None:
-    """Fetch daily klines from AsterDex and return close prices as numpy array.
+def _fetch_daily_closes(bybit_symbol: str, days: int) -> np.ndarray | None:
+    """Fetch daily klines from Bybit and return close prices as numpy array.
 
     Returns array of close prices (oldest first) or None on failure.
     """
     try:
-        from trading.execution.aster_client import get_aster_klines
+        from trading.execution.bybit_client import get_bybit_klines
     except ImportError:
-        log.error("Cannot import get_aster_klines — aster_client unavailable")
+        log.error("Cannot import get_bybit_klines — bybit_client unavailable")
         return None
 
     try:
-        df = get_aster_klines(aster_symbol, interval="1d", limit=days + 5)
+        df = get_bybit_klines(bybit_symbol, interval="1d", limit=days + 5)
     except Exception as exc:
-        log.warning("Failed to fetch daily klines for %s: %s", aster_symbol, exc)
+        log.warning("Failed to fetch daily klines for %s: %s", bybit_symbol, exc)
         return None
 
     if df is None or df.empty or len(df) < MIN_DATA_POINTS:
         log.debug("Insufficient daily data for %s: got %d, need %d",
-                  aster_symbol, len(df) if df is not None else 0, MIN_DATA_POINTS)
+                  bybit_symbol, len(df) if df is not None else 0, MIN_DATA_POINTS)
         return None
 
     return df["close"].values.astype(float)
@@ -76,7 +76,7 @@ def _compute_returns(prices: np.ndarray) -> np.ndarray:
 
 def _compute_basket_returns(
     asset_ids: list[str],
-    aster_symbols: dict,
+    bybit_symbols: dict,
     days: int,
 ) -> tuple[np.ndarray | None, list[str]]:
     """Fetch daily closes for a basket and compute equal-weighted basket returns.
@@ -88,12 +88,12 @@ def _compute_basket_returns(
     min_length = None
 
     for asset_id in asset_ids:
-        aster_sym = aster_symbols.get(asset_id)
-        if not aster_sym:
-            log.debug("No AsterDex symbol for %s — skipping", asset_id)
+        bybit_sym = bybit_symbols.get(asset_id)
+        if not bybit_sym:
+            log.debug("No Bybit symbol for %s — skipping", asset_id)
             continue
 
-        closes = _fetch_daily_closes(aster_sym, days)
+        closes = _fetch_daily_closes(bybit_sym, days)
         if closes is None or len(closes) < MIN_DATA_POINTS:
             continue
 
@@ -149,7 +149,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
 
     def generate_signals(self) -> list[Signal]:
         try:
-            from trading.config import ASTER_SYMBOLS
+            from trading.config import BYBIT_SYMBOLS
         except ImportError:
             log.error("Cannot import symbol mappings from trading.config")
             return [self._hold("Config import failed")]
@@ -157,10 +157,10 @@ class EquityCryptoCorrelationStrategy(Strategy):
         # Fetch basket returns
         days_needed = CORRELATION_WINDOW + 5  # extra buffer
         equity_returns, equity_ids = _compute_basket_returns(
-            EQUITY_IDS, ASTER_SYMBOLS, days_needed,
+            EQUITY_IDS, BYBIT_SYMBOLS, days_needed,
         )
         crypto_returns, crypto_ids = _compute_basket_returns(
-            CRYPTO_IDS, ASTER_SYMBOLS, days_needed,
+            CRYPTO_IDS, BYBIT_SYMBOLS, days_needed,
         )
 
         if equity_returns is None or crypto_returns is None:
@@ -228,7 +228,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
                     0.85,
                 )
                 for cid in crypto_ids:
-                    sym = ASTER_SYMBOLS.get(cid)
+                    sym = BYBIT_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -257,7 +257,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
                     0.85,
                 )
                 for cid in crypto_ids:
-                    sym = ASTER_SYMBOLS.get(cid)
+                    sym = BYBIT_SYMBOLS.get(cid)
                     if sym:
                         signals.append(Signal(
                             strategy=self.name,
@@ -289,7 +289,7 @@ class EquityCryptoCorrelationStrategy(Strategy):
                 if equity_momentum > EQUITY_MOMENTUM_THRESHOLD and crypto_momentum < 0:
                     strength = min(0.3 + abs(correlation) * 0.5, 0.55)
                     for cid in crypto_ids:
-                        sym = ASTER_SYMBOLS.get(cid)
+                        sym = BYBIT_SYMBOLS.get(cid)
                         if sym:
                             signals.append(Signal(
                                 strategy=self.name,

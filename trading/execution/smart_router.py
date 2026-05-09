@@ -1,7 +1,7 @@
 """Smart order routing -- compare venues and select the best execution path.
 
-Currently supports AsterDex (perpetual futures) as the primary venue.
-Alpaca comparison is logged but AsterDex is always preferred for perps.
+Currently supports Bybit (perpetual futures) as the primary venue.
+Alpaca comparison is logged but Bybit is always preferred for perps.
 This module provides the foundation for multi-venue routing when additional
 venues are integrated.
 """
@@ -12,14 +12,14 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 # Venue constants
-VENUE_ASTER = "asterdex"
+VENUE_BYBIT = "asterdex"
 VENUE_ALPACA = "alpaca"
 
 
 def compare_venues(symbol: str) -> dict:
     """Compare execution quality across available venues for a symbol.
 
-    Fetches bid/ask from AsterDex and (if available) Alpaca, computing
+    Fetches bid/ask from Bybit and (if available) Alpaca, computing
     spread and depth metrics for each.
 
     Args:
@@ -30,19 +30,19 @@ def compare_venues(symbol: str) -> dict:
     """
     result = {}
 
-    # AsterDex (always available for crypto perps)
+    # Bybit (always available for crypto perps)
     try:
-        from trading.execution.router import _to_aster
-        from trading.execution.aster_client import get_aster_book_ticker
+        from trading.execution.router import _to_bybit
+        from trading.execution.bybit_client import get_bybit_book_ticker
 
-        aster_sym = _to_aster(symbol)
-        book = get_aster_book_ticker(aster_sym)
+        bybit_sym = _to_bybit(symbol)
+        book = get_bybit_book_ticker(bybit_sym)
         bid = float(book.get("bidPrice", 0))
         ask = float(book.get("askPrice", 0))
         mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0
         spread_bps = (ask - bid) / mid * 10000 if mid > 0 else 0
 
-        result[VENUE_ASTER] = {
+        result[VENUE_BYBIT] = {
             "bid": bid,
             "ask": ask,
             "mid": mid,
@@ -52,20 +52,20 @@ def compare_venues(symbol: str) -> dict:
             "available": True,
         }
     except Exception as e:
-        log.debug("AsterDex venue check failed for %s: %s", symbol, e)
-        result[VENUE_ASTER] = {"available": False, "error": str(e)}
+        log.debug("Bybit venue check failed for %s: %s", symbol, e)
+        result[VENUE_BYBIT] = {"available": False, "error": str(e)}
 
     # Alpaca (logged for comparison only -- not used for execution)
     result[VENUE_ALPACA] = {
         "available": False,
-        "reason": "Alpaca perp routing not implemented -- AsterDex preferred",
+        "reason": "Alpaca perp routing not implemented -- Bybit preferred",
     }
 
     # Log comparison
-    if result[VENUE_ASTER].get("available"):
-        aster_spread = result[VENUE_ASTER]["spread_bps"]
+    if result[VENUE_BYBIT].get("available"):
+        aster_spread = result[VENUE_BYBIT]["spread_bps"]
         log.debug(
-            "Venue comparison for %s: AsterDex spread=%.1fbps",
+            "Venue comparison for %s: Bybit spread=%.1fbps",
             symbol, aster_spread,
         )
 
@@ -75,7 +75,7 @@ def compare_venues(symbol: str) -> dict:
 def route_order(symbol: str, side: str, qty: float) -> dict:
     """Determine the best venue for order execution.
 
-    Current behavior: always routes to AsterDex for perpetual futures.
+    Current behavior: always routes to Bybit for perpetual futures.
     Logs venue comparison for future optimization.
 
     Args:
@@ -88,12 +88,12 @@ def route_order(symbol: str, side: str, qty: float) -> dict:
     """
     venues = compare_venues(symbol)
 
-    # Current policy: AsterDex for all perps
-    chosen = VENUE_ASTER
-    reason = "AsterDex is the primary venue for perpetual futures"
+    # Current policy: Bybit for all perps
+    chosen = VENUE_BYBIT
+    reason = "Bybit is the primary venue for perpetual futures"
 
     # Log the routing decision
-    aster_data = venues.get(VENUE_ASTER, {})
+    aster_data = venues.get(VENUE_BYBIT, {})
     if aster_data.get("available"):
         spread = aster_data.get("spread_bps", 0)
         log.info(
@@ -119,5 +119,5 @@ def get_preferred_venue(symbol: str) -> str:
     Returns the venue string (e.g. "asterdex") without performing
     a full venue comparison. Used to set preferred_venue in Signal.data.
     """
-    # All crypto perps go to AsterDex
-    return VENUE_ASTER
+    # All crypto perps go to Bybit
+    return VENUE_BYBIT

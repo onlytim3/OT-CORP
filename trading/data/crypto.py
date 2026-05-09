@@ -1,43 +1,43 @@
-"""Crypto market data — AsterDex primary, Alpaca fallback.
+"""Crypto market data — Bybit primary, Alpaca fallback.
 
-v4: Migrated from Alpaca to AsterDex klines for all crypto data.
+v4: Migrated from Alpaca to Bybit klines for all crypto data.
     Same function signatures so all strategies continue working.
-    Uses AsterDex public endpoints (no auth needed for market data).
+    Uses Bybit public endpoints (no auth needed for market data).
 """
 
 import logging
 
 import pandas as pd
 
-from trading.config import CRYPTO_SYMBOLS, ASTER_SYMBOLS, DEFAULT_COINS
+from trading.config import CRYPTO_SYMBOLS, BYBIT_SYMBOLS, DEFAULT_COINS
 from trading.data.cache import cached
 
 log = logging.getLogger(__name__)
 
 
-def _get_aster_klines(symbol: str, interval: str = "1h", limit: int = 500) -> pd.DataFrame:
-    """Fetch klines from AsterDex and return as DataFrame.
+def _get_bybit_klines(symbol: str, interval: str = "1h", limit: int = 500) -> pd.DataFrame:
+    """Fetch klines from Bybit and return as DataFrame.
 
-    The aster_client.get_aster_klines already returns a properly-indexed DataFrame
+    The bybit_client.get_bybit_klines already returns a properly-indexed DataFrame
     with open, high, low, close, volume columns.
     """
-    from trading.execution.aster_client import get_aster_klines
+    from trading.execution.bybit_client import get_bybit_klines
 
     try:
-        df = get_aster_klines(symbol, interval=interval, limit=limit)
+        df = get_bybit_klines(symbol, interval=interval, limit=limit)
         return df
     except Exception as e:
-        log.error("AsterDex klines failed for %s: %s", symbol, e)
+        log.error("Bybit klines failed for %s: %s", symbol, e)
         return pd.DataFrame()
 
 
-def _get_aster_ticker(aster_sym: str) -> dict:
-    """Get 24h ticker from AsterDex."""
-    from trading.execution.aster_client import get_aster_ticker_24h
+def _get_bybit_ticker(bybit_sym: str) -> dict:
+    """Get 24h ticker from Bybit."""
+    from trading.execution.bybit_client import get_bybit_ticker_24h
     try:
-        return get_aster_ticker_24h(aster_sym)
+        return get_bybit_ticker_24h(bybit_sym)
     except Exception as e:
-        log.error("AsterDex ticker failed for %s: %s", aster_sym, e)
+        log.error("Bybit ticker failed for %s: %s", bybit_sym, e)
         return {}
 
 
@@ -91,11 +91,11 @@ def get_prices(coin_ids: list[str] | None = None) -> dict:
 
     result = {}
     for coin_id in coin_ids:
-        aster_sym = ASTER_SYMBOLS.get(coin_id)
-        if not aster_sym:
+        bybit_sym = BYBIT_SYMBOLS.get(coin_id)
+        if not bybit_sym:
             continue
 
-        ticker = _get_aster_ticker(aster_sym)
+        ticker = _get_bybit_ticker(bybit_sym)
         if not ticker:
             continue
 
@@ -121,18 +121,18 @@ def get_market_data(coin_ids: list[str] | None = None) -> pd.DataFrame:
     Returns DataFrame with columns: id, symbol, name, current_price,
     market_cap, total_volume, price_change_7d, price_change_30d, price_change_24h
 
-    Uses AsterDex 24h tickers + daily klines for 7d/30d changes.
+    Uses Bybit 24h tickers + daily klines for 7d/30d changes.
     """
     if coin_ids is None:
         coin_ids = DEFAULT_COINS
 
     rows = []
     for coin_id in coin_ids:
-        aster_sym = ASTER_SYMBOLS.get(coin_id)
-        if not aster_sym:
+        bybit_sym = BYBIT_SYMBOLS.get(coin_id)
+        if not bybit_sym:
             continue
 
-        ticker = _get_aster_ticker(aster_sym)
+        ticker = _get_bybit_ticker(bybit_sym)
         if not ticker:
             continue
 
@@ -144,7 +144,7 @@ def get_market_data(coin_ids: list[str] | None = None) -> pd.DataFrame:
         change_7d = 0.0
         change_30d = 0.0
         try:
-            daily_df = _get_aster_klines(aster_sym, interval="1d", limit=31)
+            daily_df = _get_bybit_klines(bybit_sym, interval="1d", limit=31)
             if not daily_df.empty:
                 closes = daily_df["close"].values
                 if len(closes) >= 7:
@@ -156,7 +156,7 @@ def get_market_data(coin_ids: list[str] | None = None) -> pd.DataFrame:
         except Exception as e:
             log.debug("Daily kline change calc failed for %s: %s", coin_id, e)
 
-        short_sym = aster_sym.replace("USDT", "").lower()
+        short_sym = bybit_sym.replace("USDT", "").lower()
 
         rows.append({
             "id": coin_id,
@@ -193,8 +193,8 @@ def get_ohlc(coin_id: str, days: int = 30) -> pd.DataFrame:
     Returns DataFrame with columns: open, high, low, close
     indexed by timestamp. Uses hourly klines for <= 30 days, daily for longer.
     """
-    aster_sym = ASTER_SYMBOLS.get(coin_id)
-    if not aster_sym:
+    bybit_sym = BYBIT_SYMBOLS.get(coin_id)
+    if not bybit_sym:
         log.warning("Unknown coin ID for OHLC: %s", coin_id)
         return pd.DataFrame(columns=["open", "high", "low", "close"])
 
@@ -206,7 +206,7 @@ def get_ohlc(coin_id: str, days: int = 30) -> pd.DataFrame:
         interval = "1d"
         limit = min(days, 500)
 
-    df = _get_aster_klines(aster_sym, interval=interval, limit=limit)
+    df = _get_bybit_klines(bybit_sym, interval=interval, limit=limit)
 
     if df.empty:
         log.warning("Empty OHLC data for %s", coin_id)
@@ -232,11 +232,11 @@ def get_historical_prices(coin_id: str, days: int = 90) -> pd.DataFrame:
     Returns DataFrame with columns: price, volume
     indexed by timestamp (daily).
     """
-    aster_sym = ASTER_SYMBOLS.get(coin_id)
-    if not aster_sym:
+    bybit_sym = BYBIT_SYMBOLS.get(coin_id)
+    if not bybit_sym:
         raise DataValidationError(f"Unknown coin ID: {coin_id}")
 
-    df = _get_aster_klines(aster_sym, interval="1d", limit=min(days, 500))
+    df = _get_bybit_klines(bybit_sym, interval="1d", limit=min(days, 500))
 
     if df.empty:
         raise DataValidationError(f"Empty historical data for {coin_id}")

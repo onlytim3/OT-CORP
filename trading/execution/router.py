@@ -1,11 +1,11 @@
 """Execution router — unified interface for order routing.
 
-Routes crypto orders to AsterDex perpetual futures.
+Routes crypto orders to Bybit perpetual futures.
 Provides the same interface as alpaca_client so the rest of the system
 (main.py, scheduler.py, risk manager) doesn't need to change.
 
 Symbol translation: strategies emit Alpaca-style symbols (BTC/USD),
-the router converts to AsterDex format (BTCUSDT) before execution.
+the router converts to Bybit format (BTCUSDT) before execution.
 """
 
 import logging
@@ -15,8 +15,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from trading.config import ASTER_SYMBOLS
-from trading.data.aster import aster_to_alpaca
+from trading.config import BYBIT_SYMBOLS
+from trading.data.bybit import bybit_to_alpaca
 from trading.execution.schedule import get_intraday_activity_mult
 
 log = logging.getLogger(__name__)
@@ -30,29 +30,29 @@ USE_LIMIT_ORDERS = os.getenv("USE_LIMIT_ORDERS", "true").lower() == "true"
 # Symbol mapping
 # ---------------------------------------------------------------------------
 
-# AsterDex symbol -> Alpaca symbol (for position reporting)
-# Since we removed CRYPTO_SYMBOLS, we map dynamically if needed or just use aster_to_alpaca.
+# Bybit symbol -> Alpaca symbol (for position reporting)
+# Since we removed CRYPTO_SYMBOLS, we map dynamically if needed or just use bybit_to_alpaca.
 
 # ---------------------------------------------------------------------------
-# AsterDex symbol validation (populated lazily on first order)
+# Bybit symbol validation (populated lazily on first order)
 # ---------------------------------------------------------------------------
 
-_VALID_ASTER_SYMBOLS: set[str] = set()
+_VALID_BYBIT_SYMBOLS: set[str] = set()
 
 
-def validate_aster_symbols():
-    """Fetch valid symbols from AsterDex and cache them."""
-    global _VALID_ASTER_SYMBOLS
+def validate_bybit_symbols():
+    """Fetch valid symbols from Bybit and cache them."""
+    global _VALID_BYBIT_SYMBOLS
     try:
-        from trading.execution.aster_client import get_aster_exchange_info
-        info = get_aster_exchange_info()
-        _VALID_ASTER_SYMBOLS = {s["symbol"] for s in info.get("symbols", [])}
-        log.info("Validated %d AsterDex symbols", len(_VALID_ASTER_SYMBOLS))
+        from trading.execution.bybit_client import get_bybit_exchange_info
+        info = get_bybit_exchange_info()
+        _VALID_BYBIT_SYMBOLS = {s["symbol"] for s in info.get("symbols", [])}
+        log.info("Validated %d Bybit symbols", len(_VALID_BYBIT_SYMBOLS))
     except Exception as e:
-        log.warning("Could not validate AsterDex symbols: %s", e)
+        log.warning("Could not validate Bybit symbols: %s", e)
 
 
-_ALPACA_TO_ASTER: dict[str, str] = {
+_ALPACA_TO_BYBIT: dict[str, str] = {
     "XAU/USD": "GOLDUSDT",
     "XAG/USD": "SILVERUSDT",
     "GLD": "GOLDUSDT",
@@ -60,43 +60,43 @@ _ALPACA_TO_ASTER: dict[str, str] = {
 }
 
 
-def _to_aster(symbol: str) -> str:
-    """Convert any symbol format to AsterDex format."""
+def _to_bybit(symbol: str) -> str:
+    """Convert any symbol format to Bybit format."""
     # Hard-coded overrides for commodity symbols that don't follow XYZUSDT pattern
-    if symbol in _ALPACA_TO_ASTER:
-        return _ALPACA_TO_ASTER[symbol]
+    if symbol in _ALPACA_TO_BYBIT:
+        return _ALPACA_TO_BYBIT[symbol]
 
-    # Normalise any symbol format to AsterDex XYZUSDT form.
+    # Normalise any symbol format to Bybit XYZUSDT form.
     # Handles: "BNB/USD" (slash), "BTCUSD" (slash-stripped USD suffix), "BTCUSDT" (already correct)
-    aster = symbol
-    if "/" in aster:
-        base = aster.split("/")[0]
-        aster = f"{base}USDT"
-    elif aster.endswith("USD") and not aster.endswith("USDT"):
+    bybit = symbol
+    if "/" in bybit:
+        base = bybit.split("/")[0]
+        bybit = f"{base}USDT"
+    elif bybit.endswith("USD") and not bybit.endswith("USDT"):
         # "BTCUSD" → "BTCUSDT" — slash-stripped Alpaca format stored in paper_positions
-        aster = aster[:-3] + "USDT"
-    elif not aster.endswith("USDT"):
-        aster = f"{aster}USDT"
+        bybit = bybit[:-3] + "USDT"
+    elif not bybit.endswith("USDT"):
+        bybit = f"{bybit}USDT"
 
     # Warn if converted symbol is not in the validated set
-    if _VALID_ASTER_SYMBOLS and aster not in _VALID_ASTER_SYMBOLS:
-        log.warning("Symbol %s (from %s) not found in AsterDex exchange info", aster, symbol)
+    if _VALID_BYBIT_SYMBOLS and bybit not in _VALID_BYBIT_SYMBOLS:
+        log.warning("Symbol %s (from %s) not found in Bybit exchange info", bybit, symbol)
 
-    return aster
+    return bybit
 
 
-def _is_valid_symbol(aster_sym: str) -> bool:
-    """Check if a symbol exists on AsterDex."""
-    if not _VALID_ASTER_SYMBOLS:
-        validate_aster_symbols()
-    return not _VALID_ASTER_SYMBOLS or aster_sym in _VALID_ASTER_SYMBOLS
+def _is_valid_symbol(bybit_sym: str) -> bool:
+    """Check if a symbol exists on Bybit."""
+    if not _VALID_BYBIT_SYMBOLS:
+        validate_bybit_symbols()
+    return not _VALID_BYBIT_SYMBOLS or bybit_sym in _VALID_BYBIT_SYMBOLS
 
 
 def _to_alpaca(symbol: str) -> str:
-    """Convert AsterDex symbol back to Alpaca format for internal tracking."""
+    """Convert Bybit symbol back to Alpaca format for internal tracking."""
     if "/" in symbol:
         return symbol  # Already Alpaca format
-    alpaca = aster_to_alpaca(symbol)
+    alpaca = bybit_to_alpaca(symbol)
     if alpaca:
         return alpaca
     # Fallback: BTCUSDT -> BTC/USD
@@ -105,23 +105,23 @@ def _to_alpaca(symbol: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Account & positions (read from AsterDex)
+# Account & positions (read from Bybit)
 # ---------------------------------------------------------------------------
 
 def get_account() -> dict:
-    """Get account info — paper mode uses local simulation, live uses AsterDex."""
+    """Get account info — paper mode uses local simulation, live uses Bybit."""
     import os
     from trading.config import TRADING_MODE
     from trading.db.store import get_setting
-    from trading.execution.aster_client import aster_get_account, is_aster_configured
+    from trading.execution.bybit_client import bybit_get_account, is_bybit_configured
 
     # Paper mode: use fully simulated account
     mode = get_setting("trading_mode", TRADING_MODE)
     if mode == "paper":
         return _paper_get_account()
 
-    if not is_aster_configured():
-        log.warning("AsterDex not configured, returning empty account")
+    if not is_bybit_configured():
+        log.warning("Bybit not configured, returning empty account")
         return {
             "portfolio_value": 0.0,
             "cash": 0.0,
@@ -133,7 +133,7 @@ def get_account() -> dict:
         }
 
     try:
-        acct = aster_get_account()
+        acct = bybit_get_account()
         total_balance = acct.get("totalWalletBalance", 0.0)
         available = acct.get("availableBalance", 0.0)
         unrealized_pnl = acct.get("totalUnrealizedProfit", 0.0)
@@ -152,7 +152,7 @@ def get_account() -> dict:
             "margin_balance": acct.get("totalMarginBalance", 0.0),
         }
     except Exception as e:
-        log.error("Failed to get AsterDex account: %s", e)
+        log.error("Failed to get Bybit account: %s", e)
         return {
             "portfolio_value": 0.0,
             "cash": 0.0,
@@ -164,29 +164,29 @@ def get_account() -> dict:
         }
 
 
-def get_positions_from_aster() -> list[dict]:
-    """Get positions — paper mode reads from DB, live mode from AsterDex."""
+def get_positions_from_bybit() -> list[dict]:
+    """Get positions — paper mode reads from DB, live mode from Bybit."""
     from trading.config import TRADING_MODE
     from trading.db.store import get_setting
     mode = get_setting("trading_mode", TRADING_MODE)
     if mode == "paper":
         return _paper_get_positions()
 
-    from trading.execution.aster_client import aster_get_positions, is_aster_configured
+    from trading.execution.bybit_client import bybit_get_positions, is_bybit_configured
 
-    if not is_aster_configured():
+    if not is_bybit_configured():
         return []
 
     try:
-        positions = aster_get_positions()
+        positions = bybit_get_positions()
         result = []
         for pos in positions:
             qty = abs(pos.get("positionAmt", 0.0))
             if qty < 1e-10:
                 continue  # Skip empty positions
 
-            aster_sym = pos.get("symbol", "")
-            alpaca_sym = _to_alpaca(aster_sym)
+            bybit_sym = pos.get("symbol", "")
+            alpaca_sym = _to_alpaca(bybit_sym)
             entry_price = pos.get("entryPrice", 0.0)
             mark_price = pos.get("markPrice", 0.0)
             unrealized = pos.get("unRealizedProfit", 0.0)
@@ -208,14 +208,14 @@ def get_positions_from_aster() -> list[dict]:
                 "unrealized_pnl": unrealized,
                 "unrealized_pnl_pct": unrealized_pnl_pct,
                 "side": side,
-                "strategy": "",  # AsterDex doesn't track this; DB has it
-                "aster_symbol": aster_sym,
+                "strategy": "",  # Bybit doesn't track this; DB has it
+                "bybit_symbol": bybit_sym,
                 "leverage": pos.get("leverage", 1),
                 "liquidation_price": pos.get("liquidationPrice", 0),
             })
         return result
     except Exception as e:
-        log.error("Failed to get AsterDex positions: %s", e)
+        log.error("Failed to get Bybit positions: %s", e)
         return []
 
 
@@ -232,10 +232,10 @@ def place_limit_order(
     leverage: int = 1,
     stop_loss_price: Optional[float] = None,
 ) -> dict:
-    """Place a limit order on AsterDex.
+    """Place a limit order on Bybit.
 
     Args:
-        symbol: Alpaca-style or AsterDex symbol.
+        symbol: Alpaca-style or Bybit symbol.
         side: 'buy' or 'sell'.
         qty: Order quantity.
         price: Limit price.
@@ -285,17 +285,17 @@ def place_limit_with_fallback(
     Returns:
         Alpaca-compatible order result dict (from limit or market fallback).
     """
-    from trading.execution.aster_client import (
-        get_aster_book_ticker,
-        aster_cancel_order,
+    from trading.execution.bybit_client import (
+        get_bybit_book_ticker,
+        bybit_cancel_order,
     )
 
-    aster_sym = _to_aster(symbol)
+    bybit_sym = _to_bybit(symbol)
 
     # Auto-compute limit price from book if not provided
     if limit_price is None:
         try:
-            book = get_aster_book_ticker(aster_sym)
+            book = get_bybit_book_ticker(bybit_sym)
             bid = float(book.get("bidPrice", 0))
             ask = float(book.get("askPrice", 0))
             if bid > 0 and ask > 0:
@@ -335,7 +335,7 @@ def place_limit_with_fallback(
         return order
 
     # Poll for fill
-    order_id = order.get("aster_order_id") or order.get("id")
+    order_id = order.get("bybit_order_id") or order.get("id")
     poll_interval = 5
     elapsed = 0
     while elapsed < timeout:
@@ -349,7 +349,7 @@ def place_limit_with_fallback(
                          status.get("filled_avg_price", 0))
                 # Place SL now that we're filled
                 if stop_loss_price and stop_loss_price > 0:
-                    _place_stop_loss(aster_sym, side, qty, stop_loss_price)
+                    _place_stop_loss(bybit_sym, side, qty, stop_loss_price)
                 return status
             if status.get("status") in ("canceled", "rejected", "expired"):
                 log.warning("Limit order %s for %s -- falling back to market",
@@ -360,7 +360,7 @@ def place_limit_with_fallback(
 
     # Timeout or cancelled -- cancel remaining and fall back to market
     try:
-        aster_cancel_order(aster_sym, order_id=int(order_id))
+        bybit_cancel_order(bybit_sym, order_id=str(order_id))
         log.info("Cancelled unfilled limit order %s for %s", order_id, symbol)
     except Exception as e:
         log.debug("Cancel attempt for %s: %s", order_id, e)
@@ -396,25 +396,25 @@ def place_limit_with_fallback(
 
     # Fully filled during cancel/poll window
     if stop_loss_price and stop_loss_price > 0:
-        _place_stop_loss(aster_sym, side, qty, stop_loss_price)
+        _place_stop_loss(bybit_sym, side, qty, stop_loss_price)
     return final_status
 
 
-def _place_stop_loss(aster_sym: str, side: str, qty: float, stop_loss_price: float):
+def _place_stop_loss(bybit_sym: str, side: str, qty: float, stop_loss_price: float):
     """Place a server-side stop-loss order."""
     try:
-        from trading.execution.aster_client import aster_submit_order as _aster_order
+        from trading.execution.bybit_client import bybit_submit_order as _bybit_order
         stop_side = "SELL" if side.lower() == "buy" else "BUY"
-        _aster_order(
-            symbol=aster_sym,
+        _bybit_order(
+            symbol=bybit_sym,
             side=stop_side,
             order_type="STOP_MARKET",
             quantity=qty,
             stop_price=stop_loss_price,
         )
-        log.info("Stop-loss placed: %s %s @ $%.2f", stop_side, aster_sym, stop_loss_price)
+        log.info("Stop-loss placed: %s %s @ $%.2f", stop_side, bybit_sym, stop_loss_price)
     except Exception as e:
-        log.warning("Failed to place stop-loss for %s: %s", aster_sym, e)
+        log.warning("Failed to place stop-loss for %s: %s", bybit_sym, e)
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +434,7 @@ def submit_order(
     time_in_force: str = "GTC",
     strategy: str = "",
 ) -> dict:
-    """Submit an order -- paper mode simulates locally, live mode hits AsterDex.
+    """Submit an order -- paper mode simulates locally, live mode hits Bybit.
 
     When USE_LIMIT_ORDERS is enabled and order_type is MARKET, the order
     is automatically upgraded to a limit-with-fallback. Large orders
@@ -472,13 +472,13 @@ def submit_order(
                 from trading.execution.twap import should_use_twap, execute_twap
                 if should_use_twap(effective_notional, symbol):
                     # Need qty for TWAP -- compute from notional
-                    from trading.execution.aster_client import get_aster_mark_prices as _gmp
-                    _aster = _to_aster(symbol)
-                    _md = _gmp(_aster)
+                    from trading.execution.bybit_client import get_bybit_mark_prices as _gmp
+                    _bybit = _to_bybit(symbol)
+                    _md = _gmp(_bybit)
                     _mp = _md.get("markPrice", 0)
                     if _mp > 0:
                         twap_qty = qty if qty else (effective_notional / _mp)
-                        twap_qty = _round_qty(_aster, twap_qty)
+                        twap_qty = _round_qty(_bybit, twap_qty)
                         if twap_qty > 0:
                             log.info("Routing %s %s to TWAP (notional=$%.2f)",
                                      side, symbol, effective_notional)
@@ -497,12 +497,12 @@ def submit_order(
         resolved_qty = qty
         if resolved_qty is None and notional and notional > 0:
             try:
-                from trading.execution.aster_client import get_aster_mark_prices as _gmp2
-                _aster2 = _to_aster(symbol)
-                _md2 = _gmp2(_aster2)
+                from trading.execution.bybit_client import get_bybit_mark_prices as _gmp2
+                _bybit2 = _to_bybit(symbol)
+                _md2 = _gmp2(_bybit2)
                 _mp2 = _md2.get("markPrice", 0)
                 if _mp2 > 0:
-                    resolved_qty = _round_qty(_aster2, notional / _mp2)
+                    resolved_qty = _round_qty(_bybit2, notional / _mp2)
             except Exception:
                 pass
 
@@ -517,31 +517,31 @@ def submit_order(
             )
         # Fall through to standard MARKET if qty resolution failed
 
-    from trading.execution.aster_client import (
-        aster_submit_order,
-        get_aster_mark_prices,
-        get_aster_book_ticker,
-        aster_set_leverage,
-        is_aster_configured,
+    from trading.execution.bybit_client import (
+        bybit_submit_order,
+        get_bybit_mark_prices,
+        get_bybit_book_ticker,
+        bybit_set_leverage,
+        is_bybit_configured,
     )
 
     # Lazy symbol validation: fetch exchange info once on first order
-    if not _VALID_ASTER_SYMBOLS:
-        validate_aster_symbols()
+    if not _VALID_BYBIT_SYMBOLS:
+        validate_bybit_symbols()
 
-    aster_sym = _to_aster(symbol)
+    bybit_sym = _to_bybit(symbol)
     side_upper = side.upper()
 
-    # Reject orders for symbols that don't exist on AsterDex
-    if not _is_valid_symbol(aster_sym):
-        log.warning("Rejecting order: %s (%s) not listed on AsterDex", aster_sym, symbol)
+    # Reject orders for symbols that don't exist on Bybit
+    if not _is_valid_symbol(bybit_sym):
+        log.warning("Rejecting order: %s (%s) not listed on Bybit", bybit_sym, symbol)
         from trading.db.store import log_action
         log_action("error", "symbol_not_listed", symbol=symbol,
-                   details=f"{aster_sym} is not listed on AsterDex — order skipped")
+                   details=f"{bybit_sym} is not listed on Bybit — order skipped")
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
-            "reason": f"{aster_sym} not listed on AsterDex",
+            "reason": f"{bybit_sym} not listed on Bybit",
             "symbol": symbol,
             "side": side,
             "qty": 0,
@@ -549,13 +549,13 @@ def submit_order(
             "filled_avg_price": 0,
         }
 
-    # Map buy/sell to AsterDex BUY/SELL
+    # Map buy/sell to Bybit BUY/SELL
     if side_upper not in ("BUY", "SELL"):
         side_upper = "BUY" if side.lower() == "buy" else "SELL"
 
     # Get current price for qty calculation
     try:
-        mark_data = get_aster_mark_prices(aster_sym)
+        mark_data = get_bybit_mark_prices(bybit_sym)
         mark_price = mark_data.get("markPrice", 0)
     except Exception:
         mark_price = 0
@@ -580,19 +580,19 @@ def submit_order(
     # Set leverage if not default
     if leverage > 1:
         try:
-            aster_set_leverage(aster_sym, leverage)
+            bybit_set_leverage(bybit_sym, leverage)
         except Exception as e:
-            log.warning("Failed to set leverage %dx for %s: %s", leverage, aster_sym, e)
+            log.warning("Failed to set leverage %dx for %s: %s", leverage, bybit_sym, e)
 
     # Round qty to exchange stepSize and enforce minQty
-    qty = _round_qty(aster_sym, qty)
+    qty = _round_qty(bybit_sym, qty)
 
     if qty <= 0:
-        log.warning("Qty rounded to 0 for %s (notional=$%.2f, price=%.4f)", aster_sym, notional or 0, mark_price)
+        log.warning("Qty rounded to 0 for %s (notional=$%.2f, price=%.4f)", bybit_sym, notional or 0, mark_price)
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
-            "reason": f"Order too small for {aster_sym} after rounding to exchange step size",
+            "reason": f"Order too small for {bybit_sym} after rounding to exchange step size",
             "symbol": symbol,
             "side": side,
             "qty": 0,
@@ -600,17 +600,17 @@ def submit_order(
             "filled_avg_price": 0,
         }
 
-    # Check min notional ($5 on most AsterDex pairs)
+    # Check min notional ($5 on most Bybit pairs)
     _load_symbol_filters()
-    sym_filters = _SYMBOL_FILTERS.get(aster_sym, {})
+    sym_filters = _SYMBOL_FILTERS.get(bybit_sym, {})
     min_notional = sym_filters.get("minNotional", 5)
     order_notional_est = qty * mark_price if mark_price > 0 else (notional or 0)
     if order_notional_est < min_notional:
-        log.warning("Order below min notional: %s $%.2f < $%.2f", aster_sym, order_notional_est, min_notional)
+        log.warning("Order below min notional: %s $%.2f < $%.2f", bybit_sym, order_notional_est, min_notional)
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
-            "reason": f"Order value ${order_notional_est:.2f} below minimum ${min_notional:.0f} for {aster_sym}",
+            "reason": f"Order value ${order_notional_est:.2f} below minimum ${min_notional:.0f} for {bybit_sym}",
             "symbol": symbol,
             "side": side,
             "qty": qty,
@@ -622,7 +622,7 @@ def submit_order(
     # Slippage estimation (advisory — does not block the order)
     # -----------------------------------------------------------------------
     try:
-        book = get_aster_book_ticker(aster_sym)
+        book = get_bybit_book_ticker(bybit_sym)
         bid = float(book.get("bidPrice", 0))
         ask = float(book.get("askPrice", 0))
         if bid > 0 and ask > 0:
@@ -634,23 +634,23 @@ def submit_order(
             if spread_pct > 0.5:
                 log.warning(
                     "SLIPPAGE ADVISORY: %s spread=%.3f%% (bid=%.4f ask=%.4f) — wide spread",
-                    aster_sym, spread_pct, bid, ask,
+                    bybit_sym, spread_pct, bid, ask,
                 )
             if best_qty > 0 and order_notional > mid * best_qty * 0.5:
                 log.warning(
                     "SLIPPAGE ADVISORY: %s order notional $%.2f exceeds 50%% of best "
                     "book depth ($%.2f) — potential market impact",
-                    aster_sym, order_notional, mid * best_qty,
+                    bybit_sym, order_notional, mid * best_qty,
                 )
     except Exception as e:
-        log.debug("Slippage check skipped for %s: %s", aster_sym, e)
+        log.debug("Slippage check skipped for %s: %s", bybit_sym, e)
 
-    log.info("Routing to AsterDex: %s %s %.6f %s (notional=$%.2f)",
-             side_upper, aster_sym, qty, order_type, notional or 0)
+    log.info("Routing to Bybit: %s %s %.6f %s (notional=$%.2f)",
+             side_upper, bybit_sym, qty, order_type, notional or 0)
 
     try:
         submit_kwargs = {
-            "symbol": aster_sym,
+            "symbol": bybit_sym,
             "side": side_upper,
             "order_type": order_type,
             "quantity": qty,
@@ -658,17 +658,22 @@ def submit_order(
         if order_type == "LIMIT" and limit_price is not None:
             submit_kwargs["price"] = limit_price
             submit_kwargs["time_in_force"] = time_in_force
-        result = aster_submit_order(**submit_kwargs)
+        result = bybit_submit_order(**submit_kwargs)
 
         # Translate response to Alpaca-compatible format
         status = result.get("status", "UNKNOWN").lower()
-        # Map AsterDex statuses to Alpaca equivalents
+        # Map Bybit V5 statuses to Alpaca equivalents
         status_map = {
             "new": "accepted",
+            "partiallyfilled": "partially_filled",
             "partially_filled": "partially_filled",
             "filled": "filled",
+            "cancelled": "canceled",
             "canceled": "canceled",
             "rejected": "rejected",
+            "untriggered": "accepted",
+            "triggered": "accepted",
+            "deactivated": "canceled",
             "expired": "expired",
         }
         alpaca_status = status_map.get(status, status)
@@ -682,17 +687,17 @@ def submit_order(
             "filled_qty": float(result.get("executedQty", 0)),
             "filled_avg_price": float(result.get("avgPrice", mark_price)),
             "order_type": order_type,
-            "aster_order_id": result.get("orderId"),
-            "aster_symbol": aster_sym,
+            "bybit_order_id": result.get("orderId"),
+            "bybit_symbol": bybit_sym,
         }
 
         # Record actual fill quality using exchange trade data
         try:
             mid_price_now = mid if "mid" in dir() else mark_price
             if mid_price_now and mid_price_now > 0 and alpaca_status in ("filled", "accepted", "partially_filled"):
-                from trading.execution.aster_client import aster_get_trades as _aget_trades
+                from trading.execution.bybit_client import bybit_get_trades as _aget_trades
                 from trading.db.store import insert_fill_quality
-                _fills = _aget_trades(symbol=aster_sym, limit=3)
+                _fills = _aget_trades(symbol=bybit_sym, limit=3)
                 if _fills:
                     _f = _fills[0]
                     _actual = float(_f.get("price", 0))
@@ -712,29 +717,29 @@ def submit_order(
         if stop_loss_price and stop_loss_price > 0:
             try:
                 stop_side = "SELL" if side_upper == "BUY" else "BUY"
-                from trading.execution.aster_client import aster_submit_order as _aster_order
-                stop_order = _aster_order(
-                    symbol=aster_sym,
+                from trading.execution.bybit_client import bybit_submit_order as _bybit_order
+                stop_order = _bybit_order(
+                    symbol=bybit_sym,
                     side=stop_side,
                     order_type="STOP_MARKET",
                     quantity=qty,
                     stop_price=stop_loss_price,
                 )
                 log.info("Server-side stop-loss placed: %s %s @ $%.2f (order %s)",
-                         stop_side, aster_sym, stop_loss_price,
+                         stop_side, bybit_sym, stop_loss_price,
                          stop_order.get("orderId", "unknown"))
                 order_result["stop_order_id"] = stop_order.get("orderId")
             except Exception as e:
                 log.error("CRITICAL: Failed to place server-side stop-loss for %s @ $%.2f: %s",
-                          aster_sym, stop_loss_price, e)
+                          bybit_sym, stop_loss_price, e)
                 order_result["stop_loss_failed"] = True
                 order_result["stop_loss_error"] = str(e)
 
         return order_result
 
     except Exception as e:
-        log.error("AsterDex order failed: %s %s qty=%.6f: %s",
-                  side_upper, aster_sym, qty, e)
+        log.error("Bybit order failed: %s %s qty=%.6f: %s",
+                  side_upper, bybit_sym, qty, e)
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
@@ -748,21 +753,21 @@ def submit_order(
 
 
 def get_order_status(order_id: str, symbol: str = None) -> dict:
-    """Check order status on AsterDex.
+    """Check order status on Bybit.
 
     Args:
-        order_id: AsterDex orderId (numeric, stored as string).
-        symbol: AsterDex or Alpaca symbol. If not provided, attempts
+        order_id: Bybit orderId (numeric, stored as string).
+        symbol: Bybit or Alpaca symbol. If not provided, attempts
                 to look it up from the local DB trades table.
 
     Returns:
         Alpaca-compatible order status dict with id, status,
         filled_qty, filled_avg_price, etc.
     """
-    from trading.execution.aster_client import aster_get_order, is_aster_configured
+    from trading.execution.bybit_client import bybit_get_order, is_bybit_configured
 
-    if not is_aster_configured():
-        return {"id": order_id, "status": "unknown", "reason": "AsterDex not configured"}
+    if not is_bybit_configured():
+        return {"id": order_id, "status": "unknown", "reason": "Bybit not configured"}
 
     # Resolve symbol if not provided — look up from DB trades table
     if not symbol:
@@ -779,22 +784,28 @@ def get_order_status(order_id: str, symbol: str = None) -> dict:
             log.warning("Could not look up symbol for order %s from DB: %s", order_id, e)
 
     if not symbol:
-        log.warning("get_order_status: no symbol for order %s, cannot query AsterDex", order_id)
+        log.warning("get_order_status: no symbol for order %s, cannot query Bybit", order_id)
         return {"id": order_id, "status": "unknown", "reason": "symbol not available"}
 
-    aster_sym = _to_aster(symbol)
+    bybit_sym = _to_bybit(symbol)
 
     try:
-        result = aster_get_order(aster_sym, order_id=int(order_id))
+        # Bybit V5 order IDs are opaque strings; don't cast to int.
+        result = bybit_get_order(bybit_sym, order_id=str(order_id))
 
-        # Translate AsterDex status to Alpaca-compatible format
+        # Translate Bybit V5 status to Alpaca-compatible format
         raw_status = result.get("status", "UNKNOWN").lower()
         status_map = {
             "new": "accepted",
+            "partiallyfilled": "partially_filled",
             "partially_filled": "partially_filled",
             "filled": "filled",
+            "cancelled": "canceled",
             "canceled": "canceled",
             "rejected": "rejected",
+            "untriggered": "accepted",
+            "triggered": "accepted",
+            "deactivated": "canceled",
             "expired": "expired",
         }
         alpaca_status = status_map.get(raw_status, raw_status)
@@ -808,30 +819,30 @@ def get_order_status(order_id: str, symbol: str = None) -> dict:
             "qty": float(result.get("origQty", 0)),
             "side": result.get("side", "").lower(),
             "order_type": result.get("type", ""),
-            "aster_order_id": result.get("orderId"),
+            "bybit_order_id": result.get("orderId"),
         }
 
     except Exception as e:
-        log.error("Failed to get order status for %s (symbol=%s): %s", order_id, aster_sym, e)
+        log.error("Failed to get order status for %s (symbol=%s): %s", order_id, bybit_sym, e)
         return {"id": order_id, "status": "unknown", "reason": str(e)}
 
 
 def close_position(symbol: str) -> dict:
-    """Close a position — paper mode uses DB, live mode uses AsterDex."""
+    """Close a position — paper mode uses DB, live mode uses Bybit."""
     from trading.config import TRADING_MODE
     from trading.db.store import get_setting
     mode = get_setting("trading_mode", TRADING_MODE)
     if mode == "paper":
         return _paper_close_position(symbol)
 
-    from trading.execution.aster_client import aster_get_positions
+    from trading.execution.bybit_client import bybit_get_positions
 
-    aster_sym = _to_aster(symbol)
+    bybit_sym = _to_bybit(symbol)
 
     try:
-        positions = aster_get_positions()
+        positions = bybit_get_positions()
         for pos in positions:
-            if pos.get("symbol") == aster_sym:
+            if pos.get("symbol") == bybit_sym:
                 amt = pos.get("positionAmt", 0)
                 if abs(amt) < 1e-10:
                     return {"status": "no_position", "symbol": symbol}
@@ -852,12 +863,12 @@ def close_position(symbol: str) -> dict:
 
 
 def get_crypto_quote(symbol: str) -> dict:
-    """Get current bid/ask/mid from AsterDex."""
-    from trading.execution.aster_client import get_aster_book_ticker
+    """Get current bid/ask/mid from Bybit."""
+    from trading.execution.bybit_client import get_bybit_book_ticker
 
-    aster_sym = _to_aster(symbol)
+    bybit_sym = _to_bybit(symbol)
     try:
-        data = get_aster_book_ticker(aster_sym)
+        data = get_bybit_book_ticker(bybit_sym)
         bid = data.get("bidPrice", 0)
         ask = data.get("askPrice", 0)
         return {
@@ -884,8 +895,8 @@ def _load_symbol_filters():
     if _SYMBOL_FILTERS:
         return
     try:
-        from trading.execution.aster_client import get_aster_exchange_info
-        info = get_aster_exchange_info()
+        from trading.execution.bybit_client import get_bybit_exchange_info
+        info = get_bybit_exchange_info()
         for s in info.get("symbols", []):
             filters = {}
             for f in s.get("filters", []):
@@ -901,14 +912,14 @@ def _load_symbol_filters():
         log.warning("Could not load symbol filters: %s", e)
 
 
-def _round_qty(aster_symbol: str, qty: float) -> float:
+def _round_qty(bybit_symbol: str, qty: float) -> float:
     """Round quantity to the exchange's stepSize and enforce minQty.
 
     Uses live exchange info to determine precision, ensuring orders
-    comply with AsterDex's LOT_SIZE filter.
+    comply with Bybit's LOT_SIZE filter.
     """
     _load_symbol_filters()
-    filters = _SYMBOL_FILTERS.get(aster_symbol)
+    filters = _SYMBOL_FILTERS.get(bybit_symbol)
 
     if filters and "stepSize" in filters:
         step = filters["stepSize"]
@@ -941,7 +952,7 @@ def _round_qty(aster_symbol: str, qty: float) -> float:
 # ---------------------------------------------------------------------------
 # In paper mode, orders are simulated locally using real market prices.
 # Positions are tracked in the `paper_positions` table in SQLite.
-# No orders are sent to AsterDex. When switching to live mode, paper
+# No orders are sent to Bybit. When switching to live mode, paper
 # positions are ignored and real exchange positions take over.
 # ---------------------------------------------------------------------------
 
@@ -1033,20 +1044,20 @@ def _paper_submit_order(
     With leverage, the cash deducted = notional / leverage (margin requirement).
     The position tracks the full notional exposure.
     """
-    from trading.execution.aster_client import get_aster_mark_prices
+    from trading.execution.bybit_client import get_bybit_mark_prices
     from trading.db.store import get_db, log_action
 
     _init_paper_tables()
-    aster_sym = _to_aster(symbol)
+    bybit_sym = _to_bybit(symbol)
     side_lower = side.lower()
 
     # Get real market price — cascade through fallbacks before rejecting
     fill_price = 0.0
     try:
-        mark_data = get_aster_mark_prices(aster_sym)
+        mark_data = get_bybit_mark_prices(bybit_sym)
         fill_price = mark_data.get("markPrice", 0)
     except Exception as e:
-        log.warning("Paper: could not get mark price for %s: %s", aster_sym, e)
+        log.warning("Paper: could not get mark price for %s: %s", bybit_sym, e)
 
     if fill_price <= 0:
         # Fallback 1: crypto quote (bid/ask midpoint)
@@ -1073,11 +1084,11 @@ def _paper_submit_order(
             pass
 
     if fill_price <= 0:
-        # Fallback 3: CoinGecko simple price API (fully independent of AsterDex)
+        # Fallback 3: CoinGecko simple price API (fully independent of Bybit)
         try:
-            from trading.config import ASTER_SYMBOLS
-            _ASTER_TO_COIN = {v: k for k, v in ASTER_SYMBOLS.items()}
-            coin_id = _ASTER_TO_COIN.get(aster_sym)
+            from trading.config import BYBIT_SYMBOLS
+            _BYBIT_TO_COIN = {v: k for k, v in BYBIT_SYMBOLS.items()}
+            coin_id = _BYBIT_TO_COIN.get(bybit_sym)
             if coin_id:
                 import requests as _req
                 _r = _req.get(
@@ -1098,7 +1109,7 @@ def _paper_submit_order(
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
-            "reason": f"No price available for {symbol} — all sources (AsterDex mark, book ticker, last known, CoinGecko) failed",
+            "reason": f"No price available for {symbol} — all sources (Bybit mark, book ticker, last known, CoinGecko) failed",
             "symbol": symbol, "side": side,
             "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
         }
@@ -1125,7 +1136,7 @@ def _paper_submit_order(
         return {
             "id": str(uuid.uuid4()),
             "status": "rejected",
-            "reason": f"Order too small for {aster_sym}",
+            "reason": f"Order too small for {bybit_sym}",
             "symbol": symbol, "side": side,
             "qty": 0, "filled_qty": 0, "filled_avg_price": 0,
         }
@@ -1253,7 +1264,7 @@ def _paper_submit_order(
                     )
 
     log.info("PAPER FILL: %s %s %.6f %s @ $%.4f ($%.2f)",
-             side_lower.upper(), symbol, qty, aster_sym, fill_price, order_value)
+             side_lower.upper(), symbol, qty, bybit_sym, fill_price, order_value)
 
     return {
         "id": order_id,
@@ -1271,7 +1282,7 @@ def _paper_submit_order(
 def _paper_get_positions() -> list[dict]:
     """Get paper positions from DB, with live mark prices for P&L."""
     from trading.db.store import get_db
-    from trading.execution.aster_client import get_aster_mark_prices
+    from trading.execution.bybit_client import get_bybit_mark_prices
 
     _init_paper_tables()
 
@@ -1284,18 +1295,18 @@ def _paper_get_positions() -> list[dict]:
     # Batch-fetch ALL mark prices in one call to avoid per-symbol failures
     mark_prices: dict[str, float] = {}
     try:
-        all_marks = get_aster_mark_prices()  # No symbol = fetch all
+        all_marks = get_bybit_mark_prices()  # No symbol = fetch all
         if isinstance(all_marks, list):
             for entry in all_marks:
                 sym = entry.get("symbol", "")
                 mp = entry.get("markPrice")
                 if sym and mp:
                     mark_prices[sym] = float(mp) if not isinstance(mp, float) else mp
-            log.info("Fetched %d mark prices from AsterDex", len(mark_prices))
+            log.info("Fetched %d mark prices from Bybit", len(mark_prices))
         else:
             log.warning("Unexpected mark prices response type: %s", type(all_marks))
     except Exception as e:
-        log.error("Failed to fetch mark prices from AsterDex: %s", e)
+        log.error("Failed to fetch mark prices from Bybit: %s", e)
 
     result = []
     for row in rows:
@@ -1306,11 +1317,11 @@ def _paper_get_positions() -> list[dict]:
         side = row.get("side", "long")
 
         # Get current mark price from batch data
-        aster_sym = _to_aster(sym_key)
-        mark_price = mark_prices.get(aster_sym)
+        bybit_sym = _to_bybit(sym_key)
+        mark_price = mark_prices.get(bybit_sym)
         if mark_price is None or mark_price <= 0:
-            log.warning("No mark price for %s (aster: %s), falling back to avg_cost %.4f",
-                        sym_key, aster_sym, avg_cost)
+            log.warning("No mark price for %s (bybit: %s), falling back to avg_cost %.4f",
+                        sym_key, bybit_sym, avg_cost)
             mark_price = avg_cost
 
         if side == "long":
@@ -1332,7 +1343,7 @@ def _paper_get_positions() -> list[dict]:
             "unrealized_pnl_pct": unrealized_pct * 100,
             "side": side,
             "strategy": row.get("strategy", ""),
-            "aster_symbol": aster_sym,
+            "bybit_symbol": bybit_sym,
             "leverage": row.get("leverage", 1) or 1,
             "stop_loss_price": float(row.get("stop_loss_price") or 0),
             "take_profit_price": float(row.get("take_profit_price") or 0),

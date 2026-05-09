@@ -117,24 +117,24 @@ def _now_str():
 
 
 def _get_account():
-    """Get account from AsterDex (primary execution venue)."""
+    """Get account from Bybit (primary execution venue)."""
     from trading.execution.router import get_account
     return get_account()
 
 
 def _get_positions():
-    """Get positions from AsterDex."""
-    from trading.execution.router import get_positions_from_aster
-    return get_positions_from_aster()
+    """Get positions from Bybit."""
+    from trading.execution.router import get_positions_from_bybit
+    return get_positions_from_bybit()
 
 
 def _execute_order(symbol, side, notional=None, qty=None, stop_loss_price=None,
                    take_profit_price=None, leverage=1, strategy=""):
-    """Execute order via AsterDex perpetual futures."""
+    """Execute order via Bybit perpetual futures."""
     if leverage > 1:
         try:
-            from trading.execution.aster_client import aster_set_leverage
-            aster_set_leverage(symbol, leverage)
+            from trading.execution.bybit_client import bybit_set_leverage
+            bybit_set_leverage(symbol, leverage)
         except Exception as e:
             log.warning("Failed to set leverage %dx for %s: %s", leverage, symbol, e)
     from trading.execution.router import submit_order
@@ -303,10 +303,10 @@ def run_trading_cycle():
         # Phase 1.5a: Sync exchange income (realized P&L, funding fees, commissions)
         # ---------------------------------------------------------------
         try:
-            from trading.execution.aster_client import aster_get_income
+            from trading.execution.bybit_client import bybit_get_income
             from trading.db.store import insert_income_batch
             for _itype in ("REALIZED_PNL", "FUNDING_FEE", "COMMISSION"):
-                _rows = aster_get_income(income_type=_itype, limit=100)
+                _rows = bybit_get_income(income_type=_itype, limit=100)
                 if _rows:
                     _n = insert_income_batch(_rows)
                     if _n:
@@ -317,10 +317,10 @@ def run_trading_cycle():
         # Phase 1.5b: Stale-order cleanup
         try:
             from trading.db.store import get_stale_pending_trades, update_trade_status
-            from trading.execution.aster_client import aster_get_open_orders
+            from trading.execution.bybit_client import bybit_get_open_orders
             _stale = get_stale_pending_trades(max_age_minutes=15)
             if _stale:
-                _open = {str(o["orderId"]): o for o in (aster_get_open_orders() or [])}
+                _open = {str(o["orderId"]): o for o in (bybit_get_open_orders() or [])}
                 for _t in _stale:
                     _oid = str(_t.get("alpaca_order_id", ""))
                     if _oid and _oid not in _open:
@@ -569,12 +569,12 @@ def run_trading_cycle():
             if signal.action == "buy":
                 try:
                     from trading.risk.volume_gate import compute_volume_ratio, compute_volume_trend
-                    from trading.data.aster import alpaca_to_aster
+                    from trading.data.bybit import alpaca_to_bybit
 
-                    aster_sym = alpaca_to_aster(signal.symbol)
-                    if aster_sym:
-                        vol_ratio = compute_volume_ratio(aster_sym)
-                        vol_trend = compute_volume_trend(aster_sym) or 0.0
+                    bybit_sym = alpaca_to_bybit(signal.symbol)
+                    if bybit_sym:
+                        vol_ratio = compute_volume_ratio(bybit_sym)
+                        vol_trend = compute_volume_trend(bybit_sym) or 0.0
                         min_entry_vol = RISK.get("min_volume_ratio", 0.30)
 
                         if vol_ratio is not None and vol_ratio < min_entry_vol:
@@ -742,12 +742,12 @@ def run_trading_cycle():
                         signal.symbol, fill_ratio * 100, qty_f, requested_qty,
                     )
                     try:
-                        from trading.execution.aster_client import aster_cancel_order
-                        from trading.execution.router import _to_aster
-                        aster_order_id = order.get("aster_order_id") or order.get("id")
-                        aster_cancel_order(
-                            _to_aster(signal.symbol),
-                            order_id=int(aster_order_id),
+                        from trading.execution.bybit_client import bybit_cancel_order
+                        from trading.execution.router import _to_bybit
+                        bybit_order_id = order.get("bybit_order_id") or order.get("id")
+                        bybit_cancel_order(
+                            _to_bybit(signal.symbol),
+                            order_id=str(bybit_order_id),
                         )
                     except Exception as cancel_err:
                         log.debug("Cancel remainder for %s: %s", signal.symbol, cancel_err)
@@ -1251,17 +1251,17 @@ def run_trading_cycle():
         # ---------------------------------------------------------------
         try:
             from trading.risk.volume_gate import record_volume_snapshot
-            from trading.data.aster import alpaca_to_aster
+            from trading.data.bybit import alpaca_to_bybit
             # Record for all symbols we have open positions in + top coins
             vol_symbols = set()
             for pos in _get_positions():
-                a = alpaca_to_aster(pos["symbol"])
+                a = alpaca_to_bybit(pos["symbol"])
                 if a:
                     vol_symbols.add(a)
             # Always track top liquid markets
             for coin in ("bitcoin", "ethereum", "solana"):
-                from trading.config import ASTER_SYMBOLS
-                a = ASTER_SYMBOLS.get(coin)
+                from trading.config import BYBIT_SYMBOLS
+                a = BYBIT_SYMBOLS.get(coin)
                 if a:
                     vol_symbols.add(a)
             for vs in vol_symbols:
@@ -1382,8 +1382,8 @@ def _check_scale_in_winners(positions, portfolio_value):
         # ATR-aware sizing: fetch ATR if available, scale add inversely with volatility
         base_addon_pct = 0.03
         try:
-            from trading.data.aster import get_aster_ohlcv
-            df = get_aster_ohlcv(symbol, interval="1h", limit=14)
+            from trading.data.bybit import get_bybit_ohlcv
+            df = get_bybit_ohlcv(symbol, interval="1h", limit=14)
             if df is not None and len(df) >= 14:
                 highs = df["high"].values[-14:]
                 lows = df["low"].values[-14:]
@@ -1886,7 +1886,7 @@ def check_stop_losses():
         # compounding losses — deep losers should be handled by stop-loss.
         try:
             from trading.risk.volume_gate import compute_volume_ratio, compute_volume_trend
-            from trading.data.aster import alpaca_to_aster
+            from trading.data.bybit import alpaca_to_bybit
 
             vol_exit_ratio = RISK.get("volume_exit_ratio", 0.20)
             already_sold = {normalize_symbol(a["symbol"]) for a in profit_actions}
@@ -1894,13 +1894,13 @@ def check_stop_losses():
                 symbol = normalize_symbol(pos["symbol"])
                 if symbol in already_sold:
                     continue
-                aster_sym = alpaca_to_aster(symbol)
-                if not aster_sym:
+                bybit_sym = alpaca_to_bybit(symbol)
+                if not bybit_sym:
                     continue
-                ratio = compute_volume_ratio(aster_sym)
+                ratio = compute_volume_ratio(bybit_sym)
                 if ratio is None:
                     continue
-                trend = compute_volume_trend(aster_sym) or 0.0
+                trend = compute_volume_trend(bybit_sym) or 0.0
 
                 # Exit if volume is below absolute threshold
                 # OR if volume is low-ish AND rapidly fading
@@ -1994,10 +1994,10 @@ def run_daily_journal():
     try:
         from trading.llm.engine import generate_journal
         from trading.db.store import get_trades, get_daily_pnl, get_signals, get_action_log
-        from trading.execution.router import get_positions_from_aster
+        from trading.execution.router import get_positions_from_bybit
 
         trades = get_trades(limit=15)
-        positions = get_positions_from_aster()[:10]
+        positions = get_positions_from_bybit()[:10]
         pnl = get_daily_pnl(limit=7)
         signals = get_signals(limit=10)
         actions = get_action_log(limit=10)
@@ -2217,22 +2217,22 @@ def start_daemon(interval_hours=4, paper=False):
 
     init_db()
 
-    # Discover all available AsterDex markets and refresh symbol translation maps.
+    # Discover all available Bybit markets and refresh symbol translation maps.
     # Expands beyond the 21 static symbols to all TRADING-status perpetuals on the exchange.
     try:
-        from trading.config import discover_aster_markets
-        from trading.data.aster import refresh_symbol_maps
-        new_markets = discover_aster_markets()
+        from trading.config import discover_bybit_markets
+        from trading.data.bybit import refresh_symbol_maps
+        new_markets = discover_bybit_markets()
         refresh_symbol_maps()
-        from trading.config import ASTER_SYMBOLS as _AS
+        from trading.config import BYBIT_SYMBOLS as _AS
         console.print(
-            f"  [cyan]Markets: {len(_AS)} AsterDex perpetuals loaded"
+            f"  [cyan]Markets: {len(_AS)} Bybit perpetuals loaded"
             + (f" (+{new_markets} discovered)" if new_markets else "")
             + "[/cyan]"
         )
     except Exception as _disc_err:
         log.warning("Market discovery failed, using static config (%d markets): %s",
-                    len(__import__("trading.config", fromlist=["ASTER_SYMBOLS"]).ASTER_SYMBOLS),
+                    len(__import__("trading.config", fromlist=["BYBIT_SYMBOLS"]).BYBIT_SYMBOLS),
                     _disc_err)
 
     # Restore autonomous agent state (strategy enables, thresholds, budgets, risk)
@@ -2250,7 +2250,7 @@ def start_daemon(interval_hours=4, paper=False):
     console.print(f"\n[bold green]{'='*60}[/]")
     console.print(f"[bold green]  OT-CORP. AUTONOMOUS TRADER v5.0 -- {mode} MODE[/bold green]")
     console.print(f"[bold green]  Self-Evolving Trading System[/bold green]")
-    console.print(f"[bold green]  Execution: AsterDex Perpetual Futures[/bold green]")
+    console.print(f"[bold green]  Execution: Bybit Perpetual Futures[/bold green]")
     console.print(f"[bold green]{'='*60}[/]")
     console.print(f"  Trading cycle:       every {interval_hours} hours")
     console.print(f"  Scalping cycle:      every 5 minutes (10x leverage, 0.5% stop, 1.5% TP)")
@@ -2278,14 +2278,14 @@ def start_daemon(interval_hours=4, paper=False):
     except Exception:
         pass
 
-    # Note: AsterDex orders are immediate (market orders) — no orphaned order reconciliation needed
-    log.info("AsterDex primary venue — skipping Alpaca order reconciliation")
+    # Note: Bybit orders are immediate (market orders) — no orphaned order reconciliation needed
+    log.info("Bybit primary venue — skipping Alpaca order reconciliation")
 
     # Start WebSocket price feed (best-effort, falls back to REST)
     try:
         from trading.data.ws_feed import start_ws_feed
-        from trading.config import ASTER_SYMBOLS
-        ws_symbols = [s for s in ASTER_SYMBOLS.values() if s]
+        from trading.config import BYBIT_SYMBOLS
+        ws_symbols = [s for s in BYBIT_SYMBOLS.values() if s]
         if ws_symbols:
             start_ws_feed(ws_symbols[:20])  # Top 20 symbols
             console.print(f"[dim]WebSocket feed started for {min(len(ws_symbols), 20)} symbols[/dim]")

@@ -22,7 +22,7 @@ def should_use_twap(notional: float, symbol: str, threshold_pct: float = 0.05) -
 
     Args:
         notional: Dollar value of the order.
-        symbol: Alpaca-style symbol (e.g. "BTC/USD") or AsterDex symbol.
+        symbol: Alpaca-style symbol (e.g. "BTC/USD") or Bybit symbol.
         threshold_pct: Fraction of 1h volume above which TWAP is used.
 
     Returns:
@@ -33,11 +33,11 @@ def should_use_twap(notional: float, symbol: str, threshold_pct: float = 0.05) -
         return False
 
     try:
-        from trading.execution.router import _to_aster
-        from trading.execution.aster_client import get_aster_klines
+        from trading.execution.router import _to_bybit
+        from trading.execution.bybit_client import get_bybit_klines
 
-        aster_sym = _to_aster(symbol)
-        df = get_aster_klines(aster_sym, interval="1h", limit=2)
+        bybit_sym = _to_bybit(symbol)
+        df = get_bybit_klines(bybit_sym, interval="1h", limit=2)
         if df is None or df.empty:
             return False
 
@@ -75,7 +75,7 @@ def execute_twap(
     blocks for up to `slices * interval` seconds.
 
     Args:
-        symbol: Alpaca-style or AsterDex symbol.
+        symbol: Alpaca-style or Bybit symbol.
         side: 'buy' or 'sell'.
         total_qty: Total quantity to execute.
         slices: Number of child orders (default 3).
@@ -87,8 +87,8 @@ def execute_twap(
         Dict with: total_filled, avg_fill_price, slippage_bps, slices_executed,
         child_orders (list of individual order results).
     """
-    from trading.execution.router import place_limit_with_fallback, _to_aster
-    from trading.execution.aster_client import get_aster_book_ticker
+    from trading.execution.router import place_limit_with_fallback, _to_bybit
+    from trading.execution.bybit_client import get_bybit_book_ticker
 
     if slices < 1:
         slices = 1
@@ -100,8 +100,8 @@ def execute_twap(
 
     # Capture mid price at start for slippage calculation
     try:
-        aster_sym = _to_aster(symbol)
-        book = get_aster_book_ticker(aster_sym)
+        bybit_sym = _to_bybit(symbol)
+        book = get_bybit_book_ticker(bybit_sym)
         bid = float(book.get("bidPrice", 0))
         ask = float(book.get("askPrice", 0))
         initial_mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0

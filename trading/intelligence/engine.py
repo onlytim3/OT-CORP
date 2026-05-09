@@ -148,8 +148,8 @@ def _score_crypto(data: dict) -> dict:
     Inputs: Fear & Greed, CoinGecko global metrics, crypto headlines.
 
     Weights (sum to 1.0 when all sources present):
-      F&G=0.30, CoinGecko=0.20, AsterDex funding=0.10,
-      AsterDex flow=0.05, Social=0.10, Options=0.15, Headlines=0.10
+      F&G=0.30, CoinGecko=0.20, Bybit funding=0.10,
+      Bybit flow=0.05, Social=0.10, Options=0.15, Headlines=0.10
     """
     score = 0.0
     components = []
@@ -176,28 +176,28 @@ def _score_crypto(data: dict) -> dict:
         btc_dom = cg.get("btc_dominance", 0)
         components.append(f"MCap 24h {mc_change:+.1f}%, BTC dom {btc_dom:.1f}%")
 
-    # AsterDex derivatives data (funding rates + order flow) — 15% weight total
+    # Bybit derivatives data (funding rates + order flow) — 15% weight total
     try:
-        from trading.data.aster import get_aster_market_summary
-        aster = get_aster_market_summary()
-        if aster:
+        from trading.data.bybit import get_bybit_market_summary
+        bybit = get_bybit_market_summary()
+        if bybit:
             # Funding sentiment: negative funding = overleveraged shorts = bullish
-            funding_sent = aster.get("funding_sentiment", 0)
+            funding_sent = bybit.get("funding_sentiment", 0)
             if funding_sent != 0:
                 funding_score = -max(min(funding_sent * 100, 1.0), -1.0) * 0.10
                 score += funding_score
                 confidence += 0.10
-                components.append(f"AsterDex funding={funding_sent*100:+.3f}%")
+                components.append(f"Bybit funding={funding_sent*100:+.3f}%")
 
             # Volume flow: net taker buy/sell pressure — 5% weight
-            vol_flow = aster.get("volume_flow", 0)
+            vol_flow = bybit.get("volume_flow", 0)
             if vol_flow != 0:
                 flow_score = max(min(vol_flow, 1.0), -1.0) * 0.05
                 score += flow_score
                 confidence += 0.05
                 components.append(f"Taker flow={vol_flow:+.2f}")
     except Exception:
-        pass  # AsterDex data is supplementary, never block
+        pass  # Bybit data is supplementary, never block
 
     # Reddit social sentiment — 10% weight
     try:
@@ -1021,7 +1021,7 @@ def generate_briefing() -> MarketBriefing:
     try:
         from trading.data.news import fetch_all_headlines
         from trading.llm.engine import analyze_news_impact
-        from trading.config import CRYPTO_SYMBOLS, ASTER_SYMBOLS
+        from trading.config import CRYPTO_SYMBOLS, BYBIT_SYMBOLS
         from trading.db.store import save_headlines
 
         all_headlines = fetch_all_headlines(max_per_source=100)
@@ -1034,7 +1034,7 @@ def generate_briefing() -> MarketBriefing:
             log.debug("Headline persistence failed (non-fatal): %s", _he)
 
         if len(all_headlines) >= 3:
-            traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(ASTER_SYMBOLS.keys())))
+            traded_assets = list(set(list(CRYPTO_SYMBOLS.keys()) + list(BYBIT_SYMBOLS.keys())))
             interpretation = analyze_news_impact(
                 all_headlines, [], regime, traded_assets[:30],
             )

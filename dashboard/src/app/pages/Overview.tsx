@@ -695,7 +695,7 @@ export function Overview() {
                   const normSym = selectedPosition.symbol.replace("/", "").toUpperCase();
                   const vol = volumes?.find(v => {
                     const vNorm = v.symbol.replace("/", "").toUpperCase();
-                    const aNorm = (v.aster_symbol || "").replace("/", "").toUpperCase();
+                    const aNorm = (v.bybit_symbol || "").replace("/", "").toUpperCase();
                     return vNorm === normSym || aNorm === normSym || v.symbol === selectedPosition.symbol;
                   });
                   const mg = marginData?.find(m => {
