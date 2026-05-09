@@ -288,7 +288,7 @@ export function Trading() {
           {(!trades || trades.length === 0) ? (
             <p className="text-[#888888] text-center py-8">No trades yet</p>
           ) : (
-            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto scroll-fade">
               <table className="w-full">
                 <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">

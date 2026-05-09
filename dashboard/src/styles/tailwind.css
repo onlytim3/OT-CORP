@@ -2,3 +2,11 @@
 @source '../**/*.{js,ts,jsx,tsx}';
 
 @import 'tw-animate-css';
+
+/* Visible scroll hint on horizontally-scrollable table wrappers.
+   Adds a subtle gradient on the right edge so users know there's more. */
+@utility scroll-fade {
+  background:
+    linear-gradient(to right, transparent calc(100% - 24px), rgba(10, 10, 10, 0.95)) right / 24px 100% no-repeat,
+    linear-gradient(to left, transparent calc(100% - 8px), rgba(10, 10, 10, 0.6)) left / 8px 100% no-repeat;
+}

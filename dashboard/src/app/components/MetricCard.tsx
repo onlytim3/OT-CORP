@@ -14,10 +14,10 @@ export function MetricCard({ title, value, change, icon: Icon, iconColor }: Metr
   return (
     <div className="rounded-xl bg-[#0a0a0a] border border-white/[0.08] shadow-lg shadow-black/20 overflow-hidden">
       <div className="p-6">
-        <div className="flex items-center justify-between">
-          <div className="flex-1">
-            <p className="text-xs text-[#666666] uppercase tracking-wider mb-2">{title}</p>
-            <p className="text-2xl font-bold text-[#e8e8e8] mb-2 tabular-nums">{value}</p>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-[#666666] uppercase tracking-wider mb-2 truncate">{title}</p>
+            <p className="text-2xl font-bold text-[#e8e8e8] mb-2 tabular-nums break-words">{value}</p>
             {change !== undefined && (
               <div className={`flex items-center gap-1 ${change >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
                 {change >= 0 ? (
