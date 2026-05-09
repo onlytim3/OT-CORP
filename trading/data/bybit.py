@@ -70,6 +70,23 @@ def coin_to_bybit(coin_id: str) -> str | None:
     return BYBIT_SYMBOLS.get(coin_id)
 
 
+def _norm(symbol: str) -> str:
+    """Normalize any symbol form (Alpaca BTC/USD or Bybit BTCUSDT) to Bybit format.
+
+    Defensive: callers from older code paths may pass Alpaca-format strings.
+    """
+    if not symbol:
+        return symbol
+    if symbol in _ALPACA_TO_BYBIT:
+        return _ALPACA_TO_BYBIT[symbol]
+    if "/" in symbol:
+        base = symbol.split("/")[0]
+        return f"{base}USDT"
+    if symbol.endswith("USD") and not symbol.endswith("USDT"):
+        return symbol[:-3] + "USDT"
+    return symbol
+
+
 def _all_bybit_symbols() -> list[str]:
     """Return all tracked Bybit symbols."""
     return list(BYBIT_SYMBOLS.values())
@@ -124,7 +141,7 @@ def get_funding_rate_history(symbol: str, limit: int = 100) -> list[float]:
     try:
         from trading.execution.bybit_client import get_bybit_funding_rates
 
-        data = get_bybit_funding_rates(symbol=symbol, limit=limit)
+        data = get_bybit_funding_rates(symbol=_norm(symbol), limit=limit)
         if not data:
             return []
 
@@ -151,7 +168,7 @@ def get_orderbook_imbalance(symbol: str, depth: int = 20) -> dict | None:
     try:
         from trading.execution.bybit_client import get_bybit_orderbook
 
-        book = get_bybit_orderbook(symbol, limit=depth)
+        book = get_bybit_orderbook(_norm(symbol), limit=depth)
         bids = book.get("bids", [])
         asks = book.get("asks", [])
 
@@ -195,7 +212,7 @@ def get_basis_spread(symbol: str | None = None) -> dict | list[dict]:
         from trading.execution.bybit_client import get_bybit_mark_prices
 
         if symbol:
-            data = get_bybit_mark_prices(symbol=symbol)
+            data = get_bybit_mark_prices(symbol=_norm(symbol))
             if not isinstance(data, dict):
                 return {"symbol": symbol, "markPrice": 0, "indexPrice": 0,
                         "basis_pct": 0, "fundingRate": 0}
@@ -262,7 +279,7 @@ def get_bybit_ohlcv(symbol: str, interval: str = "1h",
     """
     try:
         from trading.execution.bybit_client import get_bybit_klines
-        return get_bybit_klines(symbol, interval=interval, limit=limit)
+        return get_bybit_klines(_norm(symbol), interval=interval, limit=limit)
     except Exception as e:
         log.warning("Failed to fetch Bybit OHLCV for %s: %s", symbol, e)
         return pd.DataFrame()
@@ -342,7 +359,7 @@ def get_open_interest(symbol: str) -> float | None:
     """
     try:
         from trading.execution.bybit_client import get_bybit_open_interest
-        data = get_bybit_open_interest(symbol)
+        data = get_bybit_open_interest(_norm(symbol))
         return data.get("openInterest")
     except Exception as e:
         log.warning("Failed to fetch OI for %s: %s", symbol, e)
@@ -364,7 +381,7 @@ def get_open_interest_history(symbol: str, period: str = "1h",
     """
     try:
         from trading.execution.bybit_client import get_bybit_open_interest_hist
-        return get_bybit_open_interest_hist(symbol, period=period, limit=limit)
+        return get_bybit_open_interest_hist(_norm(symbol), period=period, limit=limit)
     except Exception as e:
         log.warning("Failed to fetch OI history for %s: %s", symbol, e)
         return []
@@ -385,7 +402,7 @@ def get_long_short_ratio(symbol: str, period: str = "1h",
     """
     try:
         from trading.execution.bybit_client import get_bybit_long_short_ratio
-        return get_bybit_long_short_ratio(symbol, period=period, limit=limit)
+        return get_bybit_long_short_ratio(_norm(symbol), period=period, limit=limit)
     except Exception as e:
         log.warning("Failed to fetch long/short ratio for %s: %s", symbol, e)
         return []
@@ -401,7 +418,7 @@ def get_taker_buy_sell_ratio(symbol: str, period: str = "1h",
     """
     try:
         from trading.execution.bybit_client import get_bybit_taker_buy_sell_volume
-        return get_bybit_taker_buy_sell_volume(symbol, period=period, limit=limit)
+        return get_bybit_taker_buy_sell_volume(_norm(symbol), period=period, limit=limit)
     except Exception as e:
         log.warning("Failed to fetch taker volume for %s: %s", symbol, e)
         return []

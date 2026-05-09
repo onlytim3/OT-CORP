@@ -6,6 +6,7 @@ import { RecoveryBanner } from "../components/RecoveryBanner";
 import { DollarSign, TrendingUp, Activity, Layers, AlertCircle, TrendingDown, RefreshCw, Gauge, PieChart, Volume2, ShieldAlert, Shield, Trophy, BarChart2, Bot } from "lucide-react";
 import { useState, useEffect } from "react";
 import { api, usePolling, isUsingMockData, fetchAPI, type StatusResponse, type ActionItem, type ActionDetail, type AggregatedLeverage, type SectorExposure, type Trade, type TradeAnalysis, type VolumeAnalysis, type MarginHealth } from "../config/api";
+import { formatPrice, formatPnl, formatPct } from "../utils/format";
 
 interface RiskBudget {
   risk_stage: number;
@@ -231,7 +232,7 @@ function VolumeBar({ ratio, label }: { ratio: number; label: string }) {
 }
 
 export function Overview() {
-  const { data: status, loading } = usePolling<StatusResponse>(api.status, 10000);
+  const { data: status, loading } = usePolling<StatusResponse>(api.status, 3000);
   const { data: actions } = usePolling<ActionItem[]>(api.actions, 15000);
   const { data: leverageData } = usePolling<AggregatedLeverage>(api.leverage, 15000);
   const { data: sectors } = usePolling<SectorExposure[]>(api.sectors, 30000);
@@ -359,7 +360,10 @@ export function Overview() {
 
       {/* Hero metrics — Portfolio Value + P&L */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 border-l-[#4a9eff]">
+        <div
+          className="rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 border-l-[#4a9eff]"
+          title="Portfolio value = cash + open-position margin + unrealized P&L. Open trades are included, not subtracted."
+        >
           <p className="text-xs text-[#555555] uppercase tracking-widest mb-3 font-mono">Portfolio Value</p>
           <p className="text-5xl font-bold tabular-nums text-[#e8e8e8] font-mono leading-none">
             ${(account?.portfolio_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -581,13 +585,16 @@ export function Overview() {
               <table className="w-full">
                 <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
-                    {['Symbol', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Age'].map(h => (
+                    {['Symbol', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Entry Value', 'Mkt Value', 'Age'].map(h => (
                       <th key={h} className={`${h === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {positions.map((pos, idx) => (
+                  {positions.map((pos, idx) => {
+                    const entryValue = (pos.qty || 0) * (pos.avg_cost || 0);
+                    const mktValue = pos.market_value ?? (pos.qty || 0) * (pos.current_price || 0);
+                    return (
                     <tr key={idx} onClick={() => setSelectedPosition(pos)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
@@ -606,16 +613,19 @@ export function Overview() {
                       </td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
                       <td className={`text-right py-3 px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
-                        {(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${(pos.unrealized_pnl || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        {(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${formatPnl(pos.unrealized_pnl || 0)}
                       </td>
                       <td className={`text-right py-3 px-4 ${(pos.unrealized_pnl_pct || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
-                        {(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{(pos.unrealized_pnl_pct || 0).toFixed(2)}%
+                        {(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{formatPct(pos.unrealized_pnl_pct || 0)}%
                       </td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${(pos.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.avg_cost || 0)}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.current_price || 0)}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
                       <td className="text-right py-3 px-4 text-[#888888] text-sm">{pos.age || '-'}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
