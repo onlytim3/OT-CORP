@@ -598,8 +598,6 @@ export function Overview() {
                       { label: 'Age', hide: 'hidden sm:table-cell' },
                     ].map(({ label, hide }) => (
                       <th key={label} className={`${label === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-2 sm:px-4 font-medium text-[#888888] ${hide}`}>{label}</th>
-                    {['Symbol', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Entry Value', 'Mkt Value', 'Age'].map(h => (
-                      <th key={h} className={`${h === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -636,18 +634,6 @@ export function Overview() {
                       <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
                       <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
                       <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#888888]">{pos.age || '-'}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
-                      <td className={`text-right py-3 px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
-                        {(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${formatPnl(pos.unrealized_pnl || 0)}
-                      </td>
-                      <td className={`text-right py-3 px-4 ${(pos.unrealized_pnl_pct || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
-                        {(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{formatPct(pos.unrealized_pnl_pct || 0)}%
-                      </td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.avg_cost || 0)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.current_price || 0)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
-                      <td className="text-right py-3 px-4 text-[#888888] text-sm">{pos.age || '-'}</td>
                     </tr>
                     );
                   })}
