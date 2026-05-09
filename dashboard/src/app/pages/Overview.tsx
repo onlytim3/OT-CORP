@@ -593,8 +593,8 @@ export function Overview() {
                       { label: 'P&L %', hide: '' },
                       { label: 'Entry', hide: 'hidden md:table-cell' },
                       { label: 'Current', hide: '' },
-                      { label: 'Entry Value', hide: 'hidden sm:table-cell' },
-                      { label: 'Mkt Value', hide: 'hidden sm:table-cell' },
+                      { label: 'Entry Value', hide: 'hidden md:table-cell' },
+                      { label: 'Mkt Value', hide: '' },
                       { label: 'Age', hide: 'hidden sm:table-cell' },
                     ].map(({ label, hide }) => (
                       <th key={label} className={`${label === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-2 sm:px-4 font-medium text-[#888888] ${hide}`}>{label}</th>
@@ -631,8 +631,8 @@ export function Overview() {
                       </td>
                       <td className="hidden md:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(pos.avg_cost || 0)}</td>
                       <td className="text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(pos.current_price || 0)}</td>
-                      <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
-                      <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
+                      <td className="hidden md:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
+                      <td className="text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
                       <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#888888]">{pos.age || '-'}</td>
                     </tr>
                     );

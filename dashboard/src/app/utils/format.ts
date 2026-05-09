@@ -16,12 +16,14 @@ export function formatPrice(p: number | null | undefined): string {
 }
 
 export function formatPnl(p: number | null | undefined): string {
-  return formatPrice(p);
+  if (p === null || p === undefined || !isFinite(p)) return "—";
+  return p.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 export function formatPct(p: number | null | undefined): string {
   if (p === null || p === undefined || !isFinite(p)) return "—";
-  const abs = Math.abs(p);
-  const decimals = abs >= 10 ? 2 : abs >= 1 ? 3 : 4;
-  return p.toFixed(decimals);
+  return p.toFixed(2);
 }
