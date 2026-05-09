@@ -146,7 +146,7 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
           <MessageSquare className="size-5 text-[#4a9eff]" />
           <span className="font-semibold text-[#e8e8e8]">Trading Assistant</span>
         </div>
-        <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+        <button onClick={onClose} className="p-2 min-h-9 min-w-9 hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center">
           <X className="size-5 text-[#888888]" />
         </button>
       </div>

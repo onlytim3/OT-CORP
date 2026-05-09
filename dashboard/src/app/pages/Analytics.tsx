@@ -337,7 +337,7 @@ export function Analytics() {
               {(!strategies || strategies.length === 0) ? (
                 <p className="text-[#888888] text-center py-8">No strategies loaded</p>
               ) : (
-                <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+                <div className="overflow-x-auto max-h-[60vh] overflow-y-auto scroll-fade">
                   <table className="w-full">
                     <thead className="sticky top-0 bg-[#0f0f0f] z-10">
                       <tr className="border-b border-white/5">
@@ -786,7 +786,7 @@ export function Analytics() {
               {(!attribution || attribution.length === 0) ? (
                 <p className="text-[#888888] text-center py-8">No attribution data available</p>
               ) : (
-                <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+                <div className="overflow-x-auto max-h-[60vh] overflow-y-auto scroll-fade">
                   <table className="w-full">
                     <thead className="sticky top-0 bg-[#0f0f0f] z-10">
                       <tr className="border-b border-white/5">
@@ -855,7 +855,7 @@ export function Analytics() {
 
                   {/* Worst fills table */}
                   <h4 className="text-sm font-medium text-[#888888] mb-3">Recent Fills (sorted by slippage)</h4>
-                  <div className="overflow-x-auto max-h-[50vh] overflow-y-auto">
+                  <div className="overflow-x-auto max-h-[50vh] overflow-y-auto scroll-fade">
                     <table className="w-full">
                       <thead className="sticky top-0 bg-[#0f0f0f] z-10">
                         <tr className="border-b border-white/5">
@@ -926,7 +926,7 @@ export function Analytics() {
                         ))}
                       </div>
                     )}
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto scroll-fade">
                       <table className="w-full text-xs">
                         <thead>
                           <tr>
@@ -1148,7 +1148,7 @@ export function Analytics() {
             <CardHeader><CardTitle className="flex items-center gap-2"><DollarSign className="h-4 w-4" />P&L by Regime</CardTitle></CardHeader>
             <CardContent>
               {(regimeData?.strategy_stats || []).length > 0 ? (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto scroll-fade">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-[#555] text-xs border-b border-[rgba(255,255,255,0.06)]">

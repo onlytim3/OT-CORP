@@ -314,7 +314,7 @@ export function DashboardLayout() {
           {/* Refresh Button */}
           <button
             onClick={() => window.location.reload()}
-            className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+            className="p-2.5 sm:p-3 min-h-11 min-w-11 rounded-lg hover:bg-white/10 transition-colors flex items-center justify-center"
             title="Refresh data"
           >
             <RefreshCw className="size-4 text-[#888888]" />
@@ -405,7 +405,7 @@ export function DashboardLayout() {
       <button
         onClick={() => setChatOpen(!chatOpen)}
         className={cn(
-          "fixed bottom-[88px] sm:bottom-6 right-4 sm:right-6 z-50 p-3 sm:p-4 rounded-full transition-all duration-300 shadow-xl",
+          "fixed bottom-[88px] sm:bottom-6 right-4 sm:right-6 z-50 p-3.5 sm:p-4 min-h-11 min-w-11 rounded-full transition-all duration-300 shadow-xl flex items-center justify-center",
           chatOpen
             ? "bg-[#1e1e1e] border border-white/[0.12] shadow-none"
             : "bg-[#4a9eff] hover:bg-[#4a9eff]/80 shadow-[0_0_20px_rgba(74,158,255,0.3)] hover:scale-105"

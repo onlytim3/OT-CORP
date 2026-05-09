@@ -361,20 +361,20 @@ export function Overview() {
       {/* Hero metrics — Portfolio Value + P&L */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div
-          className="rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 border-l-[#4a9eff]"
+          className="rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 border-l-[#4a9eff] min-w-0"
           title="Portfolio value = cash + open-position margin + unrealized P&L. Open trades are included, not subtracted."
         >
           <p className="text-xs text-[#555555] uppercase tracking-widest mb-3 font-mono">Portfolio Value</p>
-          <p className="text-5xl font-bold tabular-nums text-[#e8e8e8] font-mono leading-none">
+          <p className="text-[clamp(1.5rem,8vw,3rem)] font-bold tabular-nums text-[#e8e8e8] font-mono leading-none break-words">
             ${(account?.portfolio_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <div className="flex items-center gap-4 mt-3">
             <span className="text-xs text-[#555555] uppercase tracking-wider font-mono">{mode.toUpperCase()} MODE</span>
           </div>
         </div>
-        <div className={`rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 ${totalPnl >= 0 ? 'border-l-[#00d4aa]' : 'border-l-[#ff4466]'}`}>
+        <div className={`rounded-xl bg-[#0f0f0f] border border-white/[0.12] shadow-lg shadow-black/40 p-6 border-l-2 min-w-0 ${totalPnl >= 0 ? 'border-l-[#00d4aa]' : 'border-l-[#ff4466]'}`}>
           <p className="text-xs text-[#555555] uppercase tracking-widest mb-3 font-mono">Unrealized P&L</p>
-          <p className={`text-5xl font-bold tabular-nums font-mono leading-none ${totalPnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+          <p className={`text-[clamp(1.5rem,8vw,3rem)] font-bold tabular-nums font-mono leading-none break-words ${totalPnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
             {totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <div className="flex items-center gap-2 mt-3">
@@ -389,7 +389,7 @@ export function Overview() {
       </div>
 
       {/* Operational stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <MetricCard title="Open Positions" value={summary?.open_positions ?? positions.length} icon={Activity} iconColor="text-[#4a9eff]" />
         <MetricCard title="Strategies" value={summary?.active_strategies ?? 0} icon={Layers} iconColor="text-[#c0c0c0]" />
         <MetricCard
@@ -429,7 +429,7 @@ export function Overview() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
               <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
                 <p className="text-xs text-[#888888] mb-1">Win Rate</p>
                 <p className={`text-lg font-bold font-mono ${scalpStats.win_rate >= 50 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
@@ -581,12 +581,22 @@ export function Overview() {
           {positions.length === 0 ? (
             <p className="text-[#888888] text-center py-8">No open positions</p>
           ) : (
-            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
-              <table className="w-full">
+            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto scroll-fade">
+              <table className="w-full text-xs sm:text-sm">
                 <thead className="sticky top-0 bg-[#0a0a0a] z-10">
                   <tr className="border-b border-white/5">
-                    {['Symbol', 'Qty', 'P&L', 'P&L %', 'Entry', 'Current', 'Entry Value', 'Mkt Value', 'Age'].map(h => (
-                      <th key={h} className={`${h === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-4 text-sm font-medium text-[#888888]`}>{h}</th>
+                    {[
+                      { label: 'Symbol', hide: '' },
+                      { label: 'Qty', hide: '' },
+                      { label: 'P&L', hide: '' },
+                      { label: 'P&L %', hide: '' },
+                      { label: 'Entry', hide: 'hidden md:table-cell' },
+                      { label: 'Current', hide: '' },
+                      { label: 'Entry Value', hide: 'hidden sm:table-cell' },
+                      { label: 'Mkt Value', hide: 'hidden sm:table-cell' },
+                      { label: 'Age', hide: 'hidden sm:table-cell' },
+                    ].map(({ label, hide }) => (
+                      <th key={label} className={`${label === 'Symbol' ? 'text-left' : 'text-right'} py-3 px-2 sm:px-4 font-medium text-[#888888] ${hide}`}>{label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -596,7 +606,7 @@ export function Overview() {
                     const mktValue = pos.market_value ?? (pos.qty || 0) * (pos.current_price || 0);
                     return (
                     <tr key={idx} onClick={() => setSelectedPosition(pos)} className="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer">
-                      <td className="py-3 px-4">
+                      <td className="py-3 px-2 sm:px-4">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-[#e8e8e8]">{pos.symbol}</span>
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide ${
@@ -611,18 +621,18 @@ export function Overview() {
                           )}
                         </div>
                       </td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
-                      <td className={`text-right py-3 px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                      <td className="text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">{formatQty(pos.qty)}</td>
+                      <td className={`text-right py-3 px-2 sm:px-4 font-medium ${(pos.unrealized_pnl || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
                         {(pos.unrealized_pnl || 0) >= 0 ? '+' : ''}${formatPnl(pos.unrealized_pnl || 0)}
                       </td>
-                      <td className={`text-right py-3 px-4 ${(pos.unrealized_pnl_pct || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
+                      <td className={`text-right py-3 px-2 sm:px-4 ${(pos.unrealized_pnl_pct || 0) >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]'}`}>
                         {(pos.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}{formatPct(pos.unrealized_pnl_pct || 0)}%
                       </td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.avg_cost || 0)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(pos.current_price || 0)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
-                      <td className="text-right py-3 px-4 text-[#888888] text-sm">{pos.age || '-'}</td>
+                      <td className="hidden md:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(pos.avg_cost || 0)}</td>
+                      <td className="text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(pos.current_price || 0)}</td>
+                      <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(entryValue)}</td>
+                      <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#c0c0c0]">${formatPrice(mktValue)}</td>
+                      <td className="hidden sm:table-cell text-right py-3 px-2 sm:px-4 text-[#888888]">{pos.age || '-'}</td>
                     </tr>
                     );
                   })}
@@ -652,7 +662,7 @@ export function Overview() {
             return (
               <div className="space-y-4 mt-2 sm:mt-4">
                 {/* Core Info Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3">
                   {[
                     ['Strategy', match?.strategy || selectedPosition.strategy || '-'],
                     ['Quantity', formatQty(selectedPosition.qty)],
