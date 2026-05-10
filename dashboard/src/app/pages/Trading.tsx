@@ -97,13 +97,13 @@ function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trad
               {[
                 ['Strategy', trade.strategy],
                 ['Quantity', formatQty(trade.qty)],
-                ['Price', `$${trade.price.toFixed(2)}`],
+                ['Price', `$${formatPrice(trade.price)}`],
                 ['Total', `$${trade.total.toFixed(2)}`],
                 ['P&L', trade.pnl !== null && !trade.is_open ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : 'Open'],
                 ['P&L %', trade.pnl_pct !== null ? `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(2)}%` : '-'],
                 ['Leverage', trade.leverage ? `${trade.leverage}x` : '1x'],
-                ['Take Profit', trade.take_profit_price ? `$${trade.take_profit_price.toFixed(2)}` : 'None'],
-                ['Stop Loss', trade.stop_loss_price ? `$${trade.stop_loss_price.toFixed(2)}` : 'None'],
+                ['Take Profit', trade.take_profit_price ? `$${formatPrice(trade.take_profit_price)}` : 'None'],
+                ['Stop Loss', trade.stop_loss_price ? `$${formatPrice(trade.stop_loss_price)}` : 'None'],
                 ['Time', new Date(trade.timestamp).toLocaleString()],
                 ['Status', trade.is_open ? 'Open' : 'Closed'],
                 ['Closed', trade.closed_at ? new Date(trade.closed_at).toLocaleString() : trade.is_open ? '-' : 'Pending sync'],
@@ -128,9 +128,9 @@ function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trad
                     </>
                   )}
                   <div className="absolute inset-0 flex items-center justify-between px-3 text-[10px] font-medium">
-                    <span className="text-[#ff4466]">{trade.stop_loss_price ? `SL $${trade.stop_loss_price.toFixed(2)}` : ''}</span>
-                    <span className="text-[#4a9eff]">Entry ${trade.price.toFixed(2)}</span>
-                    <span className="text-[#00d4aa]">{trade.take_profit_price ? `TP $${trade.take_profit_price.toFixed(2)}` : ''}</span>
+                    <span className="text-[#ff4466]">{trade.stop_loss_price ? `SL $${formatPrice(trade.stop_loss_price)}` : ''}</span>
+                    <span className="text-[#4a9eff]">Entry ${formatPrice(trade.price)}</span>
+                    <span className="text-[#00d4aa]">{trade.take_profit_price ? `TP $${formatPrice(trade.take_profit_price)}` : ''}</span>
                   </div>
                 </div>
               </div>
@@ -331,7 +331,7 @@ export function Trading() {
                         </span>
                       </td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">{formatQty(t.qty)}</td>
-                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                      <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(t.price)}</td>
                       <td className="text-right py-3 px-4 text-[#c0c0c0]">${t.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="py-3 px-4 text-[#888888] text-sm">{t.strategy}</td>
                       <td className={`text-right py-3 px-4 font-medium ${t.pnl !== null && !t.is_open ? (t.pnl >= 0 ? 'text-[#00d4aa]' : 'text-[#ff4466]') : 'text-[#888888]'}`}>

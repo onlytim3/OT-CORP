@@ -16,6 +16,7 @@ import {
   type FillQuality, type StrategyAttribution, type FunnelData, type TimePnl,
   type RegimeAnalysis,
 } from "../config/api";
+import { formatPrice } from "../utils/format";
 
 function FearGreedGauge({ value, label }: { value: number; label: string }) {
   const color = value <= 25 ? '#ff4466' : value <= 45 ? '#ffa500' : value <= 55 ? '#c0c0c0' : value <= 75 ? '#00d4aa' : '#00d4aa';
@@ -879,8 +880,8 @@ export function Analytics() {
                                 }`}>{f.side === 'sell' || f.side === 'short' ? 'SELL' : 'BUY'}</span>
                               </div>
                             </td>
-                            <td className="text-right py-3 px-4 text-[#c0c0c0]">${f.mid_price.toFixed(2)}</td>
-                            <td className="text-right py-3 px-4 text-[#c0c0c0]">${f.fill_price.toFixed(2)}</td>
+                            <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(f.mid_price)}</td>
+                            <td className="text-right py-3 px-4 text-[#c0c0c0]">${formatPrice(f.fill_price)}</td>
                             <td className={`text-right py-3 px-4 font-medium ${f.slippage_bps > 10 ? 'text-[#ff4466]' : f.slippage_bps > 5 ? 'text-[#ffa500]' : 'text-[#00d4aa]'}`}>
                               {f.slippage_bps.toFixed(1)} bps
                             </td>

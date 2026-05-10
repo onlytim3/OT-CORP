@@ -667,8 +667,8 @@ export function Overview() {
                   {[
                     ['Strategy', match?.strategy || selectedPosition.strategy || '-'],
                     ['Quantity', formatQty(selectedPosition.qty)],
-                    ['Entry', `$${(selectedPosition.avg_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
-                    ['Current', `$${(selectedPosition.current_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+                    ['Entry', `$${fmtPrice(selectedPosition.avg_cost || 0)}`],
+                    ['Current', `$${fmtPrice(selectedPosition.current_price || 0)}`],
                     ['Market Value', `$${(selectedPosition.market_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
                     ['P&L', `${(selectedPosition.unrealized_pnl || 0) >= 0 ? '+' : ''}$${(selectedPosition.unrealized_pnl || 0).toFixed(2)}`],
                     ['P&L %', `${(selectedPosition.unrealized_pnl_pct || 0) >= 0 ? '+' : ''}${(selectedPosition.unrealized_pnl_pct || 0).toFixed(2)}%`],
