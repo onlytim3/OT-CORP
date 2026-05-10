@@ -926,7 +926,8 @@ export function Analytics() {
                         ))}
                       </div>
                     )}
-                    <div className="overflow-x-auto scroll-fade">
+                    {/* Desktop / tablet: full N×N matrix */}
+                    <div className="hidden md:block overflow-x-auto scroll-fade">
                       <table className="w-full text-xs">
                         <thead>
                           <tr>
@@ -954,6 +955,38 @@ export function Analytics() {
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                    {/* Mobile: top-N pairs by |ρ|, list view */}
+                    <div className="md:hidden space-y-1">
+                      {(() => {
+                        const pairs: { a: string; b: string; v: number }[] = [];
+                        for (let i = 0; i < strats.length; i++) {
+                          for (let j = i + 1; j < strats.length; j++) {
+                            const a = strats[i], b = strats[j];
+                            const v = matrix[a]?.[b] ?? matrix[b]?.[a] ?? 0;
+                            pairs.push({ a, b, v });
+                          }
+                        }
+                        const top = pairs.sort((x, y) => Math.abs(y.v) - Math.abs(x.v)).slice(0, 20);
+                        if (top.length === 0) {
+                          return <p className="text-sm text-[#888888] text-center py-4">No correlation data</p>;
+                        }
+                        return top.map(({ a, b, v }) => (
+                          <div key={`${a}-${b}`} className="flex items-center justify-between gap-2 py-2 px-3 rounded-lg bg-white/5 border border-white/10">
+                            <span className="text-xs text-[#e8e8e8] truncate flex-1 min-w-0">
+                              <span className="text-[#c0c0c0]">{a}</span>
+                              <span className="text-[#666666] mx-1">↔</span>
+                              <span className="text-[#c0c0c0]">{b}</span>
+                            </span>
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium tabular-nums shrink-0 ${corrColor(v)}`}>
+                              {v >= 0 ? '+' : ''}{v.toFixed(2)}
+                            </span>
+                          </div>
+                        ));
+                      })()}
+                      <p className="text-[10px] text-[#666666] text-center pt-2">
+                        Top 20 pairs by |ρ|. Rotate or open on tablet for full {strats.length}×{strats.length} matrix.
+                      </p>
                     </div>
                   </div>
                 );
