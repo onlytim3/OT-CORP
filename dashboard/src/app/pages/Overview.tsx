@@ -102,7 +102,7 @@ function ActivityDetailModal({ activity, onClose }: { activity: ActionItem | nul
 
   return (
     <Dialog open={!!activity} onOpenChange={() => onClose()}>
-      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto max-sm:w-[calc(100vw-1rem)] max-sm:rounded-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             {activity?.action}
@@ -646,7 +646,7 @@ export function Overview() {
 
       {/* Position Detail Modal */}
       <Dialog open={!!selectedPosition} onOpenChange={() => setSelectedPosition(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto max-sm:w-[calc(100vw-1rem)] max-sm:rounded-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <Badge variant={selectedPosition?.side === 'short' || selectedPosition?.side === 'sell' ? 'destructive' : 'default'}>
@@ -796,7 +796,7 @@ export function Overview() {
                     {loadingAnalyses ? (
                       <p className="text-sm text-[#888888] animate-pulse">Loading analysis...</p>
                     ) : (
-                      <div className="space-y-2.5 max-h-48 overflow-y-auto">
+                      <div className="space-y-2.5">
                         {positionAnalyses.map(a => (
                           <div key={a.id} className="p-3 rounded-lg bg-black/30 border border-white/5">
                             <div className="flex items-center justify-between mb-1.5">

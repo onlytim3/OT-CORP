@@ -80,7 +80,7 @@ function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trad
 
   return (
     <Dialog open={!!trade} onOpenChange={() => onClose()}>
-      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-3xl max-h-[92vh] overflow-y-auto max-sm:w-[calc(100vw-1rem)] max-sm:rounded-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             <Badge variant={trade?.side === 'buy' ? 'default' : 'destructive'}>{trade?.side?.toUpperCase()}</Badge>
@@ -213,7 +213,7 @@ function TradeDetailModal({ trade, onClose, volumes, marginData }: { trade: Trad
                 {loadingAnalyses ? (
                   <p className="text-sm text-[#888888] animate-pulse">Loading analysis...</p>
                 ) : (
-                  <div className="space-y-2.5 max-h-48 overflow-y-auto">
+                  <div className="space-y-2.5">
                     {analyses.map(a => (
                       <div key={a.id} className="p-3 rounded-lg bg-black/30 border border-white/5">
                         <div className="flex items-center justify-between mb-1.5">

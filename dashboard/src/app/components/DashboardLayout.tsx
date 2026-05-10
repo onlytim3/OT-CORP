@@ -227,7 +227,7 @@ export function DashboardLayout() {
       {/* Main Content Column */}
       <div className="flex flex-col flex-1 min-w-0">
         {/* Top Header */}
-        <header className="h-16 bg-[#0f0f0f] sm:bg-[#0f0f0f]/80 border-b border-white/[0.08] flex items-center justify-between px-6 sticky top-0 z-40 backdrop-blur-md">
+        <header className="bg-[#0f0f0f] sm:bg-[#0f0f0f]/80 border-b border-white/[0.08] flex items-center justify-between px-6 sticky top-0 z-40 backdrop-blur-md min-h-16 pt-[env(safe-area-inset-top)]">
           <div className="flex items-center gap-3 sm:pl-2">
             <div className="sm:hidden p-2 rounded-lg bg-[#4a9eff] border border-[#4a9eff]/50">
               <Activity className="size-6 text-black" />
@@ -264,7 +264,7 @@ export function DashboardLayout() {
 
             {/* Profile Dropdown */}
             {showProfileMenu && (
-              <div className="absolute right-0 top-12 z-[60] w-56 bg-[#0a0a0a] border border-white/[0.1] rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+              <div className="absolute right-0 top-12 z-[60] w-56 max-w-[calc(100vw-1rem)] bg-[#0a0a0a] border border-white/[0.1] rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
                 <div className="p-2 border-b border-white/5">
                   <p className="text-[10px] text-[#888888] uppercase tracking-wider px-2">Trading Mentality</p>
                 </div>

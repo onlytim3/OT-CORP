@@ -215,7 +215,7 @@ export function Agents() {
 
       {/* Recommendation Detail Modal */}
       <Dialog open={!!selectedRec} onOpenChange={() => setSelectedRec(null)}>
-        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl">
+        <DialogContent className="bg-[#0a0a0a] border-white/8 text-[#e8e8e8] sm:max-w-2xl max-sm:w-[calc(100vw-1rem)] max-sm:max-h-[92vh] max-sm:overflow-y-auto max-sm:rounded-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <Bot className="size-5 sm:size-6 text-[#4a9eff]" />

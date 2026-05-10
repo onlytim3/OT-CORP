@@ -146,7 +146,11 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
           <MessageSquare className="size-5 text-[#4a9eff]" />
           <span className="font-semibold text-[#e8e8e8]">Trading Assistant</span>
         </div>
-        <button onClick={onClose} className="p-2 min-h-9 min-w-9 hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center">
+        <button
+          onClick={onClose}
+          aria-label="Close chat"
+          className="p-2 min-h-11 min-w-11 hover:bg-white/10 active:bg-white/20 rounded-lg transition-colors flex items-center justify-center"
+        >
           <X className="size-5 text-[#888888]" />
         </button>
       </div>
@@ -207,14 +211,24 @@ export function ChatPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+            onFocus={(e) => {
+              // Wait for the soft keyboard to finish animating before scrolling.
+              const target = e.currentTarget;
+              setTimeout(() => target.scrollIntoView({ block: "center", behavior: "smooth" }), 300);
+            }}
             placeholder="Ask anything or type /help for commands..."
+            enterKeyHint="send"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
             className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-[#e8e8e8] placeholder:text-[#888888] focus:outline-none focus:border-[#4a9eff]/50"
             disabled={loading}
           />
           <button
             onClick={sendMessage}
             disabled={!input.trim() || loading}
-            className="p-2.5 rounded-xl bg-[#4a9eff] text-white hover:bg-[#4a9eff]/80 transition-colors disabled:opacity-50"
+            aria-label="Send message"
+            className="p-2.5 min-h-11 min-w-11 rounded-xl bg-[#4a9eff] text-white hover:bg-[#4a9eff]/80 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center"
           >
             <Send className="size-4" />
           </button>
