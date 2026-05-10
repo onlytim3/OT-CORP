@@ -16,6 +16,7 @@ import pandas as pd
 
 from trading.config import BYBIT_SYMBOLS, DEFAULT_COINS
 from trading.data.cache import cached
+from trading.data.precision import round_price
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ def get_orderbook_imbalance(symbol: str, depth: int = 20) -> dict | None:
             "ask_volume": round(ask_vol, 4),
             "imbalance": round((bid_vol - ask_vol) / total, 4) if total > 0 else 0.0,
             "spread_bps": round(spread_bps, 2),
-            "mid_price": round(mid_price, 2),
+            "mid_price": round_price(mid_price, _norm(symbol)),
         }
 
     except Exception as e:
@@ -572,8 +573,8 @@ def get_liquidation_estimate(symbol: str) -> dict:
         avg_long_lev = 5.0 + long_pct * 15.0   # 5x (balanced) to 20x (all-long)
         avg_short_lev = 5.0 + short_pct * 15.0
 
-        long_liq_price = round(current_price * (1.0 - 1.0 / avg_long_lev), 4)
-        short_liq_price = round(current_price * (1.0 + 1.0 / avg_short_lev), 4)
+        long_liq_price = round_price(current_price * (1.0 - 1.0 / avg_long_lev), symbol)
+        short_liq_price = round_price(current_price * (1.0 + 1.0 / avg_short_lev), symbol)
 
         # Asymmetry: positive = more longs at risk, negative = more shorts at risk
         liq_asymmetry = round(long_pct - short_pct, 4)

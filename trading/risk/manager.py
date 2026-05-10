@@ -730,6 +730,7 @@ def compute_trade_targets(
     """
     base_sl_pct = RISK["stop_loss_pct"]
     etf_leverage = LEVERAGE_FACTORS.get(symbol, 1.0)
+    bybit_sym: str | None = None
 
     # Try ATR-based stop distance with per-asset-class multiplier
     try:
@@ -739,7 +740,6 @@ def compute_trade_targets(
                                      CRYPTO_L1, CRYPTO_MEME,
                                      STOCK_PERPS, COMMODITY_PERPS, INDEX_PERPS)
         # Resolve to Bybit symbol and determine coin_id
-        bybit_sym = None
         matched_coin_id = None
         for coin_id, alpaca_sym in CRYPTO_SYMBOLS.items():
             if alpaca_sym == symbol or symbol.replace("/", "") in alpaca_sym.replace("/", ""):
@@ -814,11 +814,12 @@ def compute_trade_targets(
     max_loss_value = qty_estimate * (entry_price - stop_loss_price)
     max_gain_value = qty_estimate * (take_profit_price - entry_price)
 
+    from trading.data.precision import round_price
     return TradeTargets(
-        entry_price=round(entry_price, 2),
-        stop_loss_price=round(stop_loss_price, 2),
-        take_profit_price=round(take_profit_price, 2),
-        trailing_stop_activate_price=round(trailing_stop_activate_price, 2),
+        entry_price=round_price(entry_price, bybit_sym),
+        stop_loss_price=round_price(stop_loss_price, bybit_sym),
+        take_profit_price=round_price(take_profit_price, bybit_sym),
+        trailing_stop_activate_price=round_price(trailing_stop_activate_price, bybit_sym),
         risk_reward_ratio=round(rr_ratio, 2),
         max_loss_pct=round(effective_sl_pct * 100, 2),
         max_gain_pct=round(effective_tp_pct * 100, 2),

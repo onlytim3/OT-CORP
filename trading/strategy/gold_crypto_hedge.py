@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from trading.config import BYBIT_SYMBOLS
+from trading.data.precision import round_price
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 
@@ -231,8 +232,8 @@ class GoldCryptoHedgeStrategy(Strategy):
 
         self._last_context = {
             **signal_data,
-            "gold_price": round(float(gold_aligned.iloc[-1]), 2),
-            "btc_price": round(float(btc_aligned.iloc[-1]), 2),
+            "gold_price": round_price(float(gold_aligned.iloc[-1]), "XAUTUSDT"),
+            "btc_price": round_price(float(btc_aligned.iloc[-1]), "BTCUSDT"),
             "data_points": align_len,
         }
 

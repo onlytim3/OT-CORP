@@ -8,6 +8,7 @@ import numpy as np
 
 from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.data.precision import round_price
 from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
@@ -210,7 +211,7 @@ class HMMRegimeStrategy(Strategy):
                               coin_id, len(ohlc) if not ohlc.empty else 0)
                     continue
 
-                price = round(float(ohlc["close"].iloc[-1]), 2)
+                price = round_price(float(ohlc["close"].iloc[-1]), bybit_symbol)
                 context_data[coin_id] = {"price": price, "regime": regime_label, "regime_prob": regime_prob}
 
                 if regime_label == "bull":

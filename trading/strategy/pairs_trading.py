@@ -12,6 +12,7 @@ import pandas as pd
 
 from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.data.precision import round_price
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import z_score
 from trading.strategy.registry import register
@@ -132,8 +133,8 @@ def _analyze_pair(coin_y: str, coin_x: str, config: dict) -> dict:
         "half_life": round(half_life, 1),
         "current_z": round(current_z, 3),
         "spread_std": round(float(spread.std()), 4),
-        "price_y": round(float(close_y.iloc[-1]), 2),
-        "price_x": round(float(close_x.iloc[-1]), 2),
+        "price_y": round_price(float(close_y.iloc[-1]), BYBIT_SYMBOLS.get(coin_y)),
+        "price_x": round_price(float(close_x.iloc[-1]), BYBIT_SYMBOLS.get(coin_x)),
         "recent_half_life": round(recent_half_life, 1),
         "cointegration_stable": cointegration_stable,
     }
