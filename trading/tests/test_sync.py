@@ -134,20 +134,20 @@ class TestPairTradesLogic(unittest.TestCase):
 class TestSyncPositions(unittest.TestCase):
     """Basic tests for sync_positions flow."""
 
-    @patch("trading.execution.sync.get_positions_from_alpaca")
+    @patch("trading.execution.sync.get_positions_from_bybit")
     @patch("trading.execution.sync.get_open_trades", return_value=[])
     @patch("trading.execution.sync.upsert_position")
     @patch("trading.execution.sync.get_positions", return_value=[])
     @patch("trading.execution.sync.log_action")
     @patch("trading.execution.sync.console")
     def test_sync_empty_positions(self, mock_console, mock_log, mock_get_pos,
-                                   mock_upsert, mock_trades, mock_alpaca):
-        mock_alpaca.return_value = []
+                                   mock_upsert, mock_trades, mock_bybit):
+        mock_bybit.return_value = []
         from trading.execution.sync import sync_positions
         count = sync_positions()
         self.assertEqual(count, 0)
 
-    @patch("trading.execution.sync.get_positions_from_alpaca")
+    @patch("trading.execution.sync.get_positions_from_bybit")
     @patch("trading.execution.sync.get_open_trades", return_value=[
         {"symbol": "BTC/USD", "strategy": "momentum"}
     ])
@@ -156,8 +156,8 @@ class TestSyncPositions(unittest.TestCase):
     @patch("trading.execution.sync.log_action")
     @patch("trading.execution.sync.console")
     def test_sync_one_position(self, mock_console, mock_log, mock_get_pos,
-                                mock_upsert, mock_trades, mock_alpaca):
-        mock_alpaca.return_value = [{
+                                mock_upsert, mock_trades, mock_bybit):
+        mock_bybit.return_value = [{
             "symbol": "BTC/USD", "qty": 0.5,
             "avg_cost": 80000.0, "current_price": 85000.0,
             "market_value": 42500.0, "unrealized_pnl": 2500.0,
