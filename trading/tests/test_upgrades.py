@@ -11,7 +11,7 @@ class TestSyncErrorHandling(unittest.TestCase):
     def test_sync_positions_raises_on_broker_failure(self):
         from trading.execution.sync import sync_positions, SyncError
 
-        with patch("trading.execution.sync.get_positions_from_alpaca",
+        with patch("trading.execution.sync.get_positions_from_bybit",
                    side_effect=ConnectionError("API unreachable")), \
              patch("trading.execution.sync.log_action"):
             with self.assertRaises(SyncError):
@@ -20,7 +20,7 @@ class TestSyncErrorHandling(unittest.TestCase):
     def test_run_sync_propagates_sync_error(self):
         from trading.execution.sync import run_sync, SyncError
 
-        with patch("trading.execution.sync.get_positions_from_alpaca",
+        with patch("trading.execution.sync.get_positions_from_bybit",
                    side_effect=ConnectionError("API unreachable")), \
              patch("trading.execution.sync.log_action"):
             with self.assertRaises(SyncError):
@@ -29,7 +29,7 @@ class TestSyncErrorHandling(unittest.TestCase):
     def test_sync_positions_succeeds_on_empty_positions(self):
         from trading.execution.sync import sync_positions
 
-        with patch("trading.execution.sync.get_positions_from_alpaca", return_value=[]), \
+        with patch("trading.execution.sync.get_positions_from_bybit", return_value=[]), \
              patch("trading.execution.sync.get_open_trades", return_value=[]), \
              patch("trading.execution.sync.get_positions", return_value=[]), \
              patch("trading.execution.sync.log_action"):
