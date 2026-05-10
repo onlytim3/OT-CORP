@@ -37,12 +37,12 @@ class TestValidateConfig(unittest.TestCase):
                 validate_config(test_api=False)
 
     @patch("trading.config.TRADING_MODE", "live")
-    @patch("trading.config.ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    def test_live_mode_paper_url_raises(self):
+    @patch("trading.config.BYBIT_TESTNET", True)
+    def test_live_mode_testnet_warns(self):
         with patch("trading.config.BYBIT_API_KEY", "k"), \
              patch("trading.config.BYBIT_API_SECRET", "s"):
-            with self.assertRaises(ConfigError):
-                validate_config(test_api=False)
+            warnings = validate_config(test_api=False)
+            self.assertTrue(any("testnet" in w.lower() for w in warnings))
 
     @patch("trading.config.TRADING_MODE", "paper")
     @patch("trading.config.FRED_API_KEY", "")
@@ -53,8 +53,8 @@ class TestValidateConfig(unittest.TestCase):
             self.assertTrue(any("FRED" in w for w in warnings))
 
     @patch("trading.config.TRADING_MODE", "paper")
+    @patch("trading.config.BYBIT_TESTNET", True)
     @patch("trading.config.FRED_API_KEY", "some-key")
-    @patch("trading.config.ALPACA_API_KEY", "some-key")
     def test_valid_config_no_warnings(self):
         with patch("trading.config.BYBIT_API_KEY", "k"), \
              patch("trading.config.BYBIT_API_SECRET", "s"):
@@ -120,7 +120,6 @@ class TestPreflightCheck(unittest.TestCase):
 
     @patch("trading.config.TRADING_MODE", "paper")
     @patch("trading.config.FRED_API_KEY", "k")
-    @patch("trading.config.ALPACA_API_KEY", "k")
     def test_validate_config_rejects_missing_strategy_file(self):
         from pathlib import Path
         original_exists = Path.exists
