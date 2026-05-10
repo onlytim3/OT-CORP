@@ -56,6 +56,7 @@ import pandas as pd
 
 from trading.config import CRYPTO_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.data.precision import round_price
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import {indicators}
 from trading.strategy.registry import register
@@ -122,10 +123,10 @@ TEMPLATES = {
                         strength = 0.0
 
                     context_data[coin_id] = {{
-                        "price": round(price, 2),
-                        "fast_ma": round(float(fast_ma.iloc[-1]), 2),
-                        "slow_ma": round(float(slow_ma.iloc[-1]), 2),
-                        "atr": round(float(current_atr), 2),
+                        "price": round_price(price, alpaca_symbol),
+                        "fast_ma": round_price(float(fast_ma.iloc[-1]), alpaca_symbol),
+                        "slow_ma": round_price(float(slow_ma.iloc[-1]), alpaca_symbol),
+                        "atr": round_price(float(current_atr), alpaca_symbol),
                         "action": action,
                     }}
 
@@ -196,11 +197,11 @@ TEMPLATES = {
                         reason = f"{{coin_id}} no mean reversion signal, z={{zs:.2f}}, RSI={{current_rsi:.0f}}"
 
                     context_data[coin_id] = {{
-                        "price": round(price, 2),
+                        "price": round_price(price, alpaca_symbol),
                         "rsi": round(float(current_rsi), 1),
                         "z_score": round(float(zs), 2),
-                        "upper_bb": round(float(upper.iloc[-1]), 2),
-                        "lower_bb": round(float(lower.iloc[-1]), 2),
+                        "upper_bb": round_price(float(upper.iloc[-1]), alpaca_symbol),
+                        "lower_bb": round_price(float(lower.iloc[-1]), alpaca_symbol),
                         "action": action,
                     }}
 
@@ -278,10 +279,10 @@ TEMPLATES = {
                         reason = f"{{coin_id}} no momentum signal, ROC={{roc:.1%}}"
 
                     context_data[coin_id] = {{
-                        "price": round(price, 2),
+                        "price": round_price(price, alpaca_symbol),
                         "roc": round(float(roc), 4),
                         "rsi": round(float(current_rsi), 1),
-                        "trend_ema": round(float(trend_ema.iloc[-1]), 2),
+                        "trend_ema": round_price(float(trend_ema.iloc[-1]), alpaca_symbol),
                         "action": action,
                     }}
 

@@ -17,6 +17,7 @@ import pandas as pd
 
 from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.data.precision import round_price
 from trading.db.store import get_setting, set_setting
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import atr
@@ -159,8 +160,8 @@ class KalmanTrendStrategy(Strategy):
                     pos["bars_held"] = pos.get("bars_held", 0) + 1
 
                 context_data[coin_id] = {
-                    "price": round(float(current_price), 2),
-                    "kalman_level": round(float(levels[-1]), 2),
+                    "price": round_price(float(current_price), bybit_symbol),
+                    "kalman_level": round_price(float(levels[-1]), bybit_symbol),
                     "slope": round(float(final_slope), 6),
                     "slope_z": round(float(slope_z), 2),
                     "position": pos["direction"] if pos else "flat",

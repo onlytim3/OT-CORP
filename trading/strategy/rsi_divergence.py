@@ -2,6 +2,7 @@
 
 from trading.config import RSI_DIVERGENCE, BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.data.precision import round_price
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.registry import register
 from trading.strategy.indicators import rsi, detect_divergence
@@ -55,7 +56,7 @@ class RSIDivergenceStrategy(Strategy):
                 context_data[coin_id] = {
                     "rsi": round(float(current_rsi), 1),
                     "divergence": divergence,
-                    "price": round(float(ohlc["close"].iloc[-1]), 2),
+                    "price": round_price(float(ohlc["close"].iloc[-1]), bybit_symbol),
                 }
 
                 if divergence == "bullish" and current_rsi < self.oversold:

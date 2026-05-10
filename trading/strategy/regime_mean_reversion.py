@@ -16,6 +16,7 @@ import pandas as pd
 
 from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.data.precision import round_price
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import bollinger_bands, rsi, z_score
 from trading.strategy.registry import register
@@ -148,13 +149,13 @@ class RegimeMeanReversionStrategy(Strategy):
         current_middle = float(middle.iloc[-1])
 
         context_data[coin_id] = {
-            "price": round(price, 2),
+            "price": round_price(price, bybit_symbol),
             "adx": round(current_adx, 1),
             "regime": "trending" if current_adx > self.adx_threshold else "ranging",
             "rsi": round(current_rsi, 1),
             "z_score": round(current_z, 2),
-            "bb_upper": round(current_upper, 2),
-            "bb_lower": round(current_lower, 2),
+            "bb_upper": round_price(current_upper, bybit_symbol),
+            "bb_lower": round_price(current_lower, bybit_symbol),
         }
 
         # Trending regime: hold — strength from ADX confidence

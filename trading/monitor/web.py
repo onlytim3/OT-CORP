@@ -885,7 +885,9 @@ def api_position_detail(symbol):
 
     # Find correlation group
     # Resolved symbol variants for mapping
-    from trading.data.bybit import bybit_to_alpaca
+    from trading.data.bybit import _norm, bybit_to_alpaca
+    from trading.data.precision import round_price
+    bybit_sym_for_precision = _norm(pos["symbol"])
     symbol_slash = bybit_to_alpaca(pos["symbol"]) or pos["symbol"]
     symbol_flat = symbol_slash.split("/")[0].split("USDT")[0]
 
@@ -913,14 +915,14 @@ def api_position_detail(symbol):
         "journal_entries": journal_entries,
         "risk": {
             "stop_loss_pct": round(sl_pct, 2),
-            "stop_loss_price": round(stop_loss_price, 2),
+            "stop_loss_price": round_price(stop_loss_price, bybit_sym_for_precision),
             "stop_loss_value": round(stop_loss_value, 2),
             "distance_to_stop_pct": round(distance_to_stop, 2),
             "take_profit_pct": round(tp_pct, 2),
-            "take_profit_price": round(take_profit_price, 2),
+            "take_profit_price": round_price(take_profit_price, bybit_sym_for_precision),
             "take_profit_value": round(take_profit_value, 2),
             "distance_to_tp_pct": round(distance_to_tp, 2),
-            "trailing_activate_price": round(trailing_activate_price, 2),
+            "trailing_activate_price": round_price(trailing_activate_price, bybit_sym_for_precision),
             "risk_reward_ratio": round(rr_ratio, 2),
             "leverage": leverage,
             "correlation_group": corr_group,

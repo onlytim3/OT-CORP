@@ -15,6 +15,7 @@ import numpy as np
 
 from trading.config import BYBIT_SYMBOLS
 from trading.data.crypto import get_ohlc
+from trading.data.precision import round_price
 from trading.strategy.base import Signal, Strategy
 from trading.strategy.indicators import atr, bollinger_bands
 from trading.strategy.registry import register
@@ -171,14 +172,14 @@ class BreakoutDetectionStrategy(Strategy):
         stop_distance = self.atr_multiplier * current_atr
 
         ctx = {
-            "price": round(price, 2),
-            "donchian_upper": round(dc_upper, 2),
-            "donchian_lower": round(dc_lower, 2),
-            "donchian_middle": round(dc_middle, 2),
+            "price": round_price(price, symbol),
+            "donchian_upper": round_price(dc_upper, symbol),
+            "donchian_lower": round_price(dc_lower, symbol),
+            "donchian_middle": round_price(dc_middle, symbol),
             "squeeze": squeeze,
             "trend": trend,
             "volume_confirmed": volume_confirmed,
-            "atr": round(current_atr, 2),
+            "atr": round_price(current_atr, symbol),
         }
 
         # --- Signal logic with v3 filters ---
