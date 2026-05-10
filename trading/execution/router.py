@@ -1182,11 +1182,17 @@ def _paper_submit_order(
                     (new_qty, new_avg, now, sym_key),
                 )
             elif pos_row and existing_side == "short" and existing_qty > 0:
-                # Buying against a short — reduce short position
+                # Buying against a short — reduce short position.
+                # Refund only the leveraged margin originally locked + realized pnl,
+                # mirroring the long-close path. Refunding full notional caused
+                # phantom (leverage-1)*margin gains on close.
+                short_lev = float(pos_row["leverage"] or 1) if pos_row else 1.0
+                short_lev = max(short_lev, 1.0)
                 if qty >= existing_qty:
                     # Close short entirely (and maybe go long)
                     pnl = existing_qty * (existing_cost - fill_price)
-                    _set_paper_cash(_get_paper_cash() + pnl + existing_qty * fill_price)
+                    margin_returned = existing_qty * existing_cost / short_lev
+                    _set_paper_cash(_get_paper_cash() + margin_returned + pnl)
                     remaining = qty - existing_qty
                     if remaining > 0:
                         conn.execute(
@@ -1201,7 +1207,8 @@ def _paper_submit_order(
                         (existing_qty - qty, now, sym_key),
                     )
                     pnl = qty * (existing_cost - fill_price)
-                    _set_paper_cash(_get_paper_cash() + pnl + qty * fill_price)
+                    margin_returned = qty * existing_cost / short_lev
+                    _set_paper_cash(_get_paper_cash() + margin_returned + pnl)
             else:
                 # New long position
                 sl = stop_loss_price or 0.0
@@ -1235,8 +1242,12 @@ def _paper_submit_order(
                 else:
                     conn.execute("DELETE FROM paper_positions WHERE symbol = ?", (sym_key,))
             else:
-                # Opening a short or adding to short
-                margin_needed = order_value  # 1x margin for shorts
+                # Opening a short or adding to short.
+                # Deduct only the leveraged margin so the deduction matches what
+                # _paper_get_account() adds back as margin_used (qty*avg/lev).
+                # Previously this used full order_value, which silently leaked
+                # (notional - notional/lev) from equity on every short open.
+                margin_needed = order_value / max(leverage, 1)
                 if margin_needed > cash:
                     return {
                         "id": order_id, "status": "rejected",
@@ -1392,6 +1403,11 @@ def _paper_get_account() -> dict:
     )
     positions_value = margin_used + unrealized_pnl
     equity = cash + positions_value
+
+    log.debug(
+        "paper account: cash=%.2f margin_used=%.2f unrealized=%.2f equity=%.2f n_pos=%d",
+        cash, margin_used, unrealized_pnl, equity, len(positions),
+    )
 
     return {
         "portfolio_value": equity,
